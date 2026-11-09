@@ -58,8 +58,8 @@ def gateway(monkeypatch):
 def _run(monkeypatch, state, *calls):
     """Score one record whose prediction sends LLM calls to ``calls`` through the redirect."""
     state.predict_fn = Mock(side_effect=lambda inputs: state.redirected_calls.extend(calls) or "a")
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: None)
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
+    monkeypatch.setattr(opt, "_get_active_trace", lambda previous_trace_id: None)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda trace: {})
     return opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
 
 
@@ -152,10 +152,51 @@ def test_roles_the_agent_does_not_call_are_not_required(monkeypatch):
 def test_a_failed_prediction_is_scored_zero_without_a_routing_check(monkeypatch):
     state = _state()
     state.predict_fn = Mock(side_effect=RuntimeError("agent crashed"))
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: None)
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
+    monkeypatch.setattr(opt, "_get_active_trace", lambda previous_trace_id: None)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda trace: {})
     score, _, _, feedback, _ = opt._AgentAdapter(state)._run_one(
         {"model:main.agent.llm": "haiku"}, {}, {}
     )
     assert score == 0.0
     assert "prediction failed" in feedback
+
+
+def test_untraced_prediction_does_not_reuse_the_previous_predictions_trace(monkeypatch):
+    state = _state()
+    state.token_costs = {"haiku": {"input": 1.0, "output": 0.0}}
+    active_id = [None]
+    span = SimpleNamespace(
+        name="chat",
+        span_type="LLM",
+        inputs={},
+        outputs={"model": "haiku"},
+        attributes={opt._TOKEN_USAGE_KEY: {"input_tokens": 1_000_000, "output_tokens": 0}},
+    )
+    trace = SimpleNamespace(data=SimpleNamespace(spans=[span]))
+    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: active_id[0])
+    monkeypatch.setattr(opt.mlflow, "flush_trace_async_logging", Mock())
+    get_trace = Mock(return_value=trace)
+    monkeypatch.setattr(opt.mlflow, "get_trace", get_trace)
+    scorer = Mock(return_value=1.0)
+    monkeypatch.setattr(opt, "_run_scorers", scorer)
+
+    def predict(inputs):
+        state.redirected_calls.append(HAIKU_CLONE)
+        if inputs["traced"]:
+            active_id[0] = "tr-fresh"
+        return "answer"
+
+    state.predict_fn = predict
+    adapter = opt._AgentAdapter(state)
+    candidate = {"model:main.agent.llm": "haiku"}
+    first = adapter._run_one(candidate, {"traced": True}, {})
+    assert first[4]["total_tokens"]["input"] == 1_000_000
+    assert scorer.call_args.kwargs["trace"] is trace
+    assert adapter._last_metrics["cost_usd"] == pytest.approx(0.07)
+
+    second = adapter._run_one(candidate, {"traced": False}, {})
+    assert second[0] == 1.0  # Redirect verification works without tracing.
+    assert second[4] == {}
+    assert scorer.call_args.kwargs["trace"] is None
+    assert adapter._last_metrics["cost_usd"] == pytest.approx(500 / 1_000_000 * 0.07)
+    get_trace.assert_called_once_with("tr-fresh")

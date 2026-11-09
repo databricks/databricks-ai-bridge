@@ -134,6 +134,13 @@ class _EndpointTarget:
     initial_model: str
     experiment_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
+    def __post_init__(self):
+        # The qualified and bare forms name the same model and must share one candidate/clone.
+        self.initial_model = self.initial_model.removeprefix("system.ai.")
+        self.candidate_models = list(
+            dict.fromkeys(model.removeprefix("system.ai.") for model in self.candidate_models)
+        )
+
     @property
     def models(self):
         """The seed model, then each candidate: the models this service is evaluated with."""
@@ -299,7 +306,9 @@ def _build_state(
     if latency_hard_gate <= 0:
         raise ValueError(f"latency_hard_gate must be > 0 (got {latency_hard_gate})")
 
-    merged_costs = dict(token_costs) if token_costs else {}
+    merged_costs = {
+        name.removeprefix("system.ai."): rate for name, rate in (token_costs or {}).items()
+    }
 
     prompt_targets = [_build_prompt_target(u) for u in prompt_uris]
     endpoint_targets = [
@@ -753,8 +762,8 @@ def _read_span_requested_model(span):
     return attr if isinstance(attr, str) and attr else None
 
 
-def _get_active_trace():
-    """Return the latest active MLflow Trace object, or None if no trace exists.
+def _get_active_trace(previous_trace_id=None):
+    """Return the latest MLflow Trace, excluding the trace from before this prediction.
 
     Used by `_run_scorers` so MLflow `Scorer` objects (e.g. `make_judge` judges
     with `Trace` template fields) get the per-component span data they need;
@@ -762,7 +771,7 @@ def _get_active_trace():
     """
     try:
         trace_id = mlflow.get_last_active_trace_id()
-        if not trace_id:
+        if not trace_id or trace_id == previous_trace_id:
             return None
         # With async trace logging (MLflow's default outside Databricks), the trace may still be in
         # the export queue; reading it back first returns "span data is corrupted" and drops its
@@ -773,14 +782,13 @@ def _get_active_trace():
         return None
 
 
-def _extract_trace_summary():
-    """Pull total tokens + per-span debug info from the latest active trace.
+def _extract_trace_summary(trace):
+    """Pull total tokens + per-span debug info from this prediction's trace.
 
-    Returns {} if no trace is active. We no longer try to attribute spans to
+    Returns {} if no fresh trace is available. We no longer try to attribute spans to
     specific endpoints -- caller uses the totals + per-endpoint defaults.
     """
     try:
-        trace = _get_active_trace()
         if not trace or not trace.data:
             return {}
         total_in, total_out = 0, 0
@@ -1174,6 +1182,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
         """Score a single record. Caller owns prompt-patching + endpoint sync."""
         state = self.state
         state.redirected_calls.clear()
+        previous_trace_id = mlflow.get_last_active_trace_id()
         start = time.perf_counter()
         prediction_failed = False
         try:
@@ -1182,11 +1191,11 @@ class _AgentAdapter(gepa.GEPAAdapter):
             prediction_failed = True
             answer = f"ERROR: {type(e).__name__}: {e}"
         latency = time.perf_counter() - start
-        mlflow_trace = _get_active_trace()
+        mlflow_trace = _get_active_trace(previous_trace_id)
         # Every real evaluation runs with clones active (`_sync_destinations` runs first).
         if not prediction_failed and state.active_clones:
             _check_candidate_routing(state)
-        trace = _extract_trace_summary()
+        trace = _extract_trace_summary(mlflow_trace)
 
         if prediction_failed:
             # A failed model must not look attractive to the bandit because it failed quickly.
@@ -1212,7 +1221,8 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 "so it scores 0 on every objective. Raise latency_hard_gate if the agent is "
                 "legitimately this slow.",
             )
-            self._last_metrics = {"quality": 0.0, "latency_s": latency, "cost_usd": None}
+            # The gate rejects the composite score before scoring quality; it wasn't measured.
+            self._last_metrics = {"quality": None, "latency_s": latency, "cost_usd": None}
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},
@@ -1668,11 +1678,16 @@ def optimize_prompts_and_models(
         the cost component to use real token usage; without it, cost
         degenerates to a per-model constant via the 500/200 fallback and
         the library emits a warn-once.
-      - Model searches require a fresh trace per prediction containing each request's service name
-        and the response's model ID. Route changes wait for three consecutive inference responses
-        matching a direct model control, with a 120-second polling timeout. Each evaluation checks
-        its own responses too; stale attempts are retried without scoring, and unverifiable routing
-        stops the run.
+      - Model searches redirect OpenAI chat/completions and responses calls (sync and async) to
+        fixed per-model clones. Each clone must answer inference within 300 seconds of its
+        readiness check. Every successful prediction must redirect at least one call, and every
+        redirected call must reach a clone for the active candidate; otherwise the run stops
+        before scoring. Routing is verified independently of traces, without backend-ID checks
+        or stale-response retries. Calls that bypass the OpenAI client are not intercepted.
+      - Scorers and cost summaries use only a trace created by the current prediction. An
+        unchanged last-trace ID is treated as missing: trace-aware scorers receive None and cost
+        uses the fallback described above. Records over the latency gate score zero on every
+        objective, but their unmeasured raw quality and cost are recorded as None.
       - At least 10% of evaluations must produce a numeric scorer score;
         below that the call raises at the end so a misconfigured scorer
         doesn't silently report `delta=0`.
@@ -1681,9 +1696,10 @@ def optimize_prompts_and_models(
       1. Loads each prompt URI's current `@production` template and extracts
          its required template variables.
       2. Reads each gateway endpoint's current destination as the seed model.
-      3. Creates `<endpoint>_exp_<id>` clones of every gateway endpoint and runs
-         optimization against them. The exp endpoints are deleted on exit
-         (success or failure).
+      3. Creates one `<endpoint>_exp_<id>_<model>` clone per endpoint and distinct model,
+         including the seed, and waits for each to answer inference. A clone's model stays
+         fixed; switching candidates selects different clones without repointing services.
+         Only clones created by this search are deleted on exit (success or failure).
       4. Pre-flight: runs `predict_fn` once on the first record with the seed
          candidate to catch obvious failures (broken agent, auth, missing
          endpoint) before burning the metric budget.
@@ -1699,7 +1715,7 @@ def optimize_prompts_and_models(
       Works whether the agent loads prompts fresh per call or caches the
       `PromptVersion` instance at module import (see `_patched_prompts`).
     - **Endpoints**: the OpenAI client's `model=<endpoint>` arg is rewritten
-      to `<endpoint>_exp_<id>` so calls land on the experimental clones rather than
+      to the active candidate's `<endpoint>_exp_<id>_<model>` clone rather than
       prod. Covers `chat.completions.create` and `responses.create`, sync +
       async (see `_patched_endpoints`).
 

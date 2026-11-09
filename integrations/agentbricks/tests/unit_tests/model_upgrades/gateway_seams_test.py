@@ -20,6 +20,7 @@ def _target(name="main.agent.llm", initial="claude-sonnet-4-5", experiment_id="t
 
 class _State:
     def __init__(self, targets):
+        self.prompt_targets = []
         self.endpoint_targets = targets
         self.active_clones = {}
         self.created_exp_endpoints = []
@@ -118,6 +119,27 @@ def test_system_ai_names_pass_through_resolution():
     assert opt._resolve_system_ai_name("system.ai.claude-haiku-4-5") == "system.ai.claude-haiku-4-5"
 
 
+@pytest.mark.parametrize("initial", ["claude-sonnet-4-5", "system.ai.claude-sonnet-4-5"])
+def test_equivalent_model_names_share_one_clone_and_candidate_identity(mocker, initial):
+    create = mocker.patch(f"{_MS}.create")
+    target = opt._EndpointTarget(
+        "main.agent.llm",
+        ["system.ai.claude-sonnet-4-5", "claude-sonnet-4-5", "system.ai.claude-haiku-4-5"],
+        initial,
+        "test",
+    )
+    assert target.initial_model == "claude-sonnet-4-5"
+    assert target.candidate_models == ["claude-sonnet-4-5", "claude-haiku-4-5"]
+    state = _State([target])
+    opt._ensure_exp_endpoints(state)
+    assert create.call_count == 2
+    assert set(target.exp_names.values()) == {SONNET_CLONE, HAIKU_CLONE}
+    candidate = opt._seed_candidate(state)
+    assert candidate == {"model:main.agent.llm": "claude-sonnet-4-5"}
+    opt._sync_destinations(candidate, state)
+    assert state.active_clones == {"main.agent.llm": SONNET_CLONE}
+
+
 def test_cost_prices_calls_to_the_service_as_the_routed_candidate(mocker):
     # Autolog records the requested name -- the model service's `_exp` clone -- not a model.
     priced = []
@@ -212,7 +234,7 @@ def test_trace_summary_records_the_requested_service_for_each_llm_call(mocker):
         f"{opt.__name__}._get_active_trace",
         return_value=mocker.Mock(data=mocker.Mock(spans=[span])),
     )
-    calls = opt._extract_trace_summary()["llm_calls"]
+    calls = opt._extract_trace_summary(opt._get_active_trace())["llm_calls"]
     assert calls == [
         {
             "model": "workspace-specific-sonnet-id",

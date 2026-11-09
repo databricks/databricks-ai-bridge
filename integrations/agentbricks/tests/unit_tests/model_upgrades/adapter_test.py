@@ -504,6 +504,10 @@ def test_run_one_latency_hard_gate(mocker):
     assert score == 0.0
     assert obj == {"quality": 0.0, "latency": 0.0, "cost": 0.0}
     assert feedback.startswith("REJECTED: latency")
+    assert adapter._last_metrics["quality"] is None
+    assert adapter._last_metrics["latency_s"] >= state.latency_hard_gate
+    assert adapter._last_metrics["cost_usd"] is None
+    assert state.scorer_attempted == 0
 
 
 def test_run_one_warns_when_a_record_goes_over_the_latency_gate(mocker, monkeypatch):
