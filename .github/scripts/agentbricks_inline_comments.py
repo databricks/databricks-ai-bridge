@@ -6,10 +6,11 @@ COMMENT review on the reviewed commit. In the summary comment, each section's
 posted findings are replaced by one line saying how many were left inline.
 Findings that can't be anchored, such as ones about files outside the diff, stay
 in the summary in full.
-On a re-review, a finding that already has an open inline comment at the same
-file, line, and section isn't posted again; the earlier comment stays. Earlier
-comments whose findings are gone, or whose lines changed, are minimized as
-outdated.
+On a re-review, a finding that already has an open, unresolved inline comment
+at the same file, line, and section isn't posted again: the earlier comment
+keeps its thread and is updated to the current text. Earlier comments whose
+findings are gone, or whose lines changed, are minimized as outdated; resolved
+threads are left alone. The summary drops only findings that are visible inline.
 
 Usage: agentbricks_inline_comments.py --repo OWNER/NAME --pr N --head SHA
            --review REVIEW --diff DIFF --out SUMMARY
@@ -38,19 +39,23 @@ INLINE_MARKER = "<!-- agentbricks-reviewer-inline -->"
 FINDING_MARKER = re.compile(r"^<!-- agentbricks-reviewer-finding: (?P<section>.+?) -->$", re.MULTILINE)
 # The bot's earlier inline comments, with where each sits on the current diff.
 EXISTING_QUERY = """
-query($owner: String!, $name: String!, $number: Int!) {
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isOutdated
-          comments(first: 1) { nodes { id path line isMinimized body author { __typename } } }
+          isResolved
+          comments(first: 1) { nodes { id databaseId path line isMinimized body author { __typename } } }
         }
       }
     }
   }
 }
 """
+FOOTER = re.compile(r"\n*<sub>AgentBricksReviewer finding for `[0-9a-f]+`\.</sub>\s*$")
+PAYLOAD_KEYS = ("path", "line", "side", "start_line", "start_side", "body")
 
 
 def commentable_lines(diff: str) -> dict[str, set[int]]:
@@ -137,7 +142,7 @@ def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]
             f"{title}\n\n{body_text.strip()}\n\n"
             f"<sub>AgentBricksReviewer finding for `{head_sha[:7]}`.</sub>"
         )
-        comments.append({**position, "body": body, "section": finding["section"]})
+        comments.append({**position, "body": body, "section": finding["section"], "finding": len(anchored)})
         anchored.append(finding)
     return comments, anchored
 
@@ -174,43 +179,51 @@ def finding_key(path: str, line: int | None, section: str | None) -> tuple:
     return (path, line, section)
 
 
-def reconcile(comments: list[dict], existing: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    """Split planned comments into ones to post, and earlier ones to keep or to minimize.
+def reconcile(comments: list[dict], existing: list[dict]) -> tuple[list[dict], list[tuple[dict, dict]], list[dict]]:
+    """Split planned comments into ones to post, earlier ones to reuse, and earlier ones to minimize.
 
-    An earlier comment is kept when it is still on the current diff (not outdated)
-    and a planned finding has the same file, line, and section; that finding isn't
-    posted again. Every other earlier comment is minimized.
+    An earlier comment is reused, as an (earlier, planned) pair, when its thread is
+    open, unresolved, and still on the current diff, and a planned finding has the
+    same file, line, and section. Other earlier comments are minimized, except
+    resolved threads, which stay as their reviewers left them.
     """
     planned = list(comments)
-    keep, minimize = [], []
+    reuse, minimize = [], []
     for comment in existing:
         key = finding_key(comment["path"], comment["line"], comment["section"])
         match = next((c for c in planned if finding_key(c["path"], c["line"], c["section"]) == key), None)
-        if not comment["outdated"] and comment["line"] is not None and match is not None:
-            keep.append(comment)
+        reusable = not comment["outdated"] and not comment["resolved"] and comment["line"] is not None
+        if reusable and match is not None:
+            reuse.append((comment, match))
             planned.remove(match)
-        elif not comment["minimized"]:
+        elif not comment["minimized"] and not comment["resolved"]:
             minimize.append(comment)
-    return planned, keep, minimize
+    return planned, reuse, minimize
 
 
 def existing_inline(repo: str, pr: int) -> list[dict]:
-    """The bot's earlier AgentBricksReviewer inline comments on this PR."""
+    """The bot's earlier AgentBricksReviewer inline comments on this PR, across every page of threads."""
     owner, name = repo.split("/", 1)
-    data = github(["graphql", "-f", f"query={EXISTING_QUERY}", "-f", f"owner={owner}", "-f", f"name={name}",
-                   "-F", f"number={pr}"])
-    found = []
-    for thread in data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]:
-        for comment in thread["comments"]["nodes"]:
-            if (comment.get("author") or {}).get("__typename") != "Bot" or INLINE_MARKER not in comment["body"]:
-                continue
-            marker = FINDING_MARKER.search(comment["body"])
-            found.append({
-                "id": comment["id"], "path": comment["path"], "line": comment["line"],
-                "section": marker["section"] if marker else None,
-                "outdated": thread["isOutdated"], "minimized": comment["isMinimized"],
-            })
-    return found
+    found, cursor = [], None
+    while True:
+        args = ["graphql", "-f", f"query={EXISTING_QUERY}", "-f", f"owner={owner}", "-f", f"name={name}",
+                "-F", f"number={pr}"] + (["-f", f"cursor={cursor}"] if cursor else [])
+        threads = github(args)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        for thread in threads["nodes"]:
+            for comment in thread["comments"]["nodes"]:
+                if (comment.get("author") or {}).get("__typename") != "Bot" or INLINE_MARKER not in comment["body"]:
+                    continue
+                marker = FINDING_MARKER.search(comment["body"])
+                found.append({
+                    "id": comment["id"], "database_id": comment["databaseId"], "body": comment["body"],
+                    "path": comment["path"], "line": comment["line"],
+                    "section": marker["section"] if marker else None,
+                    "outdated": thread["isOutdated"], "resolved": thread["isResolved"],
+                    "minimized": comment["isMinimized"],
+                })
+        if not threads["pageInfo"]["hasNextPage"]:
+            return found
+        cursor = threads["pageInfo"]["endCursor"]
 
 
 def set_minimized(comment: dict, minimized: bool) -> None:
@@ -228,7 +241,7 @@ def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
             "event": "COMMENT",
             "body": f"AgentBricksReviewer left {len(comments)} inline comment(s) on `{head_sha[:7]}`. "
             "The score and summary are in the review comment.",
-            "comments": [{key: value for key, value in c.items() if key != "section"} for c in comments],
+            "comments": [{key: c[key] for key in PAYLOAD_KEYS if key in c} for c in comments],
         },
     )
 
@@ -245,35 +258,41 @@ def main(argv: list[str] | None = None) -> int:
 
     review = args.review.read_text(encoding="utf-8")
     diff = args.diff.read_text(encoding="utf-8", errors="replace")
-    summary = review
     comments, anchored = plan(review, diff, args.head)
     try:
         existing = existing_inline(args.repo, args.pr)
     except (RuntimeError, KeyError, TypeError) as error:
         print(f"::warning::Could not read earlier inline comments; posting every finding: {error}")
         existing = []
-    to_post, keep, stale = reconcile(comments, existing)
+    to_post, reuse, stale = reconcile(comments, existing)
     for comment in stale:
         try:
             set_minimized(comment, True)
         except RuntimeError as error:
             print(f"::warning::Could not minimize an earlier inline comment: {error}")
-    for comment in keep:
-        if comment["minimized"]:
-            try:
-                set_minimized(comment, False)
-            except RuntimeError as error:
-                print(f"::warning::Could not restore an earlier inline comment: {error}")
-    if not comments:
-        print("No findings on commentable diff lines; keeping every finding in the summary comment.")
-    else:
+    # Findings count as inline only once their comment is visible with current text;
+    # anything else stays in the summary in full.
+    visible: list[int] = []
+    for earlier, planned in reuse:
         try:
-            if to_post:
-                post(args.repo, args.pr, args.head, to_post)
-            summary = rewrite(review, anchored)
-            print(f"Posted {len(to_post)} new inline comment(s); kept {len(keep)} unchanged; minimized {len(stale)}.")
+            if FOOTER.sub("", earlier["body"]) != FOOTER.sub("", planned["body"]):
+                github(["--method", "PATCH", f"repos/{args.repo}/pulls/comments/{earlier['database_id']}"],
+                       {"body": planned["body"]})
+            if earlier["minimized"]:
+                set_minimized(earlier, False)
+            visible.append(planned["finding"])
+        except RuntimeError as error:
+            print(f"::warning::Could not update an earlier inline comment; keeping its finding in the summary: {error}")
+    if to_post:
+        try:
+            post(args.repo, args.pr, args.head, to_post)
+            visible += [c["finding"] for c in to_post]
         except RuntimeError as error:
             print(f"::warning::Could not post inline findings; keeping them in the summary comment: {error}")
+    if not comments:
+        print("No findings on commentable diff lines; keeping every finding in the summary comment.")
+    summary = rewrite(review, [anchored[i] for i in sorted(visible)])
+    print(f"Inline: {len(to_post)} new, {len(reuse)} reused, {len(stale)} minimized; {len(visible)} of {len(comments)} visible.")
     args.out.write_text(summary, encoding="utf-8")
     return 0
 

@@ -1,6 +1,9 @@
 """Tests for posting AgentBricksReviewer findings as inline comments."""
 
+import contextlib
 import importlib.util
+import io
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -129,8 +132,10 @@ class RewriteTest(unittest.TestCase):
 
 
 
-def earlier(path=CODE, line=163, section="Blocking issues", outdated=False, minimized=False, id="C1"):
-    return {"id": id, "path": path, "line": line, "section": section, "outdated": outdated, "minimized": minimized}
+def earlier(path=CODE, line=163, section="Blocking issues", outdated=False, minimized=False, resolved=False,
+            id="C1", body="old text"):
+    return {"id": id, "database_id": 900, "body": body, "path": path, "line": line, "section": section,
+            "outdated": outdated, "resolved": resolved, "minimized": minimized}
 
 
 class ReconcileTest(unittest.TestCase):
@@ -138,7 +143,7 @@ class ReconcileTest(unittest.TestCase):
         comments, _ = inline.plan(REVIEW, DIFF, HEAD)
         to_post, keep, stale = inline.reconcile(comments, [earlier()])
         self.assertEqual([(c["path"], c["line"]) for c in to_post], [(CODE, 164)])
-        self.assertEqual([c["id"] for c in keep], ["C1"])
+        self.assertEqual([(old["id"], new["line"]) for old, new in keep], [("C1", 163)])
         self.assertEqual(stale, [])
 
     def test_gone_moved_outdated_or_other_section_comments_are_minimized(self):
@@ -162,7 +167,7 @@ class ReconcileTest(unittest.TestCase):
     def test_a_returning_finding_keeps_its_minimized_comment_for_restoring(self):
         comments, _ = inline.plan(REVIEW, DIFF, HEAD)
         _, keep, _ = inline.reconcile(comments, [earlier(minimized=True)])
-        self.assertTrue(keep[0]["minimized"])
+        self.assertTrue(keep[0][0]["minimized"])
 
     def test_two_findings_on_one_line_each_need_their_own_comment(self):
         review = (
@@ -178,6 +183,84 @@ class ReconcileTest(unittest.TestCase):
         comments, _ = inline.plan(REVIEW, DIFF, HEAD)
         self.assertIn("<!-- agentbricks-reviewer-finding: Blocking issues -->", comments[0]["body"])
         self.assertEqual(inline.FINDING_MARKER.search(comments[0]["body"])["section"], "Blocking issues")
+
+
+    def test_resolved_threads_are_neither_reused_nor_minimized(self):
+        comments, _ = inline.plan(REVIEW, DIFF, HEAD)
+        to_post, keep, stale = inline.reconcile(comments, [earlier(resolved=True), earlier(line=150, resolved=True)])
+        self.assertEqual((len(to_post), keep, stale), (2, [], []))
+
+
+class MainTest(unittest.TestCase):
+    """main() against a fake GitHub API, covering pagination and partial failures."""
+
+    def run_main(self, threads_pages, fail=()):
+        calls = []
+
+        def github(args, data=None):
+            calls.append((args, data))
+            text = " ".join(args)
+            if any(word in text for word in fail):
+                raise RuntimeError("boom")
+            if "reviewThreads" in text:
+                page = threads_pages[sum("reviewThreads" in " ".join(a) for a, _ in calls) - 1]
+                return {"data": {"repository": {"pullRequest": {"reviewThreads": page}}}}
+            return {}
+
+        original = inline.github
+        inline.github = github
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                paths = {name: Path(tmp, name) for name in ("review.md", "diff.txt", "out.md")}
+                paths["review.md"].write_text(REVIEW)
+                paths["diff.txt"].write_text(DIFF)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    inline.main(["--repo", "o/r", "--pr", "7", "--head", HEAD, "--review", str(paths["review.md"]),
+                                 "--diff", str(paths["diff.txt"]), "--out", str(paths["out.md"])])
+                return paths["out.md"].read_text(), calls
+        finally:
+            inline.github = original
+
+    @staticmethod
+    def thread(comment_body, line=163, minimized=False, resolved=False):
+        return {"isOutdated": False, "isResolved": resolved, "comments": {"nodes": [{
+            "id": "N1", "databaseId": 900, "path": CODE, "line": line, "isMinimized": minimized,
+            "body": comment_body, "author": {"__typename": "Bot"}}]}}
+
+    def bot_body(self, section="Blocking issues"):
+        return f"{inline.INLINE_MARKER}\n<!-- agentbricks-reviewer-finding: {section} -->\nold wording"
+
+    def test_reads_every_page_of_threads(self):
+        pages = [
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": []},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [self.thread(self.bot_body())]},
+        ]
+        _, calls = self.run_main(pages)
+        posted = [d for a, d in calls if a and a[0].endswith("/reviews")]
+        self.assertEqual([c["line"] for c in posted[0]["comments"]], [164])
+        self.assertIn("cursor=c1", [part for a, _ in calls for part in a])
+
+    def test_reused_comment_gets_the_current_text(self):
+        pages = [{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [self.thread(self.bot_body())]}]
+        summary, calls = self.run_main(pages)
+        patches = [(a, d) for a, d in calls if "PATCH" in a]
+        self.assertEqual(patches[0][0][-1], "repos/o/r/pulls/comments/900")
+        self.assertIn("Passing `min_score=0.0`", patches[0][1]["body"])
+        self.assertIn("## Blocking issues\n- Left 1 inline comment on the changed lines.", summary)
+
+    def test_failed_restore_keeps_the_finding_in_the_summary(self):
+        pages = [{"pageInfo": {"hasNextPage": False, "endCursor": None},
+                  "nodes": [self.thread(self.bot_body(), minimized=True)]}]
+        summary, _ = self.run_main(pages, fail=("unminimizeComment",))
+        self.assertIn("Passing `min_score=0.0`", summary)
+        self.assertIn("## Non-blocking notes", summary)
+        self.assertIn("- Left 1 inline comment on the changed lines.", summary)
+
+    def test_failed_post_still_counts_reused_comments(self):
+        pages = [{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [self.thread(self.bot_body())]}]
+        summary, _ = self.run_main(pages, fail=("/reviews",))
+        self.assertIn("## Blocking issues\n- Left 1 inline comment on the changed lines.", summary)
+        self.assertIn("`" + CODE + ":161-164` — range", summary)
 
 
 if __name__ == "__main__":
