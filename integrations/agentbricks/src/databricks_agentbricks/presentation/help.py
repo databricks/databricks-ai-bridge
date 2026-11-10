@@ -202,7 +202,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks memory pipeline resume <pipeline>", "enable scheduled runs"),
     ),
     ("memory", "pipeline", "run"): (
-        ("agentbricks memory pipeline run <pipeline>", "start a Dreamer run"),
+        ("agentbricks memory pipeline run <pipeline>", "start a Dreaming run"),
     ),
     ("memory", "pipeline", "runs"): (
         ("agentbricks memory pipeline runs list <pipeline> --page-size 50", "list recorded runs"),

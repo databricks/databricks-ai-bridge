@@ -345,6 +345,7 @@ def test_create_accepts_store_names_and_model():
             },
         )
     ]
+    assert "Created Dreaming memory pipeline" in result.output
     assert "memory-pipelines/p-123" in result.output
 
 
@@ -390,6 +391,11 @@ def test_list_get_update_and_delete_expose_crud_workflow():
 
     for result in (listed, fetched, updated, deleted):
         assert result.exit_code == 0, result.output
+        assert "Dreamer" not in result.output
+    assert "Dreaming Memory Pipelines" in listed.output
+    assert "Dreaming" in fetched.output
+    assert "Dreaming" in updated.output
+    assert "Deleted Dreaming memory pipeline" in deleted.output
     assert "Keep durable customer preferences." in fetched.output
     assert client.calls == [
         ("list", 10, None),
@@ -467,8 +473,18 @@ def test_run_triggers_pipeline_and_renders_returned_run():
 
     assert result.exit_code == 0, result.output
     assert client.calls == [("run", "p-123")]
+    assert "Dreaming Run" in result.output
     assert "memory-pipelines/p-123/runs/run-456" in result.output
     assert "PIPELINE_RUN_STATE_PENDING" in result.output
+
+
+@pytest.mark.parametrize("command", ["create", "list", "get", "delete", "run"])
+def test_pipeline_help_uses_dreaming_terminology(command):
+    result = CliRunner().invoke(_pipeline(), [command, "--help"], obj=_Ctx(_Client()))
+
+    assert result.exit_code == 0, result.output
+    assert "Dreaming" in result.output
+    assert "Dreamer" not in result.output
 
 
 def test_run_conflict_points_at_in_progress_run():
