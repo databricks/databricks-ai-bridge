@@ -353,7 +353,7 @@ class ChangeRiskTest(unittest.TestCase):
     def test_overview_names_each_blocked_path_group_once(self):
         paths = [".github/workflows/a.yml", "src/databricks_ai_bridge/core.py"]
         text = review()
-        section = gate.overview(text, gate.decide(text, diff(*paths, added=150)))
+        section = gate.overview(text, gate.decide(text, diff(*paths, added=150), max_lines=200))
         self.assertIn("- Split the PR to at most 200 changed lines (it has 300).", section)
         self.assertEqual(section.count("`.github/workflows/a.yml`"), 1)
         self.assertIn("- CI or review configuration files can't be auto-approved; move them to a separate PR (see **Risk**).",
