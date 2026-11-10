@@ -29,8 +29,7 @@ A first deploy takes ~3 min (mostly starting app compute); redeploys are faster.
 `timeout: 600000`), or run `agentbricks deploy <name> --no-wait` and then
 `agentbricks deployments wait <app-name>` until it exits 0; the agent then answers requests. `wait`
 returns within 300 seconds: run it with a command timeout above that (for example,
-`timeout: 360000`), or pass a shorter `--timeout`. Exit 75
-means it is still deploying; run the same command again. Exit 1 means it failed: the output carries the error and the log tail.
+`timeout: 360000`), or pass a shorter `--timeout`. Exit 75 means it is still deploying; run the same command again. Exit 1 means it failed: the output carries the error and the log tail.
 Don't poll with `sleep`. A second `agentbricks deploy` of the same app is refused while one is still
 running from the project.
 
