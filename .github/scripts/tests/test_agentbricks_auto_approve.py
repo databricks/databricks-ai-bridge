@@ -133,8 +133,8 @@ class DecideTest(unittest.TestCase):
                 self.assert_refused(gate.decide(review(uncertain=body), diff(CODE)), '"Uncertain findings" is not empty')
 
     def test_large_diff_is_refused(self):
-        self.assert_refused(gate.decide(review(), diff(CODE, added=201)), "over the 200-line limit")
-        self.assertTrue(gate.decide(review(), diff(CODE, added=200))["approve"])
+        self.assert_refused(gate.decide(review(), diff(CODE, added=501)), "over the 500-line limit")
+        self.assertTrue(gate.decide(review(), diff(CODE, added=500))["approve"])
 
     def test_protected_paths_are_refused(self):
         for path, fragment in (
@@ -294,12 +294,12 @@ class ChangeRiskTest(unittest.TestCase):
                 self.assertEqual(gate.decide(review(), content)["risk"]["level"], expected)
 
     def test_line_limit_controls_approval_without_changing_risk(self):
-        content = diff(CODE, added=201)
+        content = diff(CODE, added=501)
         limited = gate.decide(review(), content)
         self.assertEqual(limited["risk"]["level"], "low")
         self.assertFalse(limited["approve"])
-        self.assertIn("201 changed lines is over the 200-line limit", limited["reasons"])
-        relaxed = gate.decide(review(), content, max_lines=300)
+        self.assertIn("501 changed lines is over the 500-line limit", limited["reasons"])
+        relaxed = gate.decide(review(), content, max_lines=600)
         self.assertTrue(relaxed["approve"], relaxed)
         self.assertEqual(relaxed["risk"], limited["risk"])
 
@@ -312,7 +312,7 @@ class ChangeRiskTest(unittest.TestCase):
     def test_review_verdict_is_independent_of_risk_scope_and_size(self):
         for path, risk, added in ((CODE, "LOW", 1), (CODE, "MODERATE", 1),
                                  ("REVIEW.md", "LOW", 1), (CODE, "HIGH", 1),
-                                 (CODE, "Unrated", 1), (CODE, "LOW", 201),
+                                 (CODE, "Unrated", 1), (CODE, "LOW", 501),
                                  ("integrations/openai/src/helper.py", "LOW", 1)):
             with self.subTest(path=path, risk=risk, added=added):
                 result = gate.decide(review(change_risk=risk), diff(path, added=added))
