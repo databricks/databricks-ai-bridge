@@ -652,7 +652,24 @@ jobs:
             echo "---"
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+          # One review comment per PR: update the latest one in place instead of
+          # repeating the findings, and collapse any older copies. Runs on a PR are
+          # serialized by the job's concurrency group, so they can't race here.
+          mapfile -t previous < <(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- agentbricks-reviewer-sha: "))) | "\(.id) \(.node_id)"')
+          if [ "${#previous[@]}" -eq 0 ]; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+            exit 0
+          fi
+          latest="${previous[-1]%% *}"
+          jq -n --rawfile body /tmp/comment.md '{body: $body}' \
+            | gh api --method PATCH "repos/$REPO/issues/comments/$latest" --input - --silent
+          echo "Updated review comment $latest."
+          for entry in "${previous[@]:0:${#previous[@]}-1}"; do
+            gh api graphql --silent -f id="${entry#* }" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' \
+              || echo "::warning::Could not collapse older review comment ${entry%% *}."
+          done
 
       - name: Label reviewed change risk
         if: steps.reviewer.outputs.review_ready == 'true'
