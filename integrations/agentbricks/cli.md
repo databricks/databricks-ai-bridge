@@ -1753,7 +1753,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--timeout <TIMEOUT>` | integer range | `100` | no | Seconds to wait before returning exit 75. |
+| `--timeout <TIMEOUT>` | integer range | `300` | no | Seconds to wait before exit 75. Set your command timeout above this. |
 | `--source <SOURCE>` | path | `.` | no | Project directory the deploy ran from. |
 
 On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. A deploy whose app still returns 502/503/504 is in the `Waiting for the agent to answer` phase. Phase changes and heartbeats go to stderr. When the profile can't call the app, exit 0 comes with `Couldn't check the agent answers` on stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail, ready}` with the same exit code; `ready` is `true` once the app answered and `null` otherwise.

@@ -196,7 +196,8 @@ agentbricks deploy my-agent --no-wait            # quick checks, then deploys in
 agentbricks deployments wait agent-bricks-my-agent
 ```
 
-`deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
+`deployments wait` returns within 300 seconds (`--timeout`). Run it with a command timeout above that
+(for example, Claude Code's Bash `timeout: 360000`), or pass a shorter `--timeout`. Exit 0 means the agent is deployed and
 answering requests, and it prints the URL; exit 1 means the deploy failed, and it prints the error
 and the end of the deploy log; exit 75 means it is still deploying, so run the same command again.
 Don't poll with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`,
