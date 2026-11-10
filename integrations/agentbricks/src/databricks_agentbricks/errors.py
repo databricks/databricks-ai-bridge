@@ -15,9 +15,8 @@ from rich.console import Console
 # Error codes indicating that a preview API is not deployed to the workspace's region or shard.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED"})
 
-# Error code for a workspace whose feature preview is turned off, for example because it opted out
-# of the Agent Memory Sessions preview. The API returns HTTP 404 for it, so callers must check this
-# code rather than the status, which also means a missing resource.
+# Error code for a workspace whose feature preview is turned off. The API returns HTTP 404 for it, so
+# callers must check this code rather than the status, which also means a missing resource.
 FEATURE_DISABLED = "FEATURE_DISABLED"
 
 # gRPC-style status codes the backend returns for transient failures (a cancelled or
