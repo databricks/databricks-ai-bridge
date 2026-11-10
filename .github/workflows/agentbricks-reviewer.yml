@@ -624,11 +624,12 @@ jobs:
         env:
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
           MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '500' }}
+          MAX_RISK: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_RISK || 'medium' }}
         run: |
           set -euo pipefail
           python3 .github/scripts/agentbricks_auto_approve.py \
             --review /tmp/review.txt --diff /tmp/pr_diff.txt --paths /tmp/pr_changed_paths.json \
-            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
+            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" --max-risk "$MAX_RISK" \
             --overview /tmp/review_overview.md > /tmp/pr_review_decision.json
 
       - name: Post inline findings
@@ -681,13 +682,14 @@ jobs:
         run: |
           python3 .github/scripts/agentbricks_risk_labels.py --repo "$REPO" --pr "$PR_NUMBER"
 
-      - name: Auto-approve if low risk
+      - name: Auto-approve if eligible
         if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
           MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '500' }}
+          MAX_RISK: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_RISK || 'medium' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -708,7 +710,7 @@ jobs:
             exit 0
           fi
           body="<!-- agentbricks-reviewer-approval -->
-          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: low change risk, review score at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: change risk no higher than ${MAX_RISK}, review score at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
             -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
             && echo "Approved ${HEAD_SHA:0:7}." \

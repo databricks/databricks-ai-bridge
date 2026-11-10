@@ -43,7 +43,9 @@ behavior, and binaries are high; public CLI/API/runtime/persistence paths and
 multiple production packages are at least moderate. More than 10 paths is at
 least moderate; more than 1000 lines or 30 paths is high. The configurable
 `AI_REVIEW_AUTO_APPROVE_MAX_LINES` separately limits approval eligibility without
-changing the risk classification. CI raises the classification directly when a
+changing the risk classification. Low and moderate risk are eligible by default;
+set `AI_REVIEW_AUTO_APPROVE_MAX_RISK` to `low` to restrict approval to low risk.
+CI raises the classification directly when a
 minimum risk level applies and shows the reasons in the review comment.
 CI floors never lower risk. Root and scoped REVIEW.md changes remain
 protected; this does not add AGENTS.md or CLAUDE.md to the protected filenames.
@@ -51,8 +53,8 @@ protected; this does not add AGENTS.md or CLAUDE.md to the protected filenames.
 The workflow labels completed current-head reviews with `risk:low`,
 `risk:medium` (moderate), `risk:high`, or `risk:unrated` regardless of the auto-approval setting. It replaces
 the old risk label and clears stale labels after pushes, including when the
-push-review budget is exhausted. Low risk is required for auto-approval but
-does not override findings, coverage, author, scope, size, or commit checks.
+push-review budget is exhausted. The configured risk ceiling does not override
+findings, coverage, author, scope, size, or commit checks.
 
 Publishing and push cleanup use the same reconciler: derive the desired label
 from the latest current-head bot assessment, mutate labels, and reread both the
@@ -65,7 +67,7 @@ A current-head review that passes the configured review-score threshold,
 complete reviewer coverage, and empty blocking/security/uncertain findings
 receives `ai-approved`, even when risk, path, size, or author restrictions
 prevent a GitHub approval. This label records the AI review verdict only.
-It does not satisfy a required GitHub approval. Moderate/high/unrated changes
-still need human approval; only eligible low-risk changes can receive the
+It does not satisfy a required GitHub approval. High and unrated changes still
+need human approval; eligible low- and moderate-risk changes can receive the
 bot's GitHub approval when auto-approval is enabled. The same reconciler
 removes `ai-approved` on an unreviewed push or a failed subsequent review.

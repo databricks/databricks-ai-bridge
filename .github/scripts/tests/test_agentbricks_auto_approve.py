@@ -193,9 +193,9 @@ class DecideTest(unittest.TestCase):
 
 
 class ChangeRiskTest(unittest.TestCase):
-    def test_findings_score_does_not_replace_change_risk(self):
+    def test_moderate_risk_can_pass_with_clean_findings_and_score(self):
         result = gate.decide(review(change_risk="MODERATE"), diff(CODE))
-        self.assertFalse(result["approve"])
+        self.assertTrue(result["approve"])
         self.assertEqual(result["risk"]["label"], "risk:medium")
 
     def test_risk_classifications(self):
@@ -203,7 +203,21 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(name=name):
                 result = gate.decide(review(change_risk=name), diff(CODE))
                 self.assertEqual(result["risk"]["level"], level)
-                self.assertEqual(result["approve"], level == "low")
+                self.assertEqual(result["approve"], level in {"low", "medium"})
+
+    def test_max_risk_can_be_restricted_to_low(self):
+        result = gate.decide(review(change_risk="MODERATE"), diff(CODE), max_risk="low")
+        self.assertFalse(result["approve"], result)
+        self.assertTrue(any("allows up to LOW risk" in reason for reason in result["reasons"]))
+        self.assertEqual(result["max_risk"], "low")
+        section = gate.overview(review(change_risk="MODERATE"), result)
+        self.assertIn("Lower the change risk to LOW or below", section)
+
+    def test_invalid_max_risk_fails_closed(self):
+        for level in ("high", "unrated", "MODERATE", ""):
+            with self.subTest(level=level):
+                with self.assertRaises(ValueError):
+                    gate.decide(review(), diff(CODE), max_risk=level)
 
     def test_missing_or_invalid_assessment_withholds_approval(self):
         for text in (
@@ -256,7 +270,7 @@ class ChangeRiskTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 result = gate.decide(review(), diff(path))
-                self.assertFalse(result["approve"])
+                self.assertTrue(result["approve"], result)
                 self.assertEqual(result["risk"]["level"], "medium")
                 self.assertEqual(result["risk"]["model_level"], "low")
 
@@ -307,7 +321,7 @@ class ChangeRiskTest(unittest.TestCase):
         paths = ["integrations/agentbricks/src/cli/new command.py"]
         result = gate.decide(review(), diff("docs/example.md"), paths=paths)
         self.assertEqual(result["risk"]["level"], "medium")
-        self.assertFalse(result["approve"])
+        self.assertTrue(result["approve"], result)
 
     def test_review_verdict_is_independent_of_risk_scope_and_size(self):
         for path, risk, added in ((CODE, "LOW", 1), (CODE, "MODERATE", 1),
@@ -318,7 +332,7 @@ class ChangeRiskTest(unittest.TestCase):
                 result = gate.decide(review(change_risk=risk), diff(path, added=added))
                 self.assertTrue(result["review_passed"], result)
                 self.assertEqual(result["review_reasons"], [])
-                self.assertEqual(result["approve"], path == CODE and risk == "LOW" and added == 1)
+                self.assertEqual(result["approve"], path == CODE and risk in {"LOW", "MODERATE"} and added == 1)
 
     def test_review_failures_withhold_ai_label_verdict(self):
         for text in (review(score=94), review(score=101), review(reviewers="1/2"),
@@ -350,9 +364,8 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertEqual(section.count("Small compatible change"), 1)
         self.assertIn("CI raised the reviewer's LOW to MODERATE:", section)
         self.assertIn("public interface, runtime, or persisted state", section)
-        self.assertIn("Review checks passed (`ai-approved`); not eligible for auto-approval. To unblock:", section)
-        self.assertIn("- Lower the change risk to LOW (it's MODERATE; see **Risk**).", section)
-        self.assertIn("Or ask a maintainer to approve.", section)
+        self.assertIn("Review checks passed (`ai-approved`), and the PR is eligible for auto-approval.", section)
+        self.assertNotIn("To unblock", section)
         self.assertNotIn("Safety assessment", section)
 
     def test_overview_lists_findings_and_how_to_fix_them(self):
