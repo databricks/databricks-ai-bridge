@@ -20,7 +20,9 @@ REVIEW_SCORE = re.compile(
     r"\s*·\s*reviewers:\s*(?P<delivered>\d+)/(?P<dispatched>\d+)"
 )
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
-HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
+# Reviewers write sections as Markdown headings or as a bold label on its own line.
+HEADING = re.compile(r"^(?:#{1,6}\s+(?P<title>.+?)|\*\*(?P<label>[^*\n]+?):?\*\*:?)\s*$", re.MULTILINE)
+LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
 CHANGE_RISK = re.compile(r"^\*\*Change risk:\*\*[ \t]*(?P<risk>[^\r\n]*)$", re.MULTILINE)
 RISK_RATIONALE = re.compile(r"^\*\*Risk rationale:\*\*[ \t]*(?P<text>[^\r\n]*)$", re.MULTILINE)
 RISK_LEVELS = ("low", "medium", "high")
@@ -78,13 +80,18 @@ def protected_reason(path: str) -> str | None:
 
 
 def section_body(review: str, title: str) -> str | None:
-    """Text under the heading named title, up to the next heading; None if missing."""
+    """Text under the heading or bold label named title, up to the next one; None if missing."""
     headings = list(HEADING.finditer(review))
     for index, heading in enumerate(headings):
-        if heading.group("title").strip().lower() == title.lower():
+        if (heading.group("title") or heading.group("label")).strip().lower() == title.lower():
             end = headings[index + 1].start() if index + 1 < len(headings) else len(review)
             return review[heading.end() : end].strip()
     return None
+
+
+def section_is_empty(body: str) -> bool:
+    """A section starting with "None" and listing no findings; findings are always list items."""
+    return body.lower().startswith("none") and not LIST_ITEM.search(body)
 
 
 def assess_change_risk(review: str, files: list[str], lines: int, diff: str = "") -> dict:
@@ -168,7 +175,7 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
         body = section_body(review, title)
         if body is None:
             reasons.append(f'the review has no "{title}" section')
-        elif body.rstrip(".").strip().lower() != "none":
+        elif not section_is_empty(body):
             reasons.append(f'"{title}" is not empty')
 
     review_reasons = list(reasons)
