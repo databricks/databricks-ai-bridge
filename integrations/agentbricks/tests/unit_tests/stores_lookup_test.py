@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.cli import memory as memory_cli
 from databricks_agentbricks.cli import sessions as sessions_cli
 from databricks_agentbricks.clients.conversation_store_client import MemoryStoreClient
@@ -22,6 +23,13 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import present_deploy_result
 from databricks_agentbricks.services.deploy_service import DeployResult
+
+
+@pytest.fixture(autouse=True)
+def _reset_output_mode():
+    # Keep the process-global output mode from leaking between tests.
+    yield
+    errors.set_output_mode("text")
 
 
 def _memory_store(store_id: str, display_name: str, **over) -> dict:
@@ -196,7 +204,31 @@ def test_memory_get_no_match_hints_list_name():
     assert result.exit_code == 1
     out = _flat(result.output)
     assert "No memory store named 'agent-memroy'" in out
+    assert "Stores in agent.toml are created on the first agentbricks deploy" in out
     assert "agentbricks memory stores list --name agent-memroy" in out
+
+
+@pytest.mark.parametrize(
+    ("kind", "group"), [("memory", memory_cli.stores), ("sessions", sessions_cli.stores)]
+)
+def test_get_not_found_hint_quotes_a_name_with_spaces(kind, group):
+    result = _run(group, ["get", "my agent store"], _PagedApi())
+    assert result.exit_code == 1
+    out = _flat(result.output)
+    assert f"agentbricks {kind} stores list --name 'my agent store'" in out
+
+
+@pytest.mark.parametrize(
+    ("kind", "group"), [("memory", memory_cli.stores), ("sessions", sessions_cli.stores)]
+)
+def test_get_not_found_json_error_hint_carries_deploy_and_search_text(kind, group):
+    errors.set_output_mode("json")
+    result = _run(group, ["get", "agent-store"], _PagedApi(), output="json")
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    hint = payload["error"]["hint"]
+    assert "Stores in agent.toml are created on the first agentbricks deploy." in hint
+    assert f"agentbricks {kind} stores list --name agent-store" in hint
 
 
 def test_resolve_still_returns_the_first_match_and_stops_paging():
@@ -225,6 +257,7 @@ def test_session_get_not_found_hints_list_name():
     assert result.exit_code == 1
     out = _flat(result.output)
     assert "No session store named 'agent-sesions'" in out
+    assert "Stores in agent.toml are created on the first agentbricks deploy" in out
     assert "agentbricks sessions stores list --name agent-sesions" in out
 
 
@@ -233,6 +266,7 @@ def test_session_get_other_errors_are_not_rewritten():
     result = _run(sessions_cli.stores, ["get", "agent-sessions"], api)
     assert result.exit_code == 1
     assert "No session store named" not in result.output
+    assert "created on the first agentbricks deploy" not in result.output
 
 
 # --- stores list --name / --all ------------------------------------------------
