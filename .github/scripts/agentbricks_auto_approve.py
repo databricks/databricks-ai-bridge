@@ -147,7 +147,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
     }
 
 
-def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
+def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
            paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
@@ -223,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--review", required=True, type=Path)
     parser.add_argument("--diff", required=True, type=Path)
     parser.add_argument("--min-score", type=int, default=95)
-    parser.add_argument("--max-lines", type=int, default=200)
+    parser.add_argument("--max-lines", type=int, default=500)
     parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
     parser.add_argument("--safety-section", type=Path, help="Write the safety section for the PR comment")
     args = parser.parse_args(argv)

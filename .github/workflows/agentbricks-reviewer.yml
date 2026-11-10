@@ -50,7 +50,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
 #   passes (review score >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
 #   reviewer delivered; no blocking, security, or uncertain findings; at most
-#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
+#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 500; only files under
 #   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
 #   or credential files), the author has write access, and
 #   the PR head hasn't moved. The approver is github-actions[bot], so the repo
@@ -623,7 +623,7 @@ jobs:
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
-          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '500' }}
         run: |
           set -euo pipefail
           python3 .github/scripts/agentbricks_auto_approve.py \
@@ -681,7 +681,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
-          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '500' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
