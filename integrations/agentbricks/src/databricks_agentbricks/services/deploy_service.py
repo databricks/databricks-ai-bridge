@@ -626,7 +626,8 @@ class DeployService:
         The order matters:
 
         1. Resolve and validate the project/name, plan request-user scopes without mutating the
-           App, persist the name, and read the resource bindings.
+           App, persist the name, and read the resource bindings. Fail here if a bound memory or
+           session store's API is turned off for the workspace (``FEATURE_DISABLED``).
         2. Get the App's compute booting: create a missing App, or start a stopped one, without
            waiting. The boot runs server-side while every step up to the join below runs here.
         3. Reconcile the bound memory and session stores, tracing, and Runtime Store. Each
@@ -687,6 +688,11 @@ class DeployService:
             experiment_name=experiment_name,
             deployment_exists=False,
         )
+        # Check bound stores before the early App create below. A workspace that opted out of the
+        # store preview would otherwise fail at reconcile and keep an App with no deployment.
+        with timer("preflight"):
+            self._memory_store_provisioner.preflight(ctx)
+            self._session_store_provisioner.preflight(ctx)
         # Out of scope for the early compute start: a request-user App is created or updated
         # through the SDK scope path (`_reconcile_scoped_app`) at its original position, after the
         # reconciles, and the wait follows immediately. A follow-up can move it once this lands.

@@ -101,6 +101,14 @@ class _DeployApi:
         self.events = events
         self.fail_memory_grant = fail_memory_grant
 
+    def list_memory_stores(self, page_size=None, page_token=None):
+        self.events.append(("memory.list", page_size))
+        return {"managed_memory_stores": []}
+
+    def list_session_stores(self, page_size=None, page_token=None):
+        self.events.append(("session.list", page_size))
+        return {"session_stores": []}
+
     def create_memory_store(self, display_name, *, retry_transient=False):
         self.events.append(("memory.create", display_name, retry_transient))
         return {"name": "memory-stores/memory-id", "display_name": display_name}
@@ -788,6 +796,13 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
     )
     memory_create_index = event_index(lambda event: event[0] == "memory.create")
     first_active_index = event_index(lambda event: event == ("apps.state", "ACTIVE"))
+    # The bound stores' APIs are probed before anything is created, so an opted-out workspace
+    # isn't left with an App and no deployment.
+    probe_indexes = [
+        event_index(lambda event: event == ("memory.list", 1)),
+        event_index(lambda event: event == ("session.list", 1)),
+    ]
+    assert max(probe_indexes) < app_create_index
     # The compute boots from the very start; everything up to the sync overlaps it.
     assert app_create_index < memory_create_index < create_index < sync_index
     assert sync_index < first_active_index < deploy_index < trace_update_index
