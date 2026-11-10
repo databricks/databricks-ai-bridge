@@ -116,6 +116,22 @@ class DecideTest(unittest.TestCase):
         self.assert_refused(gate.decide(text, diff(CODE)), 'no "Security vulnerabilities" section')
         self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no review score line")
 
+    def test_bold_section_labels_count_as_sections(self):
+        text = review()
+        for title in ("Blocking issues", "Security vulnerabilities", "Non-blocking notes", "Uncertain findings", "Approach"):
+            text = text.replace(f"## {title}\n", f"**{title}**\n")
+        self.assertTrue(gate.decide(text, diff(CODE))["approve"])
+        finding = "- [HIGH] [HIGH CONFIDENCE] `a.py:1` — x → y."
+        flagged = review(blocking=finding).replace("## Blocking issues\n", "**Blocking issues:**\n")
+        self.assert_refused(gate.decide(flagged, diff(CODE)), '"Blocking issues" is not empty')
+
+    def test_none_with_a_caveat_is_empty_but_a_listed_finding_is_not(self):
+        caveat = "None. The UI label couldn't be confirmed offline; this is a verification limit, not a defect."
+        self.assertTrue(gate.decide(review(uncertain=caveat), diff(CODE))["approve"])
+        for body in ("None.\n- [MEDIUM] [UNCERTAIN] `a.py:1` — x → y.", "1. [LOW] `a.py:1` — x → y.", "Nothing serious, but x → y."):
+            with self.subTest(body=body):
+                self.assert_refused(gate.decide(review(uncertain=body), diff(CODE)), '"Uncertain findings" is not empty')
+
     def test_large_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), diff(CODE, added=201)), "over the 200-line limit")
         self.assertTrue(gate.decide(review(), diff(CODE, added=200))["approve"])

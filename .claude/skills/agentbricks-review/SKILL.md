@@ -267,7 +267,9 @@ Then report `**Review rules:** <source paths/revision> · checked: <applicable
 rule IDs> · gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable
 findings.
 
-Then these sections, in order. Write "None." for an empty section.
+Then these sections, in order, each as a `## <name>` heading (for example
+`## Blocking issues`). Write "None." for an empty section; CI reads these
+headings to decide auto-approval.
 
 1. **Blocking issues**: Critical and High findings that are not security issues.
 2. **Security vulnerabilities**: Critical and High security findings.
