@@ -118,6 +118,7 @@ def test_feature_disabled_error_says_how_to_enable_the_preview():
     )
     assert mapped.error_code == "FEATURE_DISABLED"
     assert mapped.message == "The Agent Memory Sessions preview is not enabled for this workspace"
+    assert mapped.hint is not None
     assert "Settings > Feature Previews" in mapped.hint
     assert "few minutes" in mapped.hint
     assert "--profile" not in mapped.hint
@@ -127,11 +128,12 @@ def test_feature_disabled_error_says_how_to_enable_the_preview():
 def test_unimplemented_preview_api_keeps_the_profile_hint(error_code):
     # These codes mean the API isn't deployed to this workspace at all, so no toggle fixes it.
     class Unimplemented(RuntimeError):
-        pass
+        def __init__(self, message: str, error_code: str) -> None:
+            super().__init__(message)
+            self.error_code = error_code
 
-    exc = Unimplemented("not implemented")
-    exc.error_code = error_code
-    mapped = wrap_api_error(exc)
+    mapped = wrap_api_error(Unimplemented("not implemented", error_code))
+    assert mapped.hint is not None
     assert "--profile" in mapped.hint
     assert "Feature Previews" not in mapped.hint
 
