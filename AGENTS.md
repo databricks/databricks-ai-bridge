@@ -48,6 +48,15 @@ human decisions. These are the two workflow skills; `.agents/skills/` aliases th
 same source files for Codex. The hosted factory packages committed snapshots so
 its steering model and native worker use the same reviewed policy.
 
+Track software-factory outcomes with three KPIs:
+
+- Average elapsed time from PR creation to merge.
+- Percentage of PRs merged without human intervention.
+- Percentage of merged PRs that are rolled back.
+
+As of November 2026, average creation-to-merge time is 77 hours. The factory's
+target is under 6 hours, with further reductions preferred.
+
 ## Code Review
 
 AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment, with each finding on a changed line also left as an inline review comment on that line; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
