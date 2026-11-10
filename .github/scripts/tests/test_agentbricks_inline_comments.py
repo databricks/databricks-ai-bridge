@@ -128,5 +128,57 @@ class RewriteTest(unittest.TestCase):
         self.assertEqual(inline.rewrite(REVIEW, []), REVIEW)
 
 
+
+def earlier(path=CODE, line=163, section="Blocking issues", outdated=False, minimized=False, id="C1"):
+    return {"id": id, "path": path, "line": line, "section": section, "outdated": outdated, "minimized": minimized}
+
+
+class ReconcileTest(unittest.TestCase):
+    def test_same_finding_at_same_line_is_kept_not_reposted(self):
+        comments, _ = inline.plan(REVIEW, DIFF, HEAD)
+        to_post, keep, stale = inline.reconcile(comments, [earlier()])
+        self.assertEqual([(c["path"], c["line"]) for c in to_post], [(CODE, 164)])
+        self.assertEqual([c["id"] for c in keep], ["C1"])
+        self.assertEqual(stale, [])
+
+    def test_gone_moved_outdated_or_other_section_comments_are_minimized(self):
+        comments, _ = inline.plan(REVIEW, DIFF, HEAD)
+        olds = [
+            earlier(line=150, id="moved"),
+            earlier(outdated=True, id="outdated"),
+            earlier(line=None, id="no-line"),
+            earlier(section="Non-blocking notes", id="other-section"),
+            earlier(section=None, id="old-format"),
+        ]
+        to_post, keep, stale = inline.reconcile(comments, olds)
+        self.assertEqual(len(to_post), 2)
+        self.assertEqual(keep, [])
+        self.assertEqual([c["id"] for c in stale], ["moved", "outdated", "no-line", "other-section", "old-format"])
+
+    def test_already_minimized_comments_are_not_minimized_again(self):
+        _, keep, stale = inline.reconcile([], [earlier(minimized=True)])
+        self.assertEqual((keep, stale), ([], []))
+
+    def test_a_returning_finding_keeps_its_minimized_comment_for_restoring(self):
+        comments, _ = inline.plan(REVIEW, DIFF, HEAD)
+        _, keep, _ = inline.reconcile(comments, [earlier(minimized=True)])
+        self.assertTrue(keep[0]["minimized"])
+
+    def test_two_findings_on_one_line_each_need_their_own_comment(self):
+        review = (
+            "## Blocking issues\n"
+            f"- [HIGH] [HIGH CONFIDENCE] `{CODE}:163` — a → b.\n"
+            f"- [HIGH] [HIGH CONFIDENCE] `{CODE}:163` — c → d.\n"
+        )
+        comments, _ = inline.plan(review, DIFF, HEAD)
+        to_post, keep, _ = inline.reconcile(comments, [earlier()])
+        self.assertEqual((len(to_post), len(keep)), (1, 1))
+
+    def test_comment_bodies_carry_the_section_marker(self):
+        comments, _ = inline.plan(REVIEW, DIFF, HEAD)
+        self.assertIn("<!-- agentbricks-reviewer-finding: Blocking issues -->", comments[0]["body"])
+        self.assertEqual(inline.FINDING_MARKER.search(comments[0]["body"])["section"], "Blocking issues")
+
+
 if __name__ == "__main__":
     unittest.main()

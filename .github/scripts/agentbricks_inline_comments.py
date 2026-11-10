@@ -6,8 +6,10 @@ COMMENT review on the reviewed commit. In the summary comment, each section's
 posted findings are replaced by one line saying how many were left inline.
 Findings that can't be anchored, such as ones about files outside the diff, stay
 in the summary in full.
-Inline comments from earlier runs are minimized as outdated so re-reviews don't
-pile up.
+On a re-review, a finding that already has an open inline comment at the same
+file, line, and section isn't posted again; the earlier comment stays. Earlier
+comments whose findings are gone, or whose lines changed, are minimized as
+outdated.
 
 Usage: agentbricks_inline_comments.py --repo OWNER/NAME --pr N --head SHA
            --review REVIEW --diff DIFF --out SUMMARY
@@ -33,6 +35,22 @@ TAGS = re.compile(r"^(?P<tags>(?:\[[^\]]+\]\s*)+)")
 LOCATION = re.compile(r"`?(?P<path>[\w.@+/-]+):(?P<start>\d+)(?:-(?P<end>\d+))?`?")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 INLINE_MARKER = "<!-- agentbricks-reviewer-inline -->"
+FINDING_MARKER = re.compile(r"^<!-- agentbricks-reviewer-finding: (?P<section>.+?) -->$", re.MULTILINE)
+# The bot's earlier inline comments, with where each sits on the current diff.
+EXISTING_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          isOutdated
+          comments(first: 1) { nodes { id path line isMinimized body author { __typename } } }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 def commentable_lines(diff: str) -> dict[str, set[int]]:
@@ -115,11 +133,11 @@ def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]
         title = f"**{tags.group('tags').strip()}** · {finding['section']}" if tags else f"**{finding['section']}**"
         body_text = finding["text"][tags.end() :] if tags else finding["text"]
         body = (
-            f"{INLINE_MARKER}\n"
+            f"{INLINE_MARKER}\n<!-- agentbricks-reviewer-finding: {finding['section']} -->\n"
             f"{title}\n\n{body_text.strip()}\n\n"
             f"<sub>AgentBricksReviewer finding for `{head_sha[:7]}`.</sub>"
         )
-        comments.append({**position, "body": body})
+        comments.append({**position, "body": body, "section": finding["section"]})
         anchored.append(finding)
     return comments, anchored
 
@@ -152,20 +170,53 @@ def github(args: list[str], data: dict | None = None) -> object:
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def minimize_earlier(repo: str, pr: int) -> None:
-    """Collapse inline comments from earlier AgentBricksReviewer runs."""
-    pages = github(["--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/comments?per_page=100"])
-    for page in pages or []:
-        for comment in page:
-            if comment["user"]["type"] == "Bot" and INLINE_MARKER in comment["body"]:
-                github([
-                    "graphql",
-                    "-f",
-                    "query=mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) "
-                    "{ minimizedComment { isMinimized } } }",
-                    "-f",
-                    f"id={comment['node_id']}",
-                ])
+def finding_key(path: str, line: int | None, section: str | None) -> tuple:
+    return (path, line, section)
+
+
+def reconcile(comments: list[dict], existing: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split planned comments into ones to post, and earlier ones to keep or to minimize.
+
+    An earlier comment is kept when it is still on the current diff (not outdated)
+    and a planned finding has the same file, line, and section; that finding isn't
+    posted again. Every other earlier comment is minimized.
+    """
+    planned = list(comments)
+    keep, minimize = [], []
+    for comment in existing:
+        key = finding_key(comment["path"], comment["line"], comment["section"])
+        match = next((c for c in planned if finding_key(c["path"], c["line"], c["section"]) == key), None)
+        if not comment["outdated"] and comment["line"] is not None and match is not None:
+            keep.append(comment)
+            planned.remove(match)
+        elif not comment["minimized"]:
+            minimize.append(comment)
+    return planned, keep, minimize
+
+
+def existing_inline(repo: str, pr: int) -> list[dict]:
+    """The bot's earlier AgentBricksReviewer inline comments on this PR."""
+    owner, name = repo.split("/", 1)
+    data = github(["graphql", "-f", f"query={EXISTING_QUERY}", "-f", f"owner={owner}", "-f", f"name={name}",
+                   "-F", f"number={pr}"])
+    found = []
+    for thread in data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]:
+        for comment in thread["comments"]["nodes"]:
+            if (comment.get("author") or {}).get("__typename") != "Bot" or INLINE_MARKER not in comment["body"]:
+                continue
+            marker = FINDING_MARKER.search(comment["body"])
+            found.append({
+                "id": comment["id"], "path": comment["path"], "line": comment["line"],
+                "section": marker["section"] if marker else None,
+                "outdated": thread["isOutdated"], "minimized": comment["isMinimized"],
+            })
+    return found
+
+
+def set_minimized(comment: dict, minimized: bool) -> None:
+    mutation = ("mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }"
+                if minimized else "mutation($id: ID!) { unminimizeComment(input: {subjectId: $id}) { clientMutationId } }")
+    github(["graphql", "-f", f"query={mutation}", "-f", f"id={comment['id']}"])
 
 
 def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
@@ -177,7 +228,7 @@ def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
             "event": "COMMENT",
             "body": f"AgentBricksReviewer left {len(comments)} inline comment(s) on `{head_sha[:7]}`. "
             "The score and summary are in the review comment.",
-            "comments": comments,
+            "comments": [{key: value for key, value in c.items() if key != "section"} for c in comments],
         },
     )
 
@@ -195,20 +246,34 @@ def main(argv: list[str] | None = None) -> int:
     review = args.review.read_text(encoding="utf-8")
     diff = args.diff.read_text(encoding="utf-8", errors="replace")
     summary = review
-    try:
-        minimize_earlier(args.repo, args.pr)
-    except RuntimeError as error:
-        print(f"::warning::Could not minimize earlier inline comments: {error}")
     comments, anchored = plan(review, diff, args.head)
-    if comments:
+    try:
+        existing = existing_inline(args.repo, args.pr)
+    except (RuntimeError, KeyError, TypeError) as error:
+        print(f"::warning::Could not read earlier inline comments; posting every finding: {error}")
+        existing = []
+    to_post, keep, stale = reconcile(comments, existing)
+    for comment in stale:
         try:
-            post(args.repo, args.pr, args.head, comments)
+            set_minimized(comment, True)
+        except RuntimeError as error:
+            print(f"::warning::Could not minimize an earlier inline comment: {error}")
+    for comment in keep:
+        if comment["minimized"]:
+            try:
+                set_minimized(comment, False)
+            except RuntimeError as error:
+                print(f"::warning::Could not restore an earlier inline comment: {error}")
+    if not comments:
+        print("No findings on commentable diff lines; keeping every finding in the summary comment.")
+    else:
+        try:
+            if to_post:
+                post(args.repo, args.pr, args.head, to_post)
             summary = rewrite(review, anchored)
-            print(f"Posted {len(comments)} inline comment(s).")
+            print(f"Posted {len(to_post)} new inline comment(s); kept {len(keep)} unchanged; minimized {len(stale)}.")
         except RuntimeError as error:
             print(f"::warning::Could not post inline findings; keeping them in the summary comment: {error}")
-    else:
-        print("No findings on commentable diff lines; keeping every finding in the summary comment.")
     args.out.write_text(summary, encoding="utf-8")
     return 0
 
