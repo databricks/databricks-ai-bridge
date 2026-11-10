@@ -883,6 +883,41 @@ def test_prompt_only_cost_uses_traced_calls(override):
     assert cost == pytest.approx(0.0042 if override else 0.008)
 
 
+@pytest.mark.parametrize("override_name", ["claude-haiku-4-5", "system.ai.claude-haiku-4-5"])
+@pytest.mark.parametrize("traced_name", ["claude-haiku-4-5", "system.ai.claude-haiku-4-5"])
+@pytest.mark.parametrize("rate, expected", [(10.0, 0.0028), (0.0, 0.0)])
+def test_prompt_only_cost_override_survives_state_construction(
+    mocker, override_name, traced_name, rate, expected
+):
+    mocker.patch(
+        f"{opt.__name__}.mlflow.genai.load_prompt",
+        return_value=mocker.Mock(template="Answer {{question}}", version=1),
+    )
+    catalog = mocker.patch(f"{opt.__name__}._mlflow_model_cost", return_value=0.5)
+    state = opt._build_state(
+        predict_fn=lambda inputs: "answer",
+        prompt_uris=["prompts:/cat.schema.instructions@production"],
+        gateway_endpoints={},
+        scorers=[],
+        weight_quality=0.7,
+        weight_latency=0.2,
+        weight_cost=0.1,
+        latency_hard_gate=60.0,
+        cost_soft_gate=0.02,
+        reflection_model="unused",
+        token_costs={override_name: {"input": rate, "output": rate}},
+    )
+    cost = _estimate_cost_usd(
+        {},
+        state.endpoint_targets,
+        {},
+        state.token_costs,
+        llm_calls=[{"model": traced_name, "input": 2000, "output": 2000}],
+    )
+    assert cost == pytest.approx(expected)
+    catalog.assert_not_called()
+
+
 def _median_adapter(mocker, predict, scorer):
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
     state = _state(

@@ -998,7 +998,7 @@ def _rate_cost_usd(in_tokens, out_tokens, rate):
 def _price_by_name(names, in_tokens, out_tokens, token_costs):
     """USD for the first of `names` with a `token_costs` override, else the first MLflow prices."""
     for name in names:
-        rate = token_costs.get(name)
+        rate = token_costs.get(name.removeprefix("system.ai."))
         if rate is not None:
             return _rate_cost_usd(in_tokens, out_tokens, rate)
     for name in names:
