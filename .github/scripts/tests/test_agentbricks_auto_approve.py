@@ -220,7 +220,7 @@ class ChangeRiskTest(unittest.TestCase):
         decision = gate.decide(text, diff("REVIEW.md"))
         self.assertFalse(decision["approve"])
         self.assertEqual(decision["risk"]["label"], "risk:unrated")
-        self.assertIn("**UNRATED**", gate.safety_section(text, decision))
+        self.assertIn("**Change risk:** UNRATED · `risk:unrated`", gate.overview(text, decision))
         self.assertTrue(decision["risk"]["reasons"])
 
     def test_high_assessment_is_not_downgraded_by_lower_floors(self):
@@ -228,7 +228,7 @@ class ChangeRiskTest(unittest.TestCase):
         decision = gate.decide(text, diff(CODE))
         self.assertFalse(decision["approve"])
         self.assertEqual(decision["risk"]["label"], "risk:high")
-        self.assertIn("**HIGH**", gate.safety_section(text, decision))
+        self.assertIn("**Change risk:** HIGH · `risk:high`", gate.overview(text, decision))
 
     def test_public_interface_and_runtime_changes_have_medium_floor(self):
         for path in (
@@ -320,26 +320,57 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertEqual(result["risk"]["label"], "risk:low")
         self.assertFalse(result["approve"])
 
-    def test_safety_section_explains_assessment_and_eligibility(self):
+    def test_overview_has_score_risk_summary_and_approval(self):
         text = review()
         decision = gate.decide(text, diff("integrations/agentbricks/src/cli/app.py"))
-        section = gate.safety_section(text, decision)
-        self.assertIn("### Safety assessment", section)
-        self.assertIn("Review score (findings and coverage) | 100/100", section)
-        self.assertNotIn("Change safety", section)
+        section = gate.overview(text, decision)
+        self.assertTrue(section.startswith(
+            "**Review score:** 100/100 · reviewers: 2/2 · **Change risk:** MODERATE · `risk:medium`\n"))
         self.assertEqual(section.count("/100"), 1)
-        self.assertIn("**MODERATE**", section)
-        self.assertIn("**AI review verdict:** Passed · `ai-approved`.", section)
-        self.assertIn("Small compatible change", section)
-        self.assertIn("Model change risk before CI adjustments: LOW.", section)
-        self.assertIn("Auto-approval content checks:** Not eligible.", section)
+        for heading in ("### Summary", "### Risk", "### AI approval"):
+            self.assertIn(heading, section)
+        self.assertIn("No findings.", section)
+        self.assertIn("**Approach:** Sound.", section)
+        self.assertEqual(section.count("Small compatible change"), 1)
+        self.assertIn("CI raised the reviewer's LOW to MODERATE:", section)
         self.assertIn("public interface, runtime, or persisted state", section)
+        self.assertIn("Review checks passed (`ai-approved`); not eligible for auto-approval. To unblock:", section)
+        self.assertIn("- Lower the change risk to LOW (it's MODERATE; see **Risk**).", section)
+        self.assertIn("Or ask a maintainer to approve.", section)
+        self.assertNotIn("Safety assessment", section)
 
-    def test_safety_section_distinguishes_content_checks_from_final_approval(self):
+    def test_overview_lists_findings_and_how_to_fix_them(self):
+        finding = "- [HIGH] [HIGH CONFIDENCE] `a.py:1` — x → y."
+        text = review(score=80, reviewers="1/2", blocking=finding)
+        section = gate.overview(text, gate.decide(text, diff(CODE)))
+        self.assertIn(f"**Blocking issues**\n{finding}", section)
+        self.assertNotIn("No findings.", section)
+        self.assertIn("Review checks not passed;", section)
+        self.assertIn("- Fix the blocking issues above, or reply explaining why they don't apply, "
+                      "then comment `/review` (the score must reach 95).", section)
+        self.assertIn("- A reviewer didn't finish: comment `/review force` to run the review again.", section)
+
+    def test_overview_names_each_blocked_path_group_once(self):
+        paths = [".github/workflows/a.yml", "src/databricks_ai_bridge/core.py"]
         text = review()
-        section = gate.safety_section(text, gate.decide(text, diff("README.md")))
-        self.assertIn("Auto-approval content checks:** Passed.", section)
-        self.assertIn("Final approval also requires automation to be enabled", section)
+        section = gate.overview(text, gate.decide(text, diff(*paths, added=150)))
+        self.assertIn("- Split the PR to at most 200 changed lines (it has 300).", section)
+        self.assertEqual(section.count("`.github/workflows/a.yml`"), 1)
+        self.assertIn("- CI or review configuration files can't be auto-approved; move them to a separate PR (see **Risk**).",
+                      section)
+        self.assertIn("- Files outside `integrations/agentbricks/` that aren't docs can't be auto-approved; "
+                      "move them to a separate PR (`src/databricks_ai_bridge/core.py`).", section)
+
+    def test_overview_says_when_the_pr_is_eligible(self):
+        text = review()
+        section = gate.overview(text, gate.decide(text, diff("README.md")))
+        self.assertIn("Review checks passed (`ai-approved`), and the PR is eligible for auto-approval.", section)
+        self.assertNotIn("To unblock", section)
+
+    def test_long_path_lists_are_truncated(self):
+        paths = [f"src/pkg/m{i}.py" for i in range(8)]
+        section = gate.overview(review(), gate.decide(review(), diff(*paths)))
+        self.assertIn("`src/pkg/m4.py`, and 3 more", section)
 
 
 if __name__ == "__main__":

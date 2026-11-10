@@ -27,12 +27,14 @@ For example, `Review score: 100/100 · reviewers: 2/2` can appear alongside
 `Change risk: MODERATE` for a clean review of a consequential change. Only
 change risk carries a risk classification; the review score does not.
 
-Each comment includes a Safety assessment section with the review score,
-change-risk classification, the model's contextual rationale, any CI risk
-adjustments, and the content checks that permit or prevent automatic approval.
-Passing those content checks is separate from final authorization: automation
-must be enabled, the author eligible, the PR non-draft, and the reviewed head
-current.
+Each comment starts with one line giving the review score, reviewer coverage,
+and change risk, then three short sections: **Summary** (the findings, or "No
+findings.", and the reviewer's take on the approach), **Risk** (the rationale and
+any CI risk adjustments, with each group of files listed once), and **AI
+approval** (whether the PR is eligible and, if not, what would unblock it). The
+full review is collapsed below. Eligibility is separate from final
+authorization: automation must be enabled, the author eligible, the PR
+non-draft, and the reviewed head current.
 
 The reviewer considers actual behavior, affected users/packages, public API
 compatibility, credentials/data writes, tests, and rollback. CI adds minimum

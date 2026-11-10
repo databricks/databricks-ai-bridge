@@ -628,7 +628,7 @@ jobs:
           python3 .github/scripts/agentbricks_auto_approve.py \
             --review /tmp/review.txt --diff /tmp/pr_diff.txt --paths /tmp/pr_changed_paths.json \
             --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
-            --safety-section /tmp/risk_summary.md > /tmp/pr_review_decision.json
+            --overview /tmp/review_overview.md > /tmp/pr_review_decision.json
 
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
@@ -645,9 +645,15 @@ jobs:
             echo "<!-- agentbricks-reviewer-ai-approved: $(jq -r .review_passed /tmp/pr_review_decision.json) -->"
             echo "## AgentBricksReviewer"
             echo ""
-            cat /tmp/risk_summary.md
+            cat /tmp/review_overview.md
+            echo ""
+            # The overview carries the findings; the full review stays one click away.
+            echo "<details>"
+            echo "<summary>Full review</summary>"
             echo ""
             cat /tmp/review.txt
+            echo ""
+            echo "</details>"
             echo ""
             echo "---"
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
