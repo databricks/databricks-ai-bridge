@@ -24,6 +24,30 @@ def test_pem_output_is_omitted_even_when_the_header_leaves_the_tail(chunk_size):
     assert tail.text() == "[REDACTED]"
 
 
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize(
+    "opening, closing",
+    [(b"credentials = {\n", b"}\n"), (b"tokens = [\n", b"]\n"), (b'password="', b'"\n')],
+)
+def test_truncated_structured_values_do_not_outlive_their_credential_context(
+    chunk_size, opening, closing
+):
+    output = opening + b" \n" * 2000 + b"synthetic-opaque-value\n" + closing
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == "[REDACTED]"
+    tail.append(b"later output\n" * 400)
+    assert tail.text() == "[REDACTED]"
+
+
+def test_short_structured_output_keeps_its_context_for_downstream_scrubbing():
+    output = b'credentials = {"value": "synthetic-opaque-value"}\n'
+    tail = OutputTail()
+    tail.append(output)
+    assert tail.text() == output.decode()
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="uses Linux pipe sizing")
 def test_slow_open_destination_preserves_every_byte_after_child_exit():
     import fcntl
