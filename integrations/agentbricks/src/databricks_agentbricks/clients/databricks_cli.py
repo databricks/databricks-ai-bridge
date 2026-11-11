@@ -10,6 +10,7 @@ share it without importing each other.
 from __future__ import annotations
 
 import collections
+import os
 import subprocess
 import sys
 import time
@@ -125,11 +126,16 @@ def _run_until_ready(
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with its output streamed, calling ``on_ready`` once ``probe`` first succeeds."""
     with subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, cwd=cwd, env=env
+        cmd,
+        stdout=None if os.isatty(1) else subprocess.PIPE,
+        stderr=None if os.isatty(2) else subprocess.PIPE,
+        bufsize=0,
+        cwd=cwd,
+        env=env,
     ) as proc:
-        assert proc.stdout is not None and proc.stderr is not None
-        stdout = StreamRelay(proc.stdout, 1)
-        stderr = StreamRelay(proc.stderr, 2)
+        # Preserve terminal buffering and prompts when only one stream is redirected.
+        stdout = StreamRelay(proc.stdout, 1) if proc.stdout is not None else None
+        stderr = StreamRelay(proc.stderr, 2) if proc.stderr is not None else None
         try:
             while proc.poll() is None:
                 if probe():
@@ -151,8 +157,13 @@ def _run_until_ready(
             raise
         finally:
             proc.wait()
-            stdout.finish()
-            stderr.finish()
+            if stdout is not None:
+                stdout.finish()
+            if stderr is not None:
+                stderr.finish()
     return subprocess.CompletedProcess(
-        cmd, proc.returncode, stdout=stdout.tail.text(), stderr=stderr.tail.text()
+        cmd,
+        proc.returncode,
+        stdout=stdout.tail.text() if stdout is not None else "",
+        stderr=stderr.tail.text() if stderr is not None else "",
     )

@@ -22,7 +22,7 @@ _ASSIGNMENT = re.compile(
     r"(?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s,;&}\]]+)"
 )
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
-_URL_USERINFO = re.compile(r"(?i)(https?://)[^\s/@]+@")
+_URL_USERINFO = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/@]+@")
 _URL_QUERY = re.compile(r"(?i)(https?://[^\s?#'\"<>]+)[?#][^\s'\"<>]*")
 _TOKEN = re.compile(
     r"\b(?:dapi[a-fA-F0-9]{16,}|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|"
@@ -40,7 +40,7 @@ _PATHS = tuple(
         r"(^|[\s:,\"'])([a-zA-Z0-9_][^\s:,\"']*/[^\s:,\"']*\.[a-zA-Z][^\s:,\"']*)",
     )
 )
-_EMAIL = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_EMAIL = re.compile(r"(?<![a-zA-Z0-9._%+\-])[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
 def scrub_failure_text(value: str) -> str:
