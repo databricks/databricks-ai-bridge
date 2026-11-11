@@ -176,6 +176,7 @@ def test_closed_output_destination_keeps_draining_child():
     with dc.subprocess.Popen(
         _python("print('x' * 1000000)"), stdout=dc.subprocess.PIPE, bufsize=0
     ) as proc:
+        assert proc.stdout is not None
         relay = StreamRelay(proc.stdout, -1)
         try:
             assert proc.wait(timeout=5) == 0
