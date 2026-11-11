@@ -186,11 +186,12 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
-Failure diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
+Internal workflow diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
 instance explicitly; `phase()` retains the innermost failed stage. `AgentCliError.failure_reason`
 and `subprocess_exit_code` preserve known facts without changing the displayed message or process
 exit code. The emitter follows bounded explicit exception causes and allowlists service codes for the
-centralized `error_category`. It sends no exhaustive failure-reason enum. `failure_message` carries
+centralized `error_category`. Workflow stages, readiness, child exit codes, and operation IDs
+are not part of the log schema. The only new wire field is top-level `failure_message`, which carries
 up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
 credential, path, and email scrubbing; this remains sensitive, labeled
 `DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
@@ -198,9 +199,9 @@ Do not add raw text to centralizable fields. Privacy review is tracked in
 [LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
 [LPP-5543](https://databricks.atlassian.net/browse/LPP-5543); collection awaits that review.
 Regional logging and CMK policies can remove the text entirely; central analytics must use the
-remaining typed facts and account for missing text. Deploy the matching
+existing command, exit-code, and error-category fields and account for missing text. Deploy the matching
 `proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
-a CLI that emits new diagnostic fields or enum values.
+a CLI that emits `failure_message`.
 
 Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP

@@ -125,8 +125,8 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Failures can also include a workflow stage, child exit
-code, and up to 4096 UTF-8 bytes of error text. Error text includes exception messages and available
+nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
+error text in `failure_message`. Error text includes exception messages and available
 failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
 This follows the Asset Bundles minimization pattern and is best effort; other customer content
 may remain in service responses or application output.

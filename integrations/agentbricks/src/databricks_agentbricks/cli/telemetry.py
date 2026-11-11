@@ -27,7 +27,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
 
 from databricks_agentbricks.cli.failure_text import scrub_failure_text
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
+from databricks_agentbricks.diagnostics import FailureReason
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
@@ -103,7 +103,7 @@ class _AgentBricksCliLog:
     exit_code: int
     error_category: str | None = None
     parameters: tuple[_ParameterEntry, ...] = ()
-    diagnostics: dict[str, str | int] | None = None
+    failure_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -117,8 +117,8 @@ class _AgentBricksCliLog:
             data["error_category"] = self.error_category
         if self.parameters:
             data["parameters"] = [parameter.to_dict() for parameter in self.parameters]
-        if self.diagnostics:
-            data["diagnostics"] = self.diagnostics
+        if self.failure_message is not None:
+            data["failure_message"] = self.failure_message
         return data
 
 
@@ -421,42 +421,18 @@ def _build_log(
         command_exit_code = int(exit_code)
     except (TypeError, ValueError, OverflowError):
         command_exit_code = 1
+    category = _bounded_error_category(error_category) if command_exit_code else None
+    is_failure = bool(command_exit_code) and category != "ERROR_CATEGORY_INTERRUPTED"
     return _AgentBricksCliLog(
         command_path=invocation.command_path,
         package_version=_package_version(),
         operating_system=platform.system().lower(),
         execution_time_ms=duration_ms,
         exit_code=command_exit_code,
-        error_category=_bounded_error_category(error_category) if command_exit_code else None,
+        error_category=category,
         parameters=invocation.parameters,
-        diagnostics=_failure_details(ctx, exception),
+        failure_message=_failure_message(exception) if is_failure else None,
     )
-
-
-def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int]:
-    details: dict[str, str | int] = {}
-    diagnostics = getattr(_root_obj(ctx), "diagnostics", None)
-    if isinstance(diagnostics, CommandDiagnostics) and isinstance(
-        diagnostics.failure_stage, FailureStage
-    ):
-        details["failure_stage"] = f"FAILURE_STAGE_{diagnostics.failure_stage.value}"
-    if isinstance(diagnostics, CommandDiagnostics):
-        for name in ("app_listened", "prepare_environment"):
-            value = getattr(diagnostics, name)
-            if type(value) is bool:
-                details[name] = value
-        for name in ("time_to_listen_ms", "subprocess_exit_code"):
-            value = getattr(diagnostics, name)
-            if type(value) is int and -(1 << 63) <= value < (1 << 63):
-                details[name] = value
-    if message := _failure_message(exc):
-        details["failure_message"] = message
-    for error in _exception_chain(exc):
-        code = getattr(error, "subprocess_exit_code", None)
-        if type(code) is int and -(1 << 63) <= code < (1 << 63):
-            details["subprocess_exit_code"] = code
-            break
-    return details
 
 
 def _failure_message(exc: BaseException | None) -> str | None:
