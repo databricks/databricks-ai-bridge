@@ -153,6 +153,10 @@ def test_databricks_with_ready_probe_uses_the_readiness_runner(monkeypatch):
             + '"value": "synthetic-opaque-value"\n}\nMissing dependency\n',
             "[REDACTED]",
         ),
+        (
+            "password:\n" + "\n" * 4000 + "  synthetic-opaque-value\nMissing dependency\n",
+            "[REDACTED]",
+        ),
     ],
 )
 def test_streamed_failure_keeps_bounded_output_and_stream_destinations(

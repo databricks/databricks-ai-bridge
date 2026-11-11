@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from typing import IO
@@ -10,6 +11,7 @@ from typing import IO
 # Leave room for the enclosing error message in the 4096-byte telemetry field.
 _MAX_TAIL_BYTES = 3072
 _PEM_PREFIX = b"-----BEGIN "
+_REDACTION_CONTEXT = re.compile(rb"""(?i)[:={"'\[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|bearer|basic""")
 _DRAIN_GRACE_S = 0.25
 
 
@@ -19,7 +21,7 @@ class OutputTail:
         self._truncated = False
         self._marker_suffix = b""
         self._pem_seen = False
-        self._structured_seen = False
+        self._context_seen = False
 
     def append(self, data: bytes) -> None:
         if self._pem_seen:
@@ -31,13 +33,13 @@ class OutputTail:
             self._data = b""
             return
         self._marker_suffix = scanned[-(len(_PEM_PREFIX) - 1) :]
-        self._structured_seen |= any(marker in data for marker in (b"{", b"[", b'"', b"'"))
+        self._context_seen |= _REDACTION_CONTEXT.search(scanned) is not None
         self._truncated |= len(self._data) + len(data) > _MAX_TAIL_BYTES
         self._data = (self._data + data)[-_MAX_TAIL_BYTES:]
 
     def text(self) -> str:
-        # Quoted or structured values can outlive their identifying key when earlier bytes are lost.
-        if self._pem_seen or (self._truncated and self._structured_seen):
+        # Credential values can outlive their identifying key or auth scheme when bytes are lost.
+        if self._pem_seen or (self._truncated and self._context_seen):
             return "[REDACTED]"
         data = self._data
         if self._truncated:

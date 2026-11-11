@@ -27,11 +27,17 @@ def test_pem_output_is_omitted_even_when_the_header_leaves_the_tail(chunk_size):
 @pytest.mark.parametrize("chunk_size", [1, 7, 8192])
 @pytest.mark.parametrize(
     "opening, closing",
-    [(b"credentials = {\n", b"}\n"), (b"tokens = [\n", b"]\n"), (b'password="', b'"\n')],
+    [
+        (b"credentials = {\n", b"}\n"),
+        (b"tokens = [\n", b"]\n"),
+        (b'password="', b'"\n'),
+        (b"password:\n", b""),
+        (b"token=\n", b""),
+        (b"Bearer\n", b""),
+        (b"Basic\n", b""),
+    ],
 )
-def test_truncated_structured_values_do_not_outlive_their_credential_context(
-    chunk_size, opening, closing
-):
+def test_truncated_values_do_not_outlive_their_credential_context(chunk_size, opening, closing):
     output = opening + b" \n" * 2000 + b"synthetic-opaque-value\n" + closing
     tail = OutputTail()
     for offset in range(0, len(output), chunk_size):
