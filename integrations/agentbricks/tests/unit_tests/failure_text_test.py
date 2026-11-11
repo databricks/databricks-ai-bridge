@@ -38,9 +38,42 @@ def test_recognizable_standalone_tokens_are_scrubbed(value):
     assert scrub_failure_text(f"Rejected {value}") == "Rejected [REDACTED]"
 
 
-def test_customer_paths_remain_sensitive_and_unknown_errors_need_no_enum():
-    value = "NovelServiceError: /home/customer/project/custom_module.py cannot import package_x"
+def test_customer_content_remains_sensitive_and_unknown_errors_need_no_enum():
+    value = "NovelServiceError: customer_chosen_table cannot be resolved"
     assert scrub_failure_text(value) == value
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/private-project/state.json",
+        "/Users/private-user/project/app.py",
+        "/home/private-user/project/app.py",
+        r"C:\Users\private-user\app.py",
+        "C:/Users/private-user/app.py",
+        "/Workspace/Users/private-user@example.com/project",
+        "/Volumes/private-catalog/schema/volume/file.csv",
+        "~/.private-config/token.json",
+        "./private-project/app.py",
+        "../private-project/app.py",
+        ".private-cache/project/state.json",
+        "private-project/app.py",
+    ],
+)
+def test_paths_are_scrubbed_without_losing_the_error(path):
+    assert scrub_failure_text(f"Cannot load '{path}': missing dependency") == (
+        "Cannot load '[REDACTED_PATH]': missing dependency"
+    )
+
+
+def test_email_is_scrubbed_without_losing_the_error():
+    assert scrub_failure_text("Access denied for private-user@example.com") == (
+        "Access denied for [REDACTED_EMAIL]"
+    )
+
+
+def test_single_component_endpoint_path_is_preserved():
+    assert scrub_failure_text("POST /telemetry-ext failed") == "POST /telemetry-ext failed"
 
 
 def test_unicode_bound_preserves_utf8_and_marks_truncation():
