@@ -3,16 +3,14 @@
 import asyncio
 import copy
 import importlib
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from template_fixtures import TEMPLATES, forget_template, import_template
 
 pytest.importorskip("langchain_core")
 
-TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
 CLAUDE5_BLOCKS: list[Any] = [
     {
         "type": "reasoning",
@@ -31,20 +29,10 @@ CACHED_USAGE: dict[str, Any] = {
 }
 
 
-def _import_template(monkeypatch, name: str, module: str):
-    monkeypatch.syspath_prepend(str(TEMPLATES / name))
-    for loaded in list(sys.modules):
-        if loaded in {"agent", "runtime"} or loaded.startswith(("agent.", "runtime.")):
-            monkeypatch.delitem(sys.modules, loaded)
-    return importlib.import_module(module)
-
-
 @pytest.fixture
 def clean_template_modules():
     yield
-    for loaded in list(sys.modules):
-        if loaded in {"agent", "runtime"} or loaded.startswith(("agent.", "runtime.")):
-            sys.modules.pop(loaded, None)
+    forget_template()
 
 
 def _cached_reply(content: Any = "Hello!", **extra: Any):
@@ -129,7 +117,7 @@ def test_real_claude_usage_conversion_is_consistent_after_message_items():
 async def test_adapter_stream_and_invoke_output_report_corrected_total(monkeypatch):
     for dependency in ("databricks_langchain", "langgraph", "langchain"):
         pytest.importorskip(dependency, reason="Requires databricks-agentbricks[langgraph]")
-    adapter = _import_template(monkeypatch, "agent-langgraph", "runtime.adapter")
+    adapter, _agent = import_template(monkeypatch, TEMPLATES / "agent-langgraph")
 
     async def events():
         yield "updates", {"model": {"messages": [_cached_reply(CLAUDE5_BLOCKS)]}}
@@ -144,7 +132,10 @@ async def test_adapter_stream_and_invoke_output_report_corrected_total(monkeypat
 @pytest.mark.usefixtures("clean_template_modules")
 def test_custom_langgraph_output_reports_corrected_total(monkeypatch):
     pytest.importorskip("databricks_langchain", reason="Requires databricks-agentbricks[langgraph]")
-    agent = _import_template(monkeypatch, "custom-agent-langgraph", "agent.agent")
+    # This template has no runtime.adapter, so import_template doesn't apply.
+    monkeypatch.syspath_prepend(str(TEMPLATES / "custom-agent-langgraph"))
+    forget_template()
+    agent = importlib.import_module("agent.agent")
     monkeypatch.setattr(agent, "_model", lambda: None)
 
     class _Graph:
