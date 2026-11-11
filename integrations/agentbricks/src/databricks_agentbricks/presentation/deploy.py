@@ -396,7 +396,9 @@ def present_background_started(
         f"Deploy of {name} started in the background. Next: agentbricks deployments wait {name}"
     )
     if details_url:
-        click.echo(f"Agent details: {details_url}")
+        render.console().print(
+            Text("Agent details: ") + render.hyperlink(details_url, details_url), soft_wrap=True
+        )
 
 
 def present_wait_result(
@@ -451,4 +453,6 @@ def present_wait_result(
         "run the same command again"
     )
     if details_url:
-        click.echo(f"Agent details: {details_url}")
+        render.console().print(
+            Text("Agent details: ") + render.hyperlink(details_url, details_url), soft_wrap=True
+        )
