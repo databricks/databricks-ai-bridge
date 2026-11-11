@@ -35,6 +35,9 @@ def test_pem_output_is_omitted_even_when_the_header_leaves_the_tail(chunk_size):
         (b"token=\n", b""),
         (b"Bearer\n", b""),
         (b"Basic\n", b""),
+        (b"Be\rarer\n", b""),
+        ("Ba\u200bsic\n".encode(), b""),
+        ("-----BE\u200bGIN PRIVATE KEY-----\n".encode(), b""),
     ],
 )
 def test_truncated_values_do_not_outlive_their_credential_context(chunk_size, opening, closing):
@@ -52,6 +55,15 @@ def test_short_structured_output_keeps_its_context_for_downstream_scrubbing():
     tail = OutputTail()
     tail.append(output)
     assert tail.text() == output.decode()
+
+
+def test_plain_unicode_output_keeps_the_final_error():
+    tail = OutputTail()
+    output = ("進行中\n" * 1000 + "Missing dependency\n").encode()
+    for offset in range(0, len(output), 7):
+        tail.append(output[offset : offset + 7])
+    assert tail.text().endswith("Missing dependency\n")
+    assert "進行中" in tail.text()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="uses Linux pipe sizing")

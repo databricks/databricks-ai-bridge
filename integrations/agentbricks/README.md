@@ -137,8 +137,9 @@ For `dev`, failure text can include a bounded tail of child output. With one out
 the terminal stream is inherited unchanged and only the redirected stream is retained. Output tails
 containing a PEM header are omitted to avoid retaining a private key after its header is truncated.
 Truncated output with assignment delimiters, quoted/structured values, authentication prefixes, or
-non-whitespace control bytes is also omitted because credential values can span lines beyond their
-identifying context. Displayed child output is unchanged.
+terminal escape sequences is also omitted because credential values can span lines beyond their
+identifying context. Retention checks normalize control characters across reads, while displayed
+child output is unchanged.
 Startup milestones remain internal; a killed process or unavailable upload can still leave no event.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and

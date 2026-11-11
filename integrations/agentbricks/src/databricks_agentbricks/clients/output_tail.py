@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import threading
@@ -10,8 +11,8 @@ from typing import IO
 
 # Leave room for the enclosing error message in the 4096-byte telemetry field.
 _MAX_TAIL_BYTES = 3072
-_PEM_PREFIX = b"-----BEGIN "
-_REDACTION_CONTEXT = re.compile(rb"""(?i)[:={"'\[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|bearer|basic""")
+_PEM_PREFIX = "-----BEGIN "
+_REDACTION_CONTEXT = re.compile(r"""(?i)[:={"'\[]|bearer|basic""")
 _DRAIN_GRACE_S = 0.25
 
 
@@ -19,14 +20,20 @@ class OutputTail:
     def __init__(self) -> None:
         self._data = b""
         self._truncated = False
-        self._marker_suffix = b""
+        self._marker_suffix = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pem_seen = False
         self._context_seen = False
 
     def append(self, data: bytes) -> None:
         if self._pem_seen:
             return
-        scanned = self._marker_suffix + data
+        self._context_seen |= b"\x1b" in data
+        # Match the printable text seen by the downstream scrubber before losing context.
+        normalized = "".join(
+            c for c in self._decoder.decode(data) if c in "\n\t" or c.isprintable()
+        )
+        scanned = self._marker_suffix + normalized
         if _PEM_PREFIX in scanned:
             # Omit PEM-bearing diagnostics even when retention would discard their opening marker.
             self._pem_seen = True
