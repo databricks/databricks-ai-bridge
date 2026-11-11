@@ -83,12 +83,20 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     assert "failure_reason" not in log
 
 
-def test_dev_telemetry_omits_pem_body_when_output_tail_drops_header(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"-----BEGIN PRIVATE KEY-----\n"
+        + b"synthetic-key-body\n" * 400
+        + b"-----END PRIVATE KEY-----\n",
+        b"credentials = {\n" + b" \n" * 2000 + b'"value": "synthetic-key-body"\n}\n',
+    ],
+)
+def test_dev_telemetry_omits_values_when_output_tail_drops_context(tmp_path, monkeypatch, output):
     (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
     tail = OutputTail()
-    tail.append(b"-----BEGIN PRIVATE KEY-----\n")
-    tail.append(b"synthetic-key-body\n" * 400)
-    tail.append(b"-----END PRIVATE KEY-----\n")
+    for offset in range(0, len(output), 31):
+        tail.append(output[offset : offset + 31])
     records = []
     monkeypatch.setattr(
         telemetry,

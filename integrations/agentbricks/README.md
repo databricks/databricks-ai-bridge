@@ -136,6 +136,8 @@ parser errors and interruptions. Collection requires Legal approval and schema d
 For `dev`, failure text can include a bounded tail of child output. With one output stream redirected,
 the terminal stream is inherited unchanged and only the redirected stream is retained. Output tails
 containing a PEM header are omitted to avoid retaining a private key after its header is truncated.
+Truncated output containing quotes or object/array openers is also omitted because credential values
+can span lines beyond their identifying key. Displayed child output is unchanged.
 Startup milestones remain internal; a killed process or unavailable upload can still leave no event.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
