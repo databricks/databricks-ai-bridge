@@ -125,8 +125,8 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Failures can also include a workflow stage, child exit
-code, and up to 4096 UTF-8 bytes of error text. Error text includes exception messages and available
+nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
+error text in `failure_message`. Error text includes exception messages and available
 failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
 This follows the Asset Bundles minimization pattern and is best effort; other customer content
 may remain in service responses or application output.
@@ -1577,18 +1577,18 @@ Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and template
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Deployment diagnostics record the failed workflow phase and the last readiness observation
-(answered, booting, unverifiable, or unreachable), with the HTTP status when available. Network
-errors are retried within the existing readiness budget; if the final probe remains unreachable,
+The deployment workflow tracks phases and readiness internally; these observations are not
+logged as separate telemetry fields. Network errors are retried within the existing readiness budget; if the final probe remains unreachable,
 the deployed app has unverified readiness rather than a reported application failure. These
 observations do not validate model or tool behavior.
 
-Completion events distinguish succeeded, failed, interrupted, pending (`deployments wait` exit 75),
-and submitted (`deploy --no-wait`). Deployment attempts use a random operation UUID shared with
-the background worker and waits reading the local state; no project identifiers are used.
+Command outcomes can be interpreted from the existing command path, exit code, error category,
+and options. Pending waits (`deployments wait` exit 75) and background submissions
+(`deploy --no-wait`) should not be counted as deployment failures. Deployment operation UUIDs
+stay in local state and the background worker; they are not uploaded.
 See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
-failure-rate denominators and legacy events.
+failure-rate denominators and coverage limits.
 
-For local runs, `parent_interrupted` records whether the CLI caught an interrupt, alongside the
-child exit status. A child-only SIGINT or explicit exit 130 remains distinguishable from a parent
-interrupt; neither is silently treated as a confirmed user cancellation.
+Local runs track parent interruption and child exit status internally. A child-only SIGINT or
+explicit exit 130 remains a runtime failure; it is not treated as a confirmed user cancellation.
+Caught parent interruptions use the existing interruption category and omit failure text.

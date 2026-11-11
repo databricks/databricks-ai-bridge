@@ -186,11 +186,12 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
-Failure diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
+Internal workflow diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
 instance explicitly; `phase()` retains the innermost failed stage. `AgentCliError.failure_reason`
 and `subprocess_exit_code` preserve known facts without changing the displayed message or process
 exit code. The emitter follows bounded explicit exception causes and allowlists service codes for the
-centralized `error_category`. It sends no exhaustive failure-reason enum. `failure_message` carries
+centralized `error_category`. Workflow stages, readiness, child exit codes, and operation IDs
+are not part of the log schema. The only new wire field is top-level `failure_message`, which carries
 up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
 credential, path, and email scrubbing; this remains sensitive, labeled
 `DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
@@ -198,9 +199,9 @@ Do not add raw text to centralizable fields. Privacy review is tracked in
 [LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
 [LPP-5543](https://databricks.atlassian.net/browse/LPP-5543); collection awaits that review.
 Regional logging and CMK policies can remove the text entirely; central analytics must use the
-remaining typed facts and account for missing text. Deploy the matching
+existing command, exit-code, and error-category fields and account for missing text. Deploy the matching
 `proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
-a CLI that emits new diagnostic fields or enum values.
+a CLI that emits `failure_message`.
 
 Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
@@ -310,28 +311,23 @@ run separately in the private integration runner and are not included in this ga
 
 ## Interpreting command and deployment outcomes
 
-New completion events carry `diagnostics.outcome`: `SUCCEEDED`, `FAILED`, `INTERRUPTED`,
-`PENDING` (only `deployments wait` exit 75), or `SUBMITTED` (the `deploy --no-wait` launcher).
-Exit codes stay unchanged. Treat pending and submitted as separate populations in dashboards;
-exclude interruptions from a product failure rate, and report them separately. For older events,
-derive outcomes in this order: interrupted category; wait + exit 75; deploy + exit 0 + no-wait;
-exit 0; otherwise failed. The legacy no-wait flag is insufficient unless its recorded boolean is
-true: newer events include false defaults. Missing outcomes and missing terminal events are
-unknown coverage, not evidence of success.
+Completion events retain the existing command path, exit code, error category, and bounded option
+values. They do not transmit a separate outcome enum. For analysis, interpret an interrupted
+category first, then `deployments wait` with exit 75 as pending, then `deploy` with exit 0 and an
+explicitly true no-wait option as submitted, then exit 0 as succeeded, and other exits as failed.
+Exclude interruptions, pending waits, and background submissions from a product failure-rate
+denominator and report them separately. Missing events are unknown coverage, not success.
 
-For deployment reliability, select `command_path = 'agentbricks deploy'`, exclude `SUBMITTED`,
-and count terminal `SUCCEEDED`/`FAILED` once per `diagnostics.operation_id`. Do not add
-`deployments wait` rows to that denominator; repeated waits observe the same operation. A random
-UUID is created for each deployment attempt and shared with the detached child and the local
-state record. Waits without a local record have no correlation ID. Keep legacy events without
-an ID in a separate cohort; do not group all null IDs together. Use the FrontendLog event ID to
-deduplicate uploads, and flag conflicting outcomes for the same operation for investigation.
+Deployment operation UUIDs remain in local state and the background worker; they are not uploaded.
+Use the FrontendLog event ID to deduplicate uploads. These logs measure command invocations, not
+unique deployment attempts: repeated `deployments wait` rows must not be added to the deployment
+failure-rate denominator. The current schema cannot correlate a launcher with its worker or waits.
 
-Startup reliability should use `dev`'s `app_listened`, `time_to_listen_ms`, failed phase, regional error text where retained,
-child exit code, and platform/version. These are completion-only observations: abrupt process
-termination or failed/unauthenticated upload remains invisible. Compare event coverage as well as
-failure rate. The schema must be deployed before shipping these fields; this change does not
-modify the production dashboard or confirm live ingestion.
+For startup analysis, segment `dev` invocations by error category, platform, and package version,
+and inspect regional `failure_message` where retained. Startup milestones, child exit codes,
+and workflow phases remain internal to the CLI. Completion-only telemetry cannot observe abrupt
+process termination or failed/unauthenticated uploads, so account for event coverage alongside
+failure rates. Deploy the schema before releasing failure-text collection.
 
 ## Local process and signal coverage
 
@@ -339,7 +335,8 @@ modify the production dashboard or confirm live ingestion.
 adapter. On Linux/macOS it sends SIGINT to the terminal process group and to the child alone,
 before and after TCP listening, using both streaming and PTY output. An explicit child exit 130
 is tested separately on all three platforms; that value alone does not prove a user interrupt.
-The diagnostic event retains parent-interruption evidence and the observed child return code.
+The CLI retains parent-interruption evidence and the observed child return code internally.
+Caught parent interruptions use the existing interruption category and omit `failure_message`.
 These tests use a small TCP server, not Databricks CLI or a model invocation.
 
 POSIX signal cases are explicitly skipped on Windows. Native Windows console Ctrl+C propagation

@@ -59,7 +59,9 @@ root_ctx = click.Context(click.Group('agentbricks'), obj=SimpleNamespace(diagnos
 ctx = click.Context(click.Command('dev'), parent=root_ctx)
 log = telemetry._build_log(ctx, exit_code=telemetry._exit_code(exc) if exc else 0,
     error_category=telemetry._error_category(exc) if exc else None, exception=exc)
-(root / 'result.json').write_text(json.dumps(log.to_dict()))
+(root / 'result.json').write_text(json.dumps({'log': log.to_dict(), 'facts': {
+    'app_listened': facts.app_listened, 'parent_interrupted': facts.parent_interrupted,
+    'subprocess_exit_code': facts.subprocess_exit_code}}))
 """
 
 
@@ -109,20 +111,20 @@ def test_local_run_preserves_parent_and_child_interrupt_facts(tmp_path, listenin
             (tmp_path / "exit").touch()
         process.wait(timeout=15)
         assert process.returncode == 0
-        log = json.loads((tmp_path / "result.json").read_text())
-        facts = log["diagnostics"]
+        result = json.loads((tmp_path / "result.json").read_text())
+        log = result["log"]
+        facts = result["facts"]
+        assert "diagnostics" not in log
         assert facts["app_listened"] is listening
         assert facts["parent_interrupted"] is (target == "group")
         assert log["exit_code"] == 1
         if target == "group":
             assert log["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
-            assert facts["outcome"] == "OUTCOME_INTERRUPTED"
-            assert "failure_message" not in facts
+            assert "failure_message" not in log
         else:
             assert log["error_category"] == "ERROR_CATEGORY_RUNTIME"
-            assert facts["outcome"] == "OUTCOME_FAILED"
-            assert "startup diagnostic" in facts["failure_message"]
-            assert "synthetic-secret" not in facts["failure_message"]
+            assert "startup diagnostic" in log["failure_message"]
+            assert "synthetic-secret" not in log["failure_message"]
         if target == "exit130":
             assert facts["subprocess_exit_code"] == 130
         else:
