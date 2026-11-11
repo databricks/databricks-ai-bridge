@@ -19,6 +19,7 @@ class OutputTail:
         self._truncated = False
         self._marker_suffix = b""
         self._pem_seen = False
+        self._structured_seen = False
 
     def append(self, data: bytes) -> None:
         if self._pem_seen:
@@ -30,11 +31,13 @@ class OutputTail:
             self._data = b""
             return
         self._marker_suffix = scanned[-(len(_PEM_PREFIX) - 1) :]
+        self._structured_seen |= any(marker in data for marker in (b"{", b"[", b'"', b"'"))
         self._truncated |= len(self._data) + len(data) > _MAX_TAIL_BYTES
         self._data = (self._data + data)[-_MAX_TAIL_BYTES:]
 
     def text(self) -> str:
-        if self._pem_seen:
+        # Quoted or structured values can outlive their identifying key when earlier bytes are lost.
+        if self._pem_seen or (self._truncated and self._structured_seen):
             return "[REDACTED]"
         data = self._data
         if self._truncated:

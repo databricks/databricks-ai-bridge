@@ -143,11 +143,23 @@ def test_databricks_with_ready_probe_uses_the_readiness_runner(monkeypatch):
     assert seen["probe"] is probe and seen["on_ready"] is on_ready
 
 
-def test_streamed_failure_keeps_bounded_output_and_stream_destinations(capfd):
-    result = dc._run_until_ready(
-        _python(
-            "import sys; print('out'); print('x' * 20000, file=sys.stderr); print('Missing dependency', file=sys.stderr); sys.exit(3)"
+@pytest.mark.parametrize(
+    "failure_output, retained",
+    [
+        ("x" * 20000 + "\nMissing dependency\n", "Missing dependency\n"),
+        (
+            "credentials = {\n"
+            + " \n" * 2000
+            + '"value": "synthetic-opaque-value"\n}\nMissing dependency\n',
+            "[REDACTED]",
         ),
+    ],
+)
+def test_streamed_failure_keeps_bounded_output_and_stream_destinations(
+    capfd, failure_output, retained
+):
+    result = dc._run_until_ready(
+        _python(f"import sys; print('out'); sys.stderr.write({failure_output!r}); sys.exit(3)"),
         cwd=None,
         env=None,
         probe=lambda: False,
@@ -155,9 +167,9 @@ def test_streamed_failure_keeps_bounded_output_and_stream_destinations(capfd):
     )
     output = capfd.readouterr()
     assert output.out == "out\n"
-    assert "Missing dependency" in output.err
+    assert output.err == failure_output
     assert result.stdout == "out\n"
-    assert result.stderr == "Missing dependency\n"
+    assert result.stderr == retained
     assert result.returncode == 3
 
 
