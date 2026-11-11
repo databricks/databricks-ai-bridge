@@ -90,6 +90,7 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
         + b"synthetic-key-body\n" * 400
         + b"-----END PRIVATE KEY-----\n",
         b"credentials = {\n" + b" \n" * 2000 + b'"value": "synthetic-key-body"\n}\n',
+        b"password:\n" + b"\n" * 4000 + b"  synthetic-key-body\nstartup failed\n",
     ],
 )
 def test_dev_telemetry_omits_values_when_output_tail_drops_context(tmp_path, monkeypatch, output):
