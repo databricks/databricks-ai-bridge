@@ -1,4 +1,4 @@
-"""Bound error text and remove recognizable credentials before regional telemetry."""
+"""Bound error text and scrub credentials, paths, and emails before regional telemetry."""
 
 from __future__ import annotations
 
@@ -29,10 +29,22 @@ _TOKEN = re.compile(
     r"sk-[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|"
     r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?)\b"
 )
+# Follow the DABs path/email minimization pattern in databricks/cli libs/telemetry/scrub.go.
+_WINDOWS_PATH = re.compile(r"[A-Za-z]:[\\/][^\s:,\"'/\\]+[\\/][^\s:,\"']+")
+_PATHS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(^|[\s:,\"'])(/Workspace/[^\s:,\"']+)",
+        r"(^|[\s:,\"'])(~?/[^\s:,\"'/]+/[^\s:,\"']+)",
+        r"(^|[\s:,\"'])((?:\.\.?|\.[a-zA-Z][^\s:,\"'/]*)/[^\s:,\"']+)",
+        r"(^|[\s:,\"'])([a-zA-Z0-9_][^\s:,\"']*/[^\s:,\"']*\.[a-zA-Z][^\s:,\"']*)",
+    )
+)
+_EMAIL = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
 def scrub_failure_text(value: str) -> str:
-    """Best-effort credential scrubbing; the result remains sensitive customer content."""
+    """Best-effort scrubbing; the result remains sensitive customer content."""
     truncated = len(value) > _MAX_INPUT_CHARS
     value = _ANSI.sub("", value[:_MAX_INPUT_CHARS])
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
@@ -42,7 +54,11 @@ def scrub_failure_text(value: str) -> str:
     value = _URL_QUERY.sub(r"\1?[REDACTED]", value)
     value = _ASSIGNMENT.sub(_REDACTED, value)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
-    value = _TOKEN.sub(_REDACTED, value).strip()
+    value = _TOKEN.sub(_REDACTED, value)
+    value = _WINDOWS_PATH.sub("[REDACTED_PATH]", value)
+    for pattern in _PATHS:
+        value = pattern.sub(r"\1[REDACTED_PATH]", value)
+    value = _EMAIL.sub("[REDACTED_EMAIL]", value).strip()
     encoded = value.encode("utf-8", errors="replace")
     if truncated or len(encoded) > MAX_FAILURE_BYTES:
         return (
