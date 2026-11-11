@@ -470,7 +470,7 @@ def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int
     if isinstance(diagnostics, CommandDiagnostics):
         if operation_id := operation_uuid(diagnostics.operation_id):
             details["operation_id"] = operation_id
-        for name in ("app_listened", "prepare_environment"):
+        for name in ("app_listened", "prepare_environment", "parent_interrupted"):
             value = getattr(diagnostics, name)
             if type(value) is bool:
                 details[name] = value

@@ -332,3 +332,16 @@ child exit code, and platform/version. These are completion-only observations: a
 termination or failed/unauthenticated upload remains invisible. Compare event coverage as well as
 failure rate. The schema must be deployed before shipping these fields; this change does not
 modify the production dashboard or confirm live ingestion.
+
+## Local process and signal coverage
+
+`tests/unit_tests/dev_signal_test.py` starts real Python child processes through the local-run
+adapter. On Linux/macOS it sends SIGINT to the terminal process group and to the child alone,
+before and after TCP listening, using both streaming and PTY output. An explicit child exit 130
+is tested separately on all three platforms; that value alone does not prove a user interrupt.
+The diagnostic event retains parent-interruption evidence and the observed child return code.
+These tests use a small TCP server, not Databricks CLI or a model invocation.
+
+POSIX signal cases are explicitly skipped on Windows. Native Windows console Ctrl+C propagation
+still needs validation with the installed Databricks CLI; passing these tests does not establish
+that Ctrl+C is absent from historical Windows failures. Platform CI wiring is a separate follow-up.

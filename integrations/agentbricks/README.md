@@ -1588,3 +1588,7 @@ and submitted (`deploy --no-wait`). Deployment attempts use a random operation U
 the background worker and waits reading the local state; no project identifiers are used.
 See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
 failure-rate denominators and legacy events.
+
+For local runs, `parent_interrupted` records whether the CLI caught an interrupt, alongside the
+child exit status. A child-only SIGINT or explicit exit 130 remains distinguishable from a parent
+interrupt; neither is silently treated as a confirmed user cancellation.

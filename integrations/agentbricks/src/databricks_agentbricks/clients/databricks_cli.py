@@ -42,6 +42,7 @@ def _databricks(
     tee: bool = False,
     ready_probe: Optional[Callable[[], bool]] = None,
     on_ready: Optional[Callable[[], None]] = None,
+    on_exit: Optional[Callable[[int], None]] = None,
     quiet_status: Optional[Callable[[float], str]] = None,
 ) -> subprocess.CompletedProcess:
     """Run one ``databricks`` command.
@@ -64,10 +65,18 @@ def _databricks(
         cmd += ["--profile", profile]
     if ready_probe is not None and quiet_status is not None and terminal_relay.supported():
         result = terminal_relay.run(
-            cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready, quiet_status=quiet_status
+            cmd,
+            cwd=cwd,
+            env=env,
+            probe=ready_probe,
+            on_ready=on_ready,
+            quiet_status=quiet_status,
+            on_exit=on_exit,
         )
     elif ready_probe is not None:
-        result = _run_until_ready(cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready)
+        result = _run_until_ready(
+            cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready, on_exit=on_exit
+        )
     elif tee:
         result = _run_tee(cmd, cwd=cwd, env=env)
     else:
@@ -122,6 +131,7 @@ def _run_until_ready(
     env: Optional[Mapping[str, str]],
     probe: Callable[[], bool],
     on_ready: Optional[Callable[[], None]],
+    on_exit: Optional[Callable[[int], None]] = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with its output streamed, calling ``on_ready`` once ``probe`` first succeeds."""
     with subprocess.Popen(
@@ -153,6 +163,8 @@ def _run_until_ready(
             proc.wait()
             stdout.finish()
             stderr.finish()
+            if on_exit is not None:
+                on_exit(proc.returncode)
     return subprocess.CompletedProcess(
         cmd, proc.returncode, stdout=stdout.tail.text(), stderr=stderr.tail.text()
     )
