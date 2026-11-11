@@ -15,6 +15,7 @@ from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
+from databricks_agentbricks.clients.output_tail import OutputTail
 from databricks_agentbricks.diagnostics import FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import agent_invoke_command
@@ -79,6 +80,30 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     assert facts.failure_stage == FailureStage.PROJECT
     assert log["failure_message"]
     assert "failure_reason" not in log
+
+
+def test_dev_telemetry_omits_pem_body_when_output_tail_drops_header(tmp_path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    tail = OutputTail()
+    tail.append(b"-----BEGIN PRIVATE KEY-----\n")
+    tail.append(b"synthetic-key-body\n" * 400)
+    tail.append(b"-----END PRIVATE KEY-----\n")
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+    )
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *a, **kw: subprocess.CompletedProcess(["databricks"], 1, stderr=tail.text()),
+    )
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    assert "synthetic-key-body" not in str(records)
+    assert "[REDACTED]" in records[0]["failure_message"]
 
 
 def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):

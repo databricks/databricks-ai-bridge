@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import os
+import select
+import subprocess
 import sys
 import types
+
+import pytest
 
 from databricks_agentbricks.clients import databricks_cli as dc
 
@@ -183,3 +189,51 @@ def test_closed_output_destination_keeps_draining_child():
         finally:
             proc.kill()
             relay.finish()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a POSIX pseudo-terminal")
+@pytest.mark.parametrize("terminal_fd", [1, 2])
+def test_mixed_terminal_and_redirected_stream_keep_original_behavior(tmp_path, terminal_fd):
+    import pty
+
+    child = (
+        "import os, sys; "
+        f"assert os.isatty({terminal_fd}); "
+        f"print('STARTED', file=sys.{'stdout' if terminal_fd == 1 else 'stderr'}); "
+        "sys.stdin.read(1); "
+        f"print('redirected', file=sys.{'stderr' if terminal_fd == 1 else 'stdout'}); "
+        "sys.exit(3)"
+    )
+    result_path = tmp_path / "result.json"
+    runner = (
+        "import json, pathlib, sys; "
+        "from databricks_agentbricks.clients.databricks_cli import _run_until_ready; "
+        f"result = _run_until_ready([sys.executable, '-c', {child!r}], "
+        "cwd=None, env=None, probe=lambda: False, on_ready=None); "
+        f"pathlib.Path({str(result_path)!r}).write_text("
+        "json.dumps([result.returncode, result.stdout, result.stderr]))"
+    )
+    master, slave = pty.openpty()
+    try:
+        with subprocess.Popen(
+            _python(runner),
+            stdin=subprocess.PIPE,
+            stdout=slave if terminal_fd == 1 else subprocess.PIPE,
+            stderr=slave if terminal_fd == 2 else subprocess.PIPE,
+        ) as proc:
+            try:
+                assert select.select([master], [], [], 5)[0], "startup output stayed buffered"
+                assert b"STARTED" in os.read(master, 4096)
+                assert proc.poll() is None
+                stdout, stderr = proc.communicate(input=b"x", timeout=5)
+                assert proc.returncode == 0
+            finally:
+                proc.kill()
+    finally:
+        os.close(master)
+        os.close(slave)
+    redirected = stderr if terminal_fd == 1 else stdout
+    assert redirected == b"redirected\n"
+    assert json.loads(result_path.read_text()) == (
+        [3, "", "redirected\n"] if terminal_fd == 1 else [3, "redirected\n", ""]
+    )
