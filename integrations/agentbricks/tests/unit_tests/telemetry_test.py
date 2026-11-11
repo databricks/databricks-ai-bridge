@@ -252,7 +252,7 @@ def test_keyboard_interrupt_uses_click_abort_exit_code():
     assert telemetry._exit_code(SystemExit()) == 0
 
 
-def test_wrapped_failure_preserves_reason_without_exception_text():
+def test_wrapped_failure_preserves_text_in_sensitive_field():
     context = _Context()
     context.obj.diagnostics = CommandDiagnostics()
     error = AgentCliError("private message", hint="private hint")
@@ -263,10 +263,10 @@ def test_wrapped_failure_preserves_reason_without_exception_text():
     log = _log(context, exit_code=1, exception=error)
     assert log["diagnostics"] == {
         "failure_stage": "FAILURE_STAGE_RUN_LOCAL",
-        "failure_reason": "FAILURE_REASON_PERMISSION_DENIED",
+        "failure_message": "private message\nCaused by: private service detail",
     }
     assert telemetry._error_category(error) == "ERROR_CATEGORY_AUTHORIZATION"
-    assert "private" not in json.dumps(log)
+    assert "private hint" not in json.dumps(log)
 
 
 @pytest.mark.parametrize(
@@ -289,17 +289,16 @@ def test_failure_classification_follows_explicit_causes(cause, reason, category)
     error = AgentCliError("Could not start")
     error.__cause__ = cause
     assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
-    assert (
-        _log(_Context(), exit_code=1, exception=error)["diagnostics"]["failure_reason"]
-        == f"FAILURE_REASON_{reason}"
-    )
+    assert telemetry._failure_reason(error).value == reason
 
 
 def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
     error = AgentCliError("private", error_code="private-user-defined-code")
     error.__cause__ = error
     assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
-    assert "diagnostics" not in _log(_Context(), exit_code=1, exception=error)
+    details = _log(_Context(), exit_code=1, exception=error)["diagnostics"]
+    assert details == {"failure_message": "private"}
+    assert "private-user-defined-code" not in json.dumps(details)
 
 
 def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):
@@ -320,10 +319,10 @@ def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch)
     assert result.exit_code == 1
     assert records[0]["exit_code"] == 1
     assert records[0]["diagnostics"] == {
-        "failure_reason": "FAILURE_REASON_SUBPROCESS_FAILED",
+        "failure_message": "private child output",
         "subprocess_exit_code": 17,
     }
-    assert "private" not in json.dumps(records)
+    assert "failure_reason" not in records[0]["diagnostics"]
 
 
 def test_outer_phase_preserves_the_inner_failure_stage():
@@ -677,6 +676,8 @@ def test_new_commands_emit_click_resolved_defaults_automatically(monkeypatch, fa
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_ALL"},
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_NEW"},
     ]
+    message = records[0].get("diagnostics", {}).pop("failure_message", None)
+    assert message == ("private-error" if fails else None)
     assert "private-" not in json.dumps(records)
 
 
@@ -699,6 +700,8 @@ def test_real_init_defaults_are_emitted_for_success_and_failure(monkeypatch, tmp
     assert parameters["agentbricks init.existing"]["bool_value"] is False
     assert parameters["agentbricks init.disable_chat_app"]["bool_value"] is False
     assert log["exit_code"] == result.exit_code
+    message = log.get("diagnostics", {}).pop("failure_message", None)
+    assert (message is not None) == fails
     assert "private-project" not in json.dumps(log)
     assert "agentbricks init.profile" not in parameters
     assert "agentbricks init.memory_store" not in parameters
@@ -897,3 +900,35 @@ def test_parameter_entry_preserves_false_boolean_value():
     )
     entry = telemetry._ParameterEntry.from_option("agentbricks init.existing", option, False)
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
+
+
+def test_failed_subprocess_detail_is_scrubbed_before_upload():
+    error = AgentCliError(
+        "Could not start",
+        failure_detail="ModuleNotFoundError: package_missing\nAuthorization: Bearer synthetic-secret",
+    )
+    details = _log(_Context(), exit_code=1, exception=error)["diagnostics"]
+    assert "ModuleNotFoundError: package_missing" in details["failure_message"]
+    assert "synthetic-secret" not in json.dumps(details)
+
+
+@pytest.mark.parametrize(
+    "error", [click.UsageError("private arg"), click.Abort(), KeyboardInterrupt(), SystemExit(1)]
+)
+def test_parser_and_control_exceptions_have_no_failure_text(error):
+    assert "failure_message" not in _log(_Context(), exit_code=1, exception=error).get(
+        "diagnostics", {}
+    )
+
+
+def test_exception_string_failure_does_not_discard_diagnostics():
+    class BrokenMessage(Exception):
+        def __str__(self):
+            raise ValueError("cannot stringify")
+
+    error = BrokenMessage()
+    error.__cause__ = ValueError("root cause")
+    assert (
+        _log(_Context(), exit_code=1, exception=error)["diagnostics"]["failure_message"]
+        == "root cause"
+    )

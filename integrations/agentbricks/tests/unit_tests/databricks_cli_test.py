@@ -26,6 +26,7 @@ def test_databricks_failure_hides_the_apps_subcommand(monkeypatch):
     except dc.AgentCliError as exc:
         assert exc.message == "Could not start the agent locally."
         assert "apps" not in exc.message and "e2-dogfood" not in exc.message  # no leak
+        assert exc.failure_detail == "boom from the CLI"
         assert exc.hint == "boom from the CLI"  # underlying stderr preserved for debugging
 
 
