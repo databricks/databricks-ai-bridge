@@ -9,9 +9,11 @@ import uuid
 from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
+from urllib.error import URLError
 
 import click
 import pytest
+import requests
 from click.core import ParameterSource
 from click.testing import CliRunner
 
@@ -271,6 +273,9 @@ def test_wrapped_failure_preserves_reason_without_exception_text():
     ("cause", "reason", "category"),
     [
         (ConnectionError("private host"), "NETWORK_ERROR", "NETWORK"),
+        (URLError("private host"), "NETWORK_ERROR", "NETWORK"),
+        (requests.ConnectionError("private host"), "NETWORK_ERROR", "NETWORK"),
+        (requests.Timeout("private host"), "NETWORK_ERROR", "NETWORK"),
         (FileNotFoundError("private path"), "FILESYSTEM_ERROR", "CONFIGURATION"),
         (ImportError("private module"), "DEPENDENCY_MISSING", "DEPENDENCY"),
         (
