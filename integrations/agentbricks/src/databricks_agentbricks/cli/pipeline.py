@@ -14,6 +14,11 @@ from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
 from databricks_agentkit._api_client import MEMORY_PIPELINE_TRIGGERS
 
+_TRIGGER_HELP = (
+    "How runs start: only when you start one, also automatically about every 24 hours, "
+    "or always-on (distill as sessions update, plus daily maintenance)."
+)
+
 
 def _resolve_instructions(ctx, param, value):
     if value is None or not value.startswith("@"):
@@ -96,7 +101,7 @@ def pipeline() -> None:
     type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
     default="manual",
     show_default=True,
-    help="How runs start: only when you start one, or also automatically about every 24 hours.",
+    help=_TRIGGER_HELP,
 )
 @click.pass_obj
 def create(obj, memory_store, session_store, model, display_name, instructions, trigger) -> None:
@@ -189,7 +194,7 @@ def get(obj, name) -> None:
     "--trigger",
     type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
     default=None,
-    help="How runs start: only when you start one, or also automatically about every 24 hours.",
+    help=_TRIGGER_HELP,
 )
 @click.pass_obj
 def update(obj, name, display_name, instructions, model, trigger) -> None:
@@ -217,6 +222,9 @@ def _set_trigger(obj, name: str, trigger: str) -> None:
     if current_trigger == MEMORY_PIPELINE_TRIGGERS[trigger]:
         state = "paused" if trigger == "manual" else "resumed"
         raise AgentCliError(f"Memory pipeline '{name}' is already {state}.")
+    if trigger == "scheduled" and current_trigger == MEMORY_PIPELINE_TRIGGERS["always-on"]:
+        # Always-on already runs automatically; resuming would downgrade it to daily runs.
+        raise AgentCliError(f"Memory pipeline '{name}' is already resumed (always-on).")
     data = client.update_memory_pipeline(name, trigger=trigger)
     if obj.output == "json":
         render.emit_json(data)
@@ -228,7 +236,7 @@ def _set_trigger(obj, name: str, trigger: str) -> None:
 @click.argument("name")
 @click.pass_obj
 def pause(obj, name) -> None:
-    """Pause scheduled runs; active runs continue and manual runs remain available."""
+    """Pause scheduled or always-on runs; active runs continue and manual runs remain available."""
     _set_trigger(obj, name, "manual")
 
 
