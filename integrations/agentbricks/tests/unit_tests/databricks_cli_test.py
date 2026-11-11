@@ -97,6 +97,22 @@ def _python(code: str) -> list[str]:
     return [sys.executable, "-c", code]
 
 
+def test_tee_omits_pem_diagnostics_without_changing_displayed_output(capsys):
+    result = dc._run_tee(
+        _python(
+            "print('-----BEGIN PRIVATE KEY-----'); "
+            "print('synthetic-key-body\\n' * 400, end=''); "
+            "print('-----END PRIVATE KEY-----'); "
+            "raise SystemExit(1)"
+        ),
+        cwd=None,
+        env=None,
+    )
+    assert result.returncode == 1
+    assert result.stdout == "[REDACTED]"
+    assert capsys.readouterr().err.count("synthetic-key-body") == 400
+
+
 def test_run_until_ready_calls_on_ready_once_the_probe_succeeds(monkeypatch):
     monkeypatch.setattr(dc, "_READY_POLL_S", 0.01)
     probes = iter([False, False, True])

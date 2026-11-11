@@ -9,7 +9,6 @@ share it without importing each other.
 
 from __future__ import annotations
 
-import collections
 import os
 import subprocess
 import sys
@@ -18,12 +17,10 @@ from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.clients import terminal_relay
-from databricks_agentbricks.clients.output_tail import StreamRelay
+from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
 from databricks_agentbricks.diagnostics import FailureReason
 from databricks_agentbricks.errors import AgentCliError
 
-# Lines of relayed output a `tee` run keeps for callers that inspect a failure.
-_TEE_TAIL_LINES = 200
 # Seconds between readiness probes while a long-running command starts up.
 _READY_POLL_S = 0.25
 # Seconds an interrupted command gets to exit on its own before it is killed (as `subprocess.run`).
@@ -99,7 +96,7 @@ def _run_tee(
     cmd: list[str], *, cwd: Optional[str], env: Optional[Mapping[str, str]]
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` relaying its merged output to stderr; return its tail as ``stdout``."""
-    tail: collections.deque[str] = collections.deque(maxlen=_TEE_TAIL_LINES)
+    tail = OutputTail()
     with subprocess.Popen(
         cmd,
         text=True,
@@ -112,8 +109,8 @@ def _run_tee(
         for line in proc.stdout:
             sys.stderr.write(line)
             sys.stderr.flush()
-            tail.append(line)
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(tail), stderr="")
+            tail.append(line.encode("utf-8", errors="replace"))
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout=tail.text(), stderr="")
 
 
 def _run_until_ready(
