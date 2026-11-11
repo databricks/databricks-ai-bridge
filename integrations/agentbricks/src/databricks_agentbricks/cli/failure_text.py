@@ -17,8 +17,8 @@ _HEADER = re.compile(
     r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=][^\n]*"
 )
 _ASSIGNMENT = re.compile(
-    r"(?ix)(?<![\w-])[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
-    r"credential|signature|sig)\b[\"']?\s*[:=]\s*"
+    r"(?ix)(?<![\w-])(?=[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
+    r"credential|signature|sig))[\w-]+[\"']?\s*[:=]\s*"
     r"""(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z)|[^\s,;&}\]]+)"""
 )
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
@@ -26,9 +26,9 @@ _URL_USERINFO = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/@]+@
 _URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
 _TOKEN = re.compile(
     r"\b(?:dapi[a-fA-F0-9]{16,}|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|"
-    r"sk-[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|"
-    r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?)\b"
+    r"sk-[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b"
 )
+_JWT_CANDIDATE = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)*")
 # Follow the DABs path/email minimization pattern in databricks/cli libs/telemetry/scrub.go.
 _WINDOWS_PATH = re.compile(r"[A-Za-z]:[\\/][^\s:,\"'/\\]+[\\/][^\s:,\"']+")
 _PATHS = tuple(
@@ -55,6 +55,18 @@ def _scrub_url_query(match: re.Match[str]) -> str:
     return parts[0] + "?[REDACTED]" if len(parts) == 2 else parts[0]
 
 
+def _scrub_jwt(match: re.Match[str]) -> str:
+    segments = match[0].split(".")
+    for index, segment in enumerate(segments[:-1]):
+        if not segments[index + 1]:
+            continue
+        header = re.search(r"\beyJ[A-Za-z0-9_-]+", segment)
+        if header is not None:
+            prefix = ".".join([*segments[:index], segment[: header.start()]])
+            return prefix + _REDACTED
+    return match[0]
+
+
 def scrub_failure_text(value: str) -> str:
     """Best-effort scrubbing; the result remains sensitive customer content."""
     truncated = len(value) > _MAX_INPUT_CHARS
@@ -67,6 +79,7 @@ def scrub_failure_text(value: str) -> str:
     value = _ASSIGNMENT.sub(_REDACTED, value)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)
+    value = _JWT_CANDIDATE.sub(_scrub_jwt, value)
     value = _WINDOWS_PATH.sub("[REDACTED_PATH]", value)
     for pattern in _PATHS:
         value = pattern.sub(r"\1[REDACTED_PATH]", value)
