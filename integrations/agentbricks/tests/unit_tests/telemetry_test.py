@@ -826,6 +826,7 @@ def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
         log = _log(context, exit_code=0)
     from urllib.parse import parse_qs, urlsplit
 
+    assert isinstance(url, str)
     params = parse_qs(urlsplit(url).query)
     assert params["o"] == ["123"]
     assert params["source"] == ["agentbricks-cli"]
