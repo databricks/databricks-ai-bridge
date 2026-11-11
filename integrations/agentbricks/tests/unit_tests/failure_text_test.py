@@ -68,6 +68,31 @@ def test_escaped_backslash_keeps_following_error_text():
     assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        '{"client_secret": "synthetic-opaque-value"}',
+        '{"client_secret":"synthetic-opaque-value"}',
+        '{\n  "nested": {"value": "synthetic-opaque-value"}\n}',
+        '[{"value": "synthetic-opaque-value"}]',
+        '["synthetic-opaque-value"]',
+        r"""{'value': 'synthetic-opaque-value\'with}braces'}""",
+    ],
+)
+def test_credential_containers_are_scrubbed_without_losing_following_error(value):
+    result = scrub_failure_text(f"credentials: {value}\nConnection failed")
+    assert result == "[REDACTED]\nConnection failed"
+
+
+@pytest.mark.parametrize(
+    "value", ['{"value": "synthetic-opaque-value"', '["synthetic-opaque-value"}']
+)
+def test_incomplete_or_malformed_credential_container_is_omitted(value):
+    assert scrub_failure_text(f"Request failed: credentials={value}") == (
+        "Request failed: [REDACTED]"
+    )
+
+
 @pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])
 def test_dense_delimiters_do_not_delay_failure_reporting(pattern):
     start = time.monotonic()
@@ -138,11 +163,12 @@ def test_single_component_endpoint_path_is_preserved():
 
 
 def test_unicode_bound_preserves_utf8_and_marks_truncation():
-    value = "Dependency failed: " + "界" * 10000
+    value = "Dependency failed: " + "界" * 10000 + "\nFinal error: package_missing"
     result = scrub_failure_text(value)
     assert len(result.encode("utf-8")) <= MAX_FAILURE_BYTES
     assert result.startswith("Dependency failed: ")
-    assert result.endswith("[truncated]")
+    assert "[truncated]" in result
+    assert result.endswith("Final error: package_missing")
 
 
 def test_bound_does_not_leave_partial_assignment_secret():
