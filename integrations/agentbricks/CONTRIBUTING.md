@@ -324,7 +324,7 @@ state record. Waits without a local record have no correlation ID. Keep legacy e
 an ID in a separate cohort; do not group all null IDs together. Use the FrontendLog event ID to
 deduplicate uploads, and flag conflicting outcomes for the same operation for investigation.
 
-Startup reliability should use `dev`'s `app_listened`, `time_to_listen_ms`, failed phase/reason,
+Startup reliability should use `dev`'s `app_listened`, `time_to_listen_ms`, failed phase, regional error text where retained,
 child exit code, and platform/version. These are completion-only observations: abrupt process
 termination or failed/unauthenticated upload remains invisible. Compare event coverage as well as
 failure rate. The schema must be deployed before shipping these fields; this change does not

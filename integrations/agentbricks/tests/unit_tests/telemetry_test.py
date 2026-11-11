@@ -956,3 +956,16 @@ def test_exception_string_failure_does_not_discard_diagnostics():
         _log(_Context(), exit_code=1, exception=error)["diagnostics"]["failure_message"]
         == "root cause"
     )
+
+
+@pytest.mark.parametrize(
+    "code,category", [(0, None), (75, "ERROR_CATEGORY_RUNTIME"), (1, "ERROR_CATEGORY_INTERRUPTED")]
+)
+def test_nonfailure_outcomes_omit_failure_text(code, category):
+    log = _log(
+        _real_context("deployments", "wait"),
+        exit_code=code,
+        error_category=category,
+        exception=AgentCliError("private text"),
+    )
+    assert "failure_message" not in log["diagnostics"]

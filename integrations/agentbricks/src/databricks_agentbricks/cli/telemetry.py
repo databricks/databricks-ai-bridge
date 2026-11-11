@@ -445,6 +445,8 @@ def _build_log(
             and diagnostics.outcome == Outcome.SUBMITTED
             else Outcome.SUCCEEDED
         )
+    if outcome != Outcome.FAILED:
+        details.pop("failure_message", None)
     details["outcome"] = f"OUTCOME_{outcome.value}"
     return _AgentBricksCliLog(
         command_path=invocation.command_path,

@@ -43,3 +43,23 @@ def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> Telemetry
         assert time.monotonic() < deadline, f"no upload to {TELEMETRY_PATH}"
         time.sleep(0.1)
     return uploads[already_seen]
+
+
+def test_failure_telemetry(
+    agentbricks_cli: AgentbricksCli, target_workspace: TargetWorkspace, tmp_path: pathlib.Path
+) -> None:
+    workspace = require_fake_workspace(target_workspace, "a telemetry receiver")
+    destination = tmp_path / "token=synthetic-secret"
+    destination.mkdir()
+    uploaded = len(workspace.telemetry)
+    result = agentbricks_cli.run(
+        f"init {destination}", check=False, env={"AGENTBRICKS_DISABLE_TELEMETRY": ""}
+    )
+    assert result.returncode == 1
+    upload = _next_upload(workspace.telemetry, uploaded)
+    assert upload.authorization == "Bearer fake-token"
+    (proto_log,) = upload.body["protoLogs"]
+    log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
+    assert log["diagnostics"]["outcome"] == "OUTCOME_FAILED"
+    assert "already exists" in log["diagnostics"]["failure_message"]
+    assert "synthetic-secret" not in proto_log
