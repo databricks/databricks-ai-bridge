@@ -42,6 +42,33 @@ def test_url_credentials_are_scrubbed_for_any_scheme(scheme):
 
 @pytest.mark.parametrize(
     "value",
+    [
+        r'{"client_secret": "synthetic-prefix\"synthetic-tail"}',
+        r"{'password': 'synthetic-prefix\'synthetic-tail'}",
+        'client_secret="synthetic-prefix\\\nsynthetic-tail"',
+        'password="synthetic-prefix synthetic-tail\\',
+    ],
+)
+def test_quoted_credentials_respect_escapes_and_incomplete_values(value):
+    result = scrub_failure_text(value)
+    assert "synthetic-prefix" not in result
+    assert "synthetic-tail" not in result
+
+
+def test_escaped_backslash_keeps_following_error_text():
+    assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
+
+
+@pytest.mark.parametrize("pattern", ["a-", "a/", "http://"])
+def test_dense_delimiters_do_not_delay_failure_reporting(pattern):
+    start = time.monotonic()
+    result = scrub_failure_text(pattern * (64000 // len(pattern)))
+    assert time.monotonic() - start < 1.0
+    assert len(result.encode()) <= MAX_FAILURE_BYTES
+
+
+@pytest.mark.parametrize(
+    "value",
     ["dapi" + "a" * 32, "ghp_" + "b" * 36, "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln"],
 )
 def test_recognizable_standalone_tokens_are_scrubbed(value):

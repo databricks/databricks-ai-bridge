@@ -718,16 +718,25 @@ def test_default_free_form_and_unresolved_values_are_omitted():
     assert "parameters" not in _log(context, exit_code=0)
 
 
-def test_callback_error_redacts_url_credentials_from_uploaded_message(monkeypatch):
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ssh://user:synthetic-secret@host/db",
+        json.dumps({"client_secret": 'synthetic-prefix"synthetic-tail'}),
+    ],
+)
+def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
     api = _ApiClient()
     context = _Context(api)
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
-    error = AgentCliError("Unsupported source type: ssh://user:synthetic-secret@host/db")
+    error = AgentCliError("Request failed: " + detail)
     telemetry.emit_command(context, exit_code=1, execution_time_ms=1, exception=error)
     assert len(api.calls) == 1
     payload = json.dumps(api.calls[0][2])
     assert "synthetic-secret" not in payload
-    assert "Unsupported source type" in payload
+    assert "synthetic-prefix" not in payload
+    assert "synthetic-tail" not in payload
+    assert "Request failed" in payload
 
 
 @pytest.mark.parametrize(
@@ -946,7 +955,14 @@ def test_failed_subprocess_detail_is_scrubbed_before_upload():
 
 
 @pytest.mark.parametrize(
-    "error", [click.UsageError("private arg"), click.Abort(), KeyboardInterrupt(), SystemExit(1)]
+    "error",
+    [
+        click.UsageError("private arg"),
+        click.Abort(),
+        KeyboardInterrupt(),
+        SystemExit(1),
+        click.exceptions.Exit(1),
+    ],
 )
 def test_parser_and_control_exceptions_have_no_failure_text(error):
     assert "failure_message" not in _log(_Context(), exit_code=1, exception=error)

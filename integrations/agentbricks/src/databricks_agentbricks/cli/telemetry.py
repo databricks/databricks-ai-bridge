@@ -443,7 +443,9 @@ def _build_log(
 
 
 def _failure_message(exc: BaseException | None) -> str | None:
-    if isinstance(exc, (KeyboardInterrupt, click.Abort, click.UsageError, SystemExit)):
+    if isinstance(
+        exc, (KeyboardInterrupt, click.Abort, click.UsageError, click.exceptions.Exit, SystemExit)
+    ):
         return None
     parts: list[str] = []
     for error in _exception_chain(exc):
