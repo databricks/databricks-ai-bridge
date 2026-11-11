@@ -718,6 +718,9 @@ def test_default_free_form_and_unresolved_values_are_omitted():
     [
         "ssh://user:synthetic-secret@host/db",
         json.dumps({"client_secret": 'synthetic-prefix"synthetic-tail'}),
+        "secretKey=synthetic-opaque-value",
+        "tokenValue=synthetic-opaque-value",
+        "access_token_value=synthetic-opaque-value",
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
@@ -731,6 +734,7 @@ def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, d
     assert "synthetic-secret" not in payload
     assert "synthetic-prefix" not in payload
     assert "synthetic-tail" not in payload
+    assert "synthetic-opaque-value" not in payload
     assert "Request failed" in payload
 
 
