@@ -25,8 +25,9 @@ from databricks_agentbricks.projects.config import write_project_metadata
 
 @pytest.mark.parametrize("listened", [False, True])
 @pytest.mark.parametrize("existing_venv", [False, True])
+@pytest.mark.parametrize("output_stream", ["stderr", "stdout"])
 def test_dev_failure_text_omits_internal_startup_and_environment_facts(
-    tmp_path, monkeypatch, listened, existing_venv
+    tmp_path, monkeypatch, listened, existing_venv, output_stream
 ):
     (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
     if existing_venv:
@@ -43,9 +44,9 @@ def test_dev_failure_text_omits_internal_startup_and_environment_facts(
     def failed_child(*args, on_ready, **kwargs):
         if listened:
             on_ready()
-        return subprocess.CompletedProcess(
-            ["databricks"], 17, stderr="ModuleNotFoundError: missing_module\ntoken=synthetic-secret"
-        )
+        streams = {"stdout": "", "stderr": " \n\t"}
+        streams[output_stream] = "ModuleNotFoundError: missing_module\ntoken=synthetic-secret"
+        return subprocess.CompletedProcess(["databricks"], 17, **streams)
 
     monkeypatch.setattr(dev_mod, "_databricks", failed_child)
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
