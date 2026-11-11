@@ -150,6 +150,15 @@ thread, returning sooner if the worker finishes. This is not a delivery guarante
 uploads can be lost when the process exits after the allowance expires. Missing credentials or a
 failed upload never change the command result.
 
+Deploy and `deployments wait` telemetry includes a random invocation UUID, whether a gated
+agent-details link was printed, the observed deployment state, and whether the process is an
+internal background child. Details links carry the invocation UUID so browser arrivals can be
+joined to the command that printed them. The UUID contains no agent name or authentication data.
+`AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
+A wait command has its own invocation ID; it is not another deploy. Exclude background children
+from user-invoked command counts. Link arrivals measure browser opens, including copied links,
+not terminal mouse clicks or proof that the deployer and viewer are the same person.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:

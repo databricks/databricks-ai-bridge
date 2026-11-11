@@ -812,3 +812,61 @@ def test_parameter_entry_preserves_false_boolean_value():
     )
     entry = telemetry._ParameterEntry.from_option("agentbricks init.existing", option, False)
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
+
+
+@pytest.mark.parametrize("outcome", ["DEPLOYMENT_OUTCOME_RUNNING", "DEPLOYMENT_OUTCOME_SUCCEEDED"])
+def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    context = _real_context("deploy")
+    with context:
+        telemetry.begin_deployment()
+        url = telemetry.deployment_details_url(
+            "https://workspace.example/ml/agents/apps/agent-bricks-demo?o=123", outcome=outcome
+        )
+        log = _log(context, exit_code=0)
+    from urllib.parse import parse_qs, urlsplit
+
+    params = parse_qs(urlsplit(url).query)
+    assert params["o"] == ["123"]
+    assert params["source"] == ["agentbricks-cli"]
+    assert params["cli_invocation_id"] == [log["invocation_id"]]
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["details_link_emitted"] is True
+    assert log["deployment_outcome"] == outcome
+    assert log["background_child"] is False
+    assert "agent-bricks-demo" not in json.dumps(log)
+
+
+@pytest.mark.parametrize("background_child,opt_out", [(True, False), (False, True)])
+def test_details_link_is_untracked_for_background_or_opt_out(
+    monkeypatch, background_child, opt_out
+):
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
+    context = _real_context("deploy")
+    url = "https://workspace.example/ml/agents/apps/agent-bricks-demo"
+    with context:
+        telemetry.begin_deployment(background_child=background_child)
+        assert telemetry.deployment_details_url(url, outcome="DEPLOYMENT_OUTCOME_RUNNING") == url
+        assert _log(context, exit_code=0)["background_child"] is background_child
+
+
+def test_missing_details_link_keeps_a_conversion_denominator():
+    context = _real_context("deploy")
+    with context:
+        telemetry.begin_deployment()
+        assert (
+            telemetry.deployment_details_url(None, outcome="DEPLOYMENT_OUTCOME_SUCCEEDED") is None
+        )
+        log = _log(context, exit_code=0)
+    assert log["details_link_emitted"] is False
+    assert uuid.UUID(log["invocation_id"])
+
+
+def test_repeated_waits_have_distinct_invocation_ids():
+    ids = []
+    for _ in range(2):
+        context = _real_context("deployments", "wait")
+        with context:
+            telemetry.begin_deployment()
+            ids.append(_log(context, exit_code=75)["invocation_id"])
+    assert len(set(ids)) == 2

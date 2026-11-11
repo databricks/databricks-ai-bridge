@@ -13,15 +13,56 @@ from rich.console import Console
 
 from databricks_agentbricks import errors
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.clients import agent_details_client
 from databricks_agentbricks.clients.agent_details_client import AgentDetailsClient
 from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.group import AgentBricksCommand
 from databricks_agentbricks.projects.agent_project import AgentProject
 
 _UI_FLAG = "databricks.fe.customagents.agentCentricView.enable"
 _PREVIEW = "agent_memory_sessions"
 _APP = "agent-bricks-demo"
 _DETAILS_URL = f"https://workspace.example/ml/agents/apps/{_APP}?o=123"
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_printed_deploy_link_matches_the_emitted_command(tmp_path, monkeypatch, background):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "0")
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    monkeypatch.setattr(deploy_mod, "spawn_background_deploy", lambda *a, **kw: 2**22 + 1)
+    api = _DeployApi(events)
+    provider, _ = _provider({"flags": {_UI_FLAG: "true", _PREVIEW: "true"}})
+    api.workspace_client = provider.get().workspace_client
+    logs = []
+
+    def capture(ctx, **kwargs):
+        logs.append(telemetry._build_log(ctx, **kwargs).to_dict())
+
+    monkeypatch.setattr(telemetry, "emit_command", capture)
+    command = AgentBricksCommand(
+        name="deploy", callback=deploy_mod.deploy.callback, params=deploy_mod.deploy.params
+    )
+    args = ["demo", "--source", str(tmp_path), "--pip-index-url", ""]
+    if background:
+        args.append("--no-wait")
+    result = CliRunner().invoke(command, args, obj=_real_deploy_context(api, output="json"))
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    (log,) = logs
+    params = parse_qs(urlsplit(payload["details_url"]).query)
+    assert params["source"] == ["agentbricks-cli"]
+    assert params["cli_invocation_id"] == [log["invocation_id"]]
+    assert log["details_link_emitted"] is True
+    assert log["background_child"] is False
+    assert log["deployment_outcome"] == (
+        "DEPLOYMENT_OUTCOME_RUNNING" if background else "DEPLOYMENT_OUTCOME_SUCCEEDED"
+    )
 
 
 class _UiApi:

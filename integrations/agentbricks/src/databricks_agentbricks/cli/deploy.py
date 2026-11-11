@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 import click
 
+from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.clients.agent_details_client import AgentDetailsClient
 from databricks_agentbricks.clients.app_probe import AppProbe
 from databricks_agentbricks.clients.apps_client import AppsClient
@@ -295,6 +296,7 @@ def deploy(
     agent answers requests. From a coding agent or script with a short command timeout, use
     --no-wait and then `agentbricks deployments wait`.
     """
+    telemetry.begin_deployment(background_child=background_child)
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
@@ -324,7 +326,10 @@ def deploy(
             log=log,
             state_file=state_file,
             output=obj.output,
-            details_url=AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
+            details_url=telemetry.deployment_details_url(
+                AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
+                outcome="DEPLOYMENT_OUTCOME_RUNNING",
+            ),
         )
         return
     started = time.monotonic()
@@ -333,7 +338,10 @@ def deploy(
         result,
         output=obj.output,
         elapsed_s=time.monotonic() - started,
-        details_url=AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
+        details_url=telemetry.deployment_details_url(
+            AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
+            outcome="DEPLOYMENT_OUTCOME_SUCCEEDED",
+        ),
     )
 
 
@@ -389,13 +397,21 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     75 still deploying at the timeout (run the same command again).
     """
     obj = ctx.obj
+    telemetry.begin_deployment()
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
     present_wait_result(
         result,
         output=obj.output,
-        details_url=AgentDetailsClient(obj.api_client_provider).get_url(result.deployment)
-        if result.status != deploy_state.FAILED
-        else None,
+        details_url=telemetry.deployment_details_url(
+            AgentDetailsClient(obj.api_client_provider).get_url(result.deployment)
+            if result.status != deploy_state.FAILED
+            else None,
+            outcome={
+                deploy_state.RUNNING: "DEPLOYMENT_OUTCOME_RUNNING",
+                deploy_state.SUCCEEDED: "DEPLOYMENT_OUTCOME_SUCCEEDED",
+                deploy_state.FAILED: "DEPLOYMENT_OUTCOME_FAILED",
+            }[result.status],
+        ),
     )
     if result.status == deploy_state.FAILED:
         ctx.exit(1)
