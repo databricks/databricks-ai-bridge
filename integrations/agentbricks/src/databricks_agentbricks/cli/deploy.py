@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 import click
 
+from databricks_agentbricks.clients.agent_details_client import AgentDetailsClient
 from databricks_agentbricks.clients.app_probe import AppProbe
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
@@ -318,11 +319,22 @@ def deploy(
         state_file = deploy_state.record_background_start(
             source_dir, prepared.name, pid=pid, now=time.time()
         )
-        present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
+        present_background_started(
+            prepared.name,
+            log=log,
+            state_file=state_file,
+            output=obj.output,
+            details_url=AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
+        )
         return
     started = time.monotonic()
     result = service.deploy(request)
-    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
+    present_deploy_result(
+        result,
+        output=obj.output,
+        elapsed_s=time.monotonic() - started,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
+    )
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
@@ -378,7 +390,13 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     """
     obj = ctx.obj
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
-    present_wait_result(result, output=obj.output)
+    present_wait_result(
+        result,
+        output=obj.output,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(result.deployment)
+        if result.status != deploy_state.FAILED
+        else None,
+    )
     if result.status == deploy_state.FAILED:
         ctx.exit(1)
     if result.status == deploy_state.RUNNING:

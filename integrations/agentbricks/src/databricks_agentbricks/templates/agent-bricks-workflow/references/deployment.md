@@ -22,6 +22,11 @@ as `[agent].deployment_name` and prints it as `Deploy name`; from the project di
 Provisioning takes real time; do not start repeated deployments merely because one is still running.
 Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment before retrying.
 
+Deploy output includes an Agent details management link when the workspace's Agent Memory
+Sessions beta and new Agents UI are both enabled. JSON exposes it as `details_url`; `url` remains
+the deployed agent's invocation address. `--no-wait` and `deployments wait` also include the gated
+link, which can be used to inspect an in-progress deployment.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run

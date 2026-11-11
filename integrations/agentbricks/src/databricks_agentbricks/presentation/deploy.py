@@ -206,15 +206,22 @@ def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
 
 
 def present_deploy_result(
-    result: DeployResult, *, output: Optional[str], elapsed_s: Optional[float] = None
+    result: DeployResult,
+    *,
+    output: Optional[str],
+    elapsed_s: Optional[float] = None,
+    details_url: str | None = None,
 ) -> None:
     """Report a finished deploy: the machine payload for `--output json`, else the success panel.
 
-    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the JSON payload is
-    unchanged so scripts keep their established contract.
+    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the optional
+    management link is separate from the deployed agent's URL in both output modes.
     """
     if output == "json":
-        render.emit_json(deploy_result_payload(result))
+        payload = deploy_result_payload(result)
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
 
     provisioned: dict[str, Any] = {}
@@ -349,7 +356,9 @@ def present_deploy_result(
         provisioned["Store access"] = "granted to app service principal"
     if result.trace_experiment_id and result.trace_grant_error is None:
         provisioned["Trace access"] = "granted to agent runtime service principal"
-    fields = {"URL": result.url} if result.url else {}
+    fields: dict[str, Any] = {"URL": result.url} if result.url else {}
+    if details_url:
+        fields["Agent details"] = render.hyperlink(details_url, details_url)
     fields.update({"Workspace path": result.workspace_path, **provisioned})
     render.success(
         f"Deployed agent '{result.deployment}'",
@@ -364,44 +373,58 @@ def present_deploy_result(
 
 
 def present_background_started(
-    name: str, *, log: pathlib.Path, state_file: pathlib.Path, output: Optional[str]
+    name: str,
+    *,
+    log: pathlib.Path,
+    state_file: pathlib.Path,
+    output: Optional[str],
+    details_url: str | None = None,
 ) -> None:
     """Confirm a `deploy --no-wait` handoff and point at `deployments wait`."""
     if output == "json":
-        render.emit_json(
-            {
-                "deployment": name,
-                "status": "started",
-                "log": str(log),
-                "state_file": str(state_file),
-            }
-        )
+        payload = {
+            "deployment": name,
+            "status": "started",
+            "log": str(log),
+            "state_file": str(state_file),
+        }
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
     click.echo(
         f"Deploy of {name} started in the background. Next: agentbricks deployments wait {name}"
     )
+    if details_url:
+        click.echo(f"Agent details: {details_url}")
 
 
-def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
+def present_wait_result(
+    result: WaitResult, *, output: Optional[str], details_url: str | None = None
+) -> None:
     """Report where a waited-on deploy stands; the command maps the status to its exit code."""
     if output == "json":
-        render.emit_json(
-            {
-                "deployment": result.deployment,
-                "status": result.status,
-                "phase": result.phase,
-                "elapsed_s": result.elapsed_s,
-                "url": result.url,
-                "error": result.error,
-                "log_tail": result.log_tail,
-                "ready": result.ready,
-            }
-        )
+        payload = {
+            "deployment": result.deployment,
+            "status": result.status,
+            "phase": result.phase,
+            "elapsed_s": result.elapsed_s,
+            "url": result.url,
+            "error": result.error,
+            "log_tail": result.log_tail,
+            "ready": result.ready,
+        }
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
     if result.status == "succeeded":
+        fields: dict[str, Any] = {"URL": result.url} if result.url else {}
+        if details_url:
+            fields["Agent details"] = render.hyperlink(details_url, details_url)
         render.success(
             f"Deployed agent '{result.deployment}'",
-            fields={"URL": result.url} if result.url else None,
+            fields=fields or None,
             next_steps=[
                 (f"agentbricks deployments logs {result.deployment}", "Tail its logs"),
                 agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
@@ -427,3 +450,5 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
         f"still deploying: {result.phase}, {format_elapsed(result.elapsed_s)} elapsed — "
         "run the same command again"
     )
+    if details_url:
+        click.echo(f"Agent details: {details_url}")
