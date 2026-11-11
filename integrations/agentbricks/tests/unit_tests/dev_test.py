@@ -39,7 +39,9 @@ def test_dev_telemetry_records_startup_and_environment_decisions(
     def failed_child(*args, on_ready, **kwargs):
         if listened:
             on_ready()
-        return subprocess.CompletedProcess(["databricks"], 17)
+        return subprocess.CompletedProcess(
+            ["databricks"], 17, stderr="ModuleNotFoundError: missing_module\ntoken=synthetic-secret"
+        )
 
     monkeypatch.setattr(dev_mod, "_databricks", failed_child)
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
@@ -50,11 +52,8 @@ def test_dev_telemetry_records_startup_and_environment_decisions(
     assert facts["prepare_environment"] is not existing_venv
     assert facts["subprocess_exit_code"] == 17
     assert facts["failure_stage"] == "FAILURE_STAGE_RUN_LOCAL"
-    assert facts["failure_reason"] == (
-        "FAILURE_REASON_CHILD_EXIT_AFTER_LISTENING"
-        if listened
-        else "FAILURE_REASON_CHILD_EXIT_BEFORE_LISTENING"
-    )
+    assert "ModuleNotFoundError: missing_module" in facts["failure_message"]
+    assert "synthetic-secret" not in str(records)
     assert ("time_to_listen_ms" in facts) is listened
     assert str(tmp_path) not in str(records)
 
@@ -68,12 +67,12 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     )
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
     assert result.exit_code == 1
-    assert records[0]["diagnostics"] == {
-        "outcome": "OUTCOME_FAILED",
-        "app_listened": False,
-        "failure_stage": "FAILURE_STAGE_PROJECT",
-        "failure_reason": "FAILURE_REASON_PROJECT_INVALID",
-    }
+    facts = records[0]["diagnostics"]
+    assert facts["outcome"] == "OUTCOME_FAILED"
+    assert facts["app_listened"] is False
+    assert facts["failure_stage"] == "FAILURE_STAGE_PROJECT"
+    assert facts["failure_message"]
+    assert "failure_reason" not in facts
 
 
 def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):

@@ -214,12 +214,14 @@ class AppsClient:
                 hint="\n".join([*detail, _app_busy_hint(name)]),
                 failure_reason=FailureReason.SUBPROCESS_FAILED,
                 subprocess_exit_code=result.returncode,
+                failure_detail=_failure_detail(result) or None,
             )
         raise AgentCliError(
             action,
             hint=None if relayed else (_failure_detail(result) or None),
             failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=result.returncode,
+            failure_detail=_failure_detail(result) or None,
         )
 
     def _get_json(self, name: str) -> Optional[dict]:
@@ -613,12 +615,14 @@ class AppsClient:
                     hint="See the output above for the cause.",
                     failure_reason=FailureReason.CHILD_EXIT_AFTER_LISTENING,
                     subprocess_exit_code=result.returncode,
+                    failure_detail=(result.stderr or result.stdout or "").strip() or None,
                 )
             raise AgentCliError(
                 "Could not start the agent locally.",
                 hint="See the output above for the cause.",
                 failure_reason=FailureReason.CHILD_EXIT_BEFORE_LISTENING,
                 subprocess_exit_code=result.returncode,
+                failure_detail=(result.stderr or result.stdout or "").strip() or None,
             )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:

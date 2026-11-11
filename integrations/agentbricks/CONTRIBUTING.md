@@ -189,8 +189,13 @@ update `tests/unit_tests/telemetry_test.py` and the telemetry description in `RE
 Failure diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
 instance explicitly; `phase()` retains the innermost failed stage. `AgentCliError.failure_reason`
 and `subprocess_exit_code` preserve known facts without changing the displayed message or process
-exit code. The emitter follows bounded explicit exception causes and allowlists service codes;
-unknown codes and exception text never enter the payload. Deploy the matching
+exit code. The emitter follows bounded explicit exception causes and allowlists service codes for the
+centralized `error_category`. It sends no exhaustive failure-reason enum. `failure_message` carries
+up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
+credential scrubbing; this remains sensitive, labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`.
+Do not add raw text to centralizable fields. LPP approval is required before collection ships.
+Regional logging and CMK policies can remove the text entirely; central analytics must use the
+remaining typed facts and account for missing text. Deploy the matching
 `proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
 a CLI that emits new diagnostic fields or enum values.
 

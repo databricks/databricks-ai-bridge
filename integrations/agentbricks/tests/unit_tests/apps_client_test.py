@@ -291,6 +291,7 @@ def test_other_deploy_errors_are_not_retried():
     with pytest.raises(AgentCliError) as raised:
         client.deploy("agent-bricks-myapp", "/Workspace/x")
 
+    assert raised.value.failure_detail == "Error: app crashed on startup"
     assert raised.value.hint is None  # the relayed output was already shown live
     assert notices == [] and sleeps == []
     assert len(runner.changes(["apps", "deploy"])) == 1
@@ -500,5 +501,6 @@ def test_deploy_retains_the_final_child_exit_code(detail):
     )
     with pytest.raises(AgentCliError) as raised:
         client.deploy("agent-bricks-demo", "/Workspace/demo")
+    assert raised.value.failure_detail == detail
     assert raised.value.subprocess_exit_code == 17
     assert raised.value.failure_reason == FailureReason.SUBPROCESS_FAILED
