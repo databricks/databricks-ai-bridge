@@ -726,6 +726,9 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         "secretKey=synthetic-opaque-value",
         "tokenValue=synthetic-opaque-value",
         "access_token_value=synthetic-opaque-value",
+        json.dumps({"credentials": {"client_secret": "synthetic-opaque-value"}}),
+        json.dumps({"credentials": [{"value": "synthetic-opaque-value"}]}, indent=2),
+        json.dumps({"credentials": ["synthetic-opaque-value"]}),
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
@@ -956,6 +959,21 @@ def test_failed_subprocess_detail_is_scrubbed_before_upload():
     details = _log(_Context(), exit_code=1, exception=error)
     assert "ModuleNotFoundError: package_missing" in details["failure_message"]
     assert "synthetic-secret" not in json.dumps(details)
+
+
+def test_long_subprocess_detail_preserves_final_error_after_scrubbing():
+    error = AgentCliError(
+        "Could not deploy",
+        failure_detail=(
+            "Uploading files\n" * 400 + "Final error: app is busy\npassword=synthetic-opaque-value"
+        ),
+    )
+    message = _log(_Context(), exit_code=1, exception=error)["failure_message"]
+    assert message.startswith("Could not deploy")
+    assert "[truncated]" in message
+    assert "Final error: app is busy" in message
+    assert "synthetic-opaque-value" not in message
+    assert len(message.encode("utf-8")) <= 4096
 
 
 @pytest.mark.parametrize(
