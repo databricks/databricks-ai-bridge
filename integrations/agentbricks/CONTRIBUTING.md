@@ -197,7 +197,8 @@ credential, path, and email scrubbing; this remains sensitive, labeled
 `DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
 Do not add raw text to centralizable fields. Privacy review is tracked in
 [LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
-[LPP-5543](https://databricks.atlassian.net/browse/LPP-5543); collection awaits that review.
+[LPP-5543](https://databricks.atlassian.net/browse/LPP-5543). LPP-8330 is approved; collection
+must satisfy its regional retention, access, and customer-policy controls.
 Regional logging and CMK policies can remove the text entirely; central analytics must use the
 existing command, exit-code, and error-category fields and account for missing text. Deploy the matching
 `proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
