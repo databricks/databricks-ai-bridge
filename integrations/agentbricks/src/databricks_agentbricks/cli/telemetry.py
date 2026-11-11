@@ -19,9 +19,12 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 from typing import Any
+from urllib.error import URLError
 
 import click
 from click.core import ParameterSource
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import Timeout as RequestsTimeout
 
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
 
@@ -234,7 +237,10 @@ def _failure_reason(exc: BaseException | None) -> FailureReason | None:
     for error in chain:
         if isinstance(error, ImportError):
             return FailureReason.DEPENDENCY_MISSING
-        if isinstance(error, (TimeoutError, ConnectionError)):
+        if isinstance(
+            error,
+            (TimeoutError, ConnectionError, URLError, RequestsConnectionError, RequestsTimeout),
+        ):
             return FailureReason.NETWORK_ERROR
         if isinstance(
             error, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
