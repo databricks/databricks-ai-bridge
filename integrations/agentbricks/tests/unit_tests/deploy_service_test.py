@@ -1157,6 +1157,40 @@ def test_failure_after_rollout_gets_no_partial_app_note(deployment_fixture, tmp_
     deployment_fixture.app.roll_out.assert_called_once()
 
 
+@pytest.mark.parametrize("disabled", ["memory", "session"])
+def test_disabled_store_preview_fails_before_the_app_is_created(
+    deployment_fixture, tmp_path: pathlib.Path, disabled: str
+):
+    # An opted-out workspace must not be left with an App and no deployment: the store probe runs
+    # before the early create, so nothing is created and there is no partial-App note.
+    deployment_fixture.resolver.resource_bindings.return_value = ("memory", "sessions", None)
+    getattr(deployment_fixture, disabled).preflight.side_effect = AgentCliError(
+        "preview off", error_code="FEATURE_DISABLED", hint="enable it"
+    )
+
+    with pytest.raises(AgentCliError, match="preview off") as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint == "enable it"
+    deployment_fixture.app.start_compute.assert_not_called()
+    deployment_fixture.memory.reconcile.assert_not_called()
+    deployment_fixture.session.reconcile.assert_not_called()
+    deployment_fixture.runtime.reconcile.assert_not_called()
+    deployment_fixture.app.roll_out.assert_not_called()
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+def test_store_preflight_sees_the_bound_stores(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.resolver.resource_bindings.return_value = ("memory", "sessions", None)
+
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    (memory_ctx,) = deployment_fixture.memory.preflight.call_args.args
+    (session_ctx,) = deployment_fixture.session.preflight.call_args.args
+    assert (memory_ctx.memory_store, session_ctx.session_store) == ("memory", "sessions")
+    deployment_fixture.app.start_compute.assert_called_once()
+
+
 def test_create_failure_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
     deployment_fixture.app.start_compute.side_effect = AgentCliError("create denied")
 
