@@ -10,6 +10,8 @@ from typing import Iterator
 
 
 class FailureReason(str, Enum):
+    """Internal classification hints; these are not a wire schema or an exhaustive taxonomy."""
+
     PROJECT_INVALID = "PROJECT_INVALID"
     PORT_IN_USE = "PORT_IN_USE"
     UV_MISSING = "UV_MISSING"

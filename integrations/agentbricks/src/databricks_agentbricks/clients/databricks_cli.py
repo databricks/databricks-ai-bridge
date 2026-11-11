@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.clients import terminal_relay
+from databricks_agentbricks.clients.output_tail import StreamRelay
 from databricks_agentbricks.diagnostics import FailureReason
 from databricks_agentbricks.errors import AgentCliError
 
@@ -88,6 +89,7 @@ def _databricks(
             hint=detail,
             failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=result.returncode,
+            failure_detail=(result.stderr or result.stdout or "").strip() or None,
         )
     return result
 
@@ -122,7 +124,12 @@ def _run_until_ready(
     on_ready: Optional[Callable[[], None]],
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with its output streamed, calling ``on_ready`` once ``probe`` first succeeds."""
-    with subprocess.Popen(cmd, text=True, cwd=cwd, env=env) as proc:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, cwd=cwd, env=env
+    ) as proc:
+        assert proc.stdout is not None and proc.stderr is not None
+        stdout = StreamRelay(proc.stdout, 1)
+        stderr = StreamRelay(proc.stderr, 2)
         try:
             while proc.poll() is None:
                 if probe():
@@ -142,4 +149,10 @@ def _run_until_ready(
         except BaseException:
             proc.kill()
             raise
-    return subprocess.CompletedProcess(cmd, proc.returncode)
+        finally:
+            proc.wait()
+            stdout.finish()
+            stderr.finish()
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, stdout=stdout.tail.text(), stderr=stderr.tail.text()
+    )

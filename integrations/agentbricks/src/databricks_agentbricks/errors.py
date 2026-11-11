@@ -67,12 +67,14 @@ class AgentCliError(click.ClickException):
         hint: Optional[str] = None,
         failure_reason: FailureReason | None = None,
         subprocess_exit_code: int | None = None,
+        failure_detail: str | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
         self.failure_reason = failure_reason
         self.subprocess_exit_code = subprocess_exit_code
+        self.failure_detail = failure_detail
 
     def show(self, file=None) -> None:
         if _OUTPUT_MODE == "json":
