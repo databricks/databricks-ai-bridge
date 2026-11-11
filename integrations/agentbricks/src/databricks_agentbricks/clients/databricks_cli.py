@@ -25,6 +25,15 @@ from databricks_agentbricks.errors import AgentCliError
 _READY_POLL_S = 0.25
 # Seconds an interrupted command gets to exit on its own before it is killed (as `subprocess.run`).
 _SIGINT_WAIT_S = 0.25
+APP_BUSY_MARKER = "another operation is in progress"
+
+
+class DatabricksCliResult(subprocess.CompletedProcess[str]):
+    """Retain retry facts independently of diagnostic output truncation."""
+
+    def __init__(self, args: list[str], returncode: int, *, stdout: str, app_busy: bool) -> None:
+        super().__init__(args, returncode, stdout=stdout, stderr="")
+        self.app_busy = app_busy
 
 
 def _databricks(
@@ -106,6 +115,7 @@ def _run_tee(
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` relaying its merged output to stderr; return its tail as ``stdout``."""
     tail = OutputTail()
+    app_busy = False
     with subprocess.Popen(
         cmd,
         text=True,
@@ -118,8 +128,9 @@ def _run_tee(
         for line in proc.stdout:
             sys.stderr.write(line)
             sys.stderr.flush()
+            app_busy |= APP_BUSY_MARKER in line.lower()
             tail.append(line.encode("utf-8", errors="replace"))
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout=tail.text(), stderr="")
+    return DatabricksCliResult(cmd, proc.returncode, stdout=tail.text(), app_busy=app_busy)
 
 
 def _run_until_ready(

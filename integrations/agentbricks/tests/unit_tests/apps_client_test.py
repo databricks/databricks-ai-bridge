@@ -260,6 +260,47 @@ def test_deploy_retries_while_the_app_is_busy_then_succeeds():
     assert all(kwargs.get("tee") is True for _, kwargs in runner.calls)
 
 
+@pytest.mark.parametrize("output_kind", ["pem", "long_line"])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_busy_retry_and_hint_survive_diagnostic_retention(output_kind, persistent, capsys):
+    import sys
+
+    from databricks_agentbricks.clients.databricks_cli import _run_tee
+
+    output = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        + "synthetic-key-body\n" * 400
+        + "-----END PRIVATE KEY-----\n"
+        + _BUSY
+        if output_kind == "pem"
+        else "x" * 10000 + _BUSY
+    )
+    results = []
+    sleeps = []
+
+    def runner(*args, **kwargs):
+        assert kwargs["tee"]
+        busy = persistent or not results
+        code = f"print({output if busy else ''!r}); raise SystemExit({int(busy)})"
+        result = _run_tee([sys.executable, "-c", code], cwd=None, env=None)
+        results.append(result)
+        return result
+
+    client = AppsClient("prof", runner=runner, sleep=sleeps.append)
+    if persistent:
+        with pytest.raises(AgentCliError) as raised:
+            client.deploy("my-app", "/Workspace/x")
+        assert "agentbricks deployments wait my-app" in (raised.value.hint or "")
+        assert "synthetic-key-body" not in (raised.value.failure_detail or "")
+        assert len(results) == 7
+    else:
+        client.deploy("my-app", "/Workspace/x")
+        assert len(results) == 2
+    assert sleeps
+    assert all(_BUSY not in result.stdout for result in results)
+    assert _BUSY in capsys.readouterr().err
+
+
 def test_busy_match_is_case_insensitive():
     runner = _BusyRunner(busy=1, error="ANOTHER OPERATION IS IN PROGRESS")
     client, notices, _ = _busy_client(runner)

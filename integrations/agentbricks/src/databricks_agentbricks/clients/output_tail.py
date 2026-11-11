@@ -10,7 +10,7 @@ from typing import IO
 # Leave room for the enclosing error message in the 4096-byte telemetry field.
 _MAX_TAIL_BYTES = 3072
 _PEM_PREFIX = b"-----BEGIN "
-_DRAIN_IDLE_S = 0.25
+_DRAIN_GRACE_S = 0.25
 
 
 class OutputTail:
@@ -49,7 +49,10 @@ class StreamRelay:
     def __init__(self, stream: IO[bytes], destination: int) -> None:
         self.tail = OutputTail()
         self._stop = threading.Event()
-        self._read_started: float | None = None
+        self._state_lock = threading.Lock()
+        self._forward_started: float | None = None
+        self._forward_seconds = 0.0
+        self._drain_deadline: float | None = None
         self._thread = threading.Thread(target=self._copy, args=(stream, destination), daemon=True)
         self._thread.start()
 
@@ -57,28 +60,47 @@ class StreamRelay:
         forward = True
         try:
             while not self._stop.is_set():
-                self._read_started = time.monotonic()
+                with self._state_lock:
+                    if (
+                        self._drain_deadline is not None
+                        and time.monotonic() - self._forward_seconds >= self._drain_deadline
+                    ):
+                        return
                 data = os.read(stream.fileno(), 65536)
-                self._read_started = None
-                if not data or self._stop.is_set():
+                if not data:
                     return
-                self.tail.append(data)
-                view = memoryview(data)
-                while view and forward:
-                    try:
-                        view = view[os.write(destination, view) :]
-                    except OSError:
-                        # Keep draining so a closed output destination cannot block the child.
-                        forward = False
+                with self._state_lock:
+                    if self._stop.is_set():
+                        return
+                    started = self._forward_started = time.monotonic()
+                try:
+                    self.tail.append(data)
+                    view = memoryview(data)
+                    while view and forward:
+                        try:
+                            view = view[os.write(destination, view) :]
+                        except OSError:
+                            # Keep draining so a closed destination cannot block the child.
+                            forward = False
+                finally:
+                    with self._state_lock:
+                        self._forward_seconds += time.monotonic() - started
+                        self._forward_started = None
         except (OSError, ValueError):
             return
 
     def finish(self) -> None:
-        # Descendants may inherit a pipe after the direct child exits.
-        started = time.monotonic()
+        # Bound descendant reads without charging time spent forwarding to slow consumers.
+        with self._state_lock:
+            now = time.monotonic()
+            started = self._forward_started if self._forward_started is not None else now
+            deadline = self._drain_deadline = started - self._forward_seconds + _DRAIN_GRACE_S
         while self._thread.is_alive():
             self._thread.join(timeout=0.05)
-            reading = self._read_started
-            if reading is not None and time.monotonic() - max(started, reading) >= _DRAIN_IDLE_S:
-                self._stop.set()
-                return
+            with self._state_lock:
+                if (
+                    self._forward_started is None
+                    and time.monotonic() - self._forward_seconds >= deadline
+                ):
+                    self._stop.set()
+                    return
