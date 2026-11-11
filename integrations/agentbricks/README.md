@@ -125,8 +125,13 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Failures can also include a code-defined reason, workflow
-stage, and child process exit code. Exception messages, hints, and subprocess output are excluded.
+nonzero exits, a bounded error category). Failures can also include a workflow stage, child exit
+code, and up to 4096 UTF-8 bytes of error text. Error text includes exception messages and available
+failed subprocess output, with recognized credential formats scrubbed. This is best effort;
+remaining text may contain customer content such as project paths or service response details.
+It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
+regionally only where customer logging and encryption policies permit. Error text is omitted for
+parser errors and interruptions. Collection requires Legal approval and schema deployment.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
@@ -137,9 +142,8 @@ choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numer
 contribute their typed values; explicitly supplied non-finite floats and integers outside the log
 schema's 64-bit range remain presence-only, while unsupported defaults are omitted. Hidden and
 deprecated options follow the same policy, and repeated
-options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
-raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
-messages are omitted. Set
+options contribute one parameter entry per supplied value, up to 64 entries. Parameter telemetry
+omits positional arguments, raw command arguments, paths, IDs, and arbitrary free-form values. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
 
 Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help

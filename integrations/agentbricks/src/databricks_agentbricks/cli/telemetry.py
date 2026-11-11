@@ -26,6 +26,7 @@ from click.core import ParameterSource
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
 
+from databricks_agentbricks.cli.failure_text import scrub_failure_text
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
@@ -252,8 +253,7 @@ def _failure_reason(exc: BaseException | None) -> FailureReason | None:
 def _error_category(exc: BaseException) -> str:
     """Map an exception to the bounded enum in ``agentbricks_cli_log.proto``."""
 
-    # Click's parser exceptions contain the user's option/argument text.  We use only their type,
-    # never their message, in the emitted record.
+    # Categories remain code-defined even when a separate sensitive message is available.
     import click
 
     if isinstance(exc, click.UsageError):
@@ -440,15 +440,31 @@ def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int
         diagnostics.failure_stage, FailureStage
     ):
         details["failure_stage"] = f"FAILURE_STAGE_{diagnostics.failure_stage.value}"
-    reason = _failure_reason(exc)
-    if reason is not None:
-        details["failure_reason"] = f"FAILURE_REASON_{reason.value}"
+    if message := _failure_message(exc):
+        details["failure_message"] = message
     for error in _exception_chain(exc):
         code = getattr(error, "subprocess_exit_code", None)
         if type(code) is int and -(1 << 63) <= code < (1 << 63):
             details["subprocess_exit_code"] = code
             break
     return details
+
+
+def _failure_message(exc: BaseException | None) -> str | None:
+    if isinstance(exc, (KeyboardInterrupt, click.Abort, click.UsageError, SystemExit)):
+        return None
+    parts: list[str] = []
+    for error in _exception_chain(exc):
+        try:
+            text = str(error)
+        except Exception:
+            continue
+        if text and text not in parts:
+            parts.append(text[:65536])
+        detail = getattr(error, "failure_detail", None)
+        if isinstance(detail, str) and detail and detail not in parts:
+            parts.append(detail[:65536])
+    return scrub_failure_text("\nCaused by: ".join(parts)) or None
 
 
 def _root_obj(ctx: Any) -> Any:

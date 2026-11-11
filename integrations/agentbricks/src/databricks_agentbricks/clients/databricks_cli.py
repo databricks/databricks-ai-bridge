@@ -88,6 +88,7 @@ def _databricks(
             hint=detail,
             failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=result.returncode,
+            failure_detail=(result.stderr or result.stdout or "").strip() or None,
         )
     return result
 
