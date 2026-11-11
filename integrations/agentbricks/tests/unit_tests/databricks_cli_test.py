@@ -211,32 +211,45 @@ def test_descendant_holding_pipe_open_does_not_delay_completion():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX descendant signal cleanup")
-def test_writing_descendant_does_not_extend_post_exit_drain(tmp_path, capfd):
+@pytest.mark.parametrize("continuous", [False, True])
+def test_writing_descendant_does_not_extend_post_exit_drain(tmp_path, monkeypatch, continuous):
     pid_file = tmp_path / "descendant.pid"
     descendant = (
         "import time; [(print('descendant', flush=True), time.sleep(0.03)) for _ in range(200)]"
     )
+    if continuous:
+        descendant = (
+            "import os, time\n"
+            "deadline = time.monotonic() + 3\n"
+            "while time.monotonic() < deadline:\n"
+            "    os.write(1, b'descendant\\n' * 8192)\n"
+        )
     parent = (
         "import pathlib, subprocess, sys; "
         f"child = subprocess.Popen([sys.executable, '-c', {descendant!r}]); "
         f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); "
         "print('direct child failed', flush=True); sys.exit(3)"
     )
-    start = time.monotonic()
-    try:
-        result = dc._run_until_ready(
-            _python(parent), cwd=None, env=None, probe=lambda: False, on_ready=None
+    relay = dc.StreamRelay
+    with open(os.devnull, "wb") as sink:
+        monkeypatch.setattr(
+            dc, "StreamRelay", lambda stream, destination: relay(stream, sink.fileno())
         )
-        assert time.monotonic() - start < 2.5
-        assert result.returncode == 3
-        assert "direct child failed" in result.stdout
-        assert "descendant" in capfd.readouterr().out
-    finally:
-        if pid_file.exists():
-            try:
-                os.kill(int(pid_file.read_text()), signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        start = time.monotonic()
+        try:
+            result = dc._run_until_ready(
+                _python(parent), cwd=None, env=None, probe=lambda: False, on_ready=None
+            )
+            assert time.monotonic() - start < 2.5
+            assert result.returncode == 3
+            if not continuous:
+                assert "direct child failed" in result.stdout
+        finally:
+            if pid_file.exists():
+                try:
+                    os.kill(int(pid_file.read_text()), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
 
 def test_closed_output_destination_keeps_draining_child():

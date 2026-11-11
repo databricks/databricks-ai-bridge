@@ -63,7 +63,7 @@ class StreamRelay:
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._forward_started: float | None = None
-        self._forward_seconds = 0.0
+        self._forward_wait_seconds = 0.0
         self._drain_deadline: float | None = None
         self._thread = threading.Thread(target=self._copy, args=(stream, destination), daemon=True)
         self._thread.start()
@@ -75,7 +75,7 @@ class StreamRelay:
                 with self._state_lock:
                     if (
                         self._drain_deadline is not None
-                        and time.monotonic() - self._forward_seconds >= self._drain_deadline
+                        and time.monotonic() - self._forward_wait_seconds >= self._drain_deadline
                     ):
                         return
                 data = os.read(stream.fileno(), 65536)
@@ -84,9 +84,10 @@ class StreamRelay:
                 with self._state_lock:
                     if self._stop.is_set():
                         return
-                    started = self._forward_started = time.monotonic()
-                try:
                     self.tail.append(data)
+                    started = self._forward_started = time.monotonic()
+                    cpu_started = time.thread_time()
+                try:
                     view = memoryview(data)
                     while view and forward:
                         try:
@@ -95,24 +96,28 @@ class StreamRelay:
                             # Keep draining so a closed destination cannot block the child.
                             forward = False
                 finally:
+                    # Charge write CPU work while exempting waits on the destination or scheduler.
+                    waiting = max(
+                        0.0, time.monotonic() - started - (time.thread_time() - cpu_started)
+                    )
                     with self._state_lock:
-                        self._forward_seconds += time.monotonic() - started
+                        self._forward_wait_seconds += waiting
                         self._forward_started = None
         except (OSError, ValueError):
             return
 
     def finish(self) -> None:
-        # Bound descendant reads without charging time spent forwarding to slow consumers.
+        # Bound processing while allowing blocked output forwarding to finish.
         with self._state_lock:
             now = time.monotonic()
             started = self._forward_started if self._forward_started is not None else now
-            deadline = self._drain_deadline = started - self._forward_seconds + _DRAIN_GRACE_S
+            deadline = self._drain_deadline = started - self._forward_wait_seconds + _DRAIN_GRACE_S
         while self._thread.is_alive():
             self._thread.join(timeout=0.05)
             with self._state_lock:
                 if (
                     self._forward_started is None
-                    and time.monotonic() - self._forward_seconds >= deadline
+                    and time.monotonic() - self._forward_wait_seconds >= deadline
                 ):
                     self._stop.set()
                     return
