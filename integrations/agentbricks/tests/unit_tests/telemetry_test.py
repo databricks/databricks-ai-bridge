@@ -266,10 +266,9 @@ def test_wrapped_failure_preserves_text_in_sensitive_field():
         raise error
 
     log = _log(context, exit_code=1, exception=error)
-    assert log["diagnostics"] == {
-        "failure_stage": "FAILURE_STAGE_RUN_LOCAL",
-        "failure_message": "private message\nCaused by: private service detail",
-    }
+    assert log["failure_message"] == "private message\nCaused by: private service detail"
+    assert log == _log(_Context(), exit_code=1, exception=error)
+    assert "diagnostics" not in log
     assert telemetry._error_category(error) == "ERROR_CATEGORY_AUTHORIZATION"
     assert "private hint" not in json.dumps(log)
 
@@ -301,9 +300,9 @@ def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
     error = AgentCliError("private", error_code="private-user-defined-code")
     error.__cause__ = error
     assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
-    details = _log(_Context(), exit_code=1, exception=error)["diagnostics"]
-    assert details == {"failure_message": "private"}
-    assert "private-user-defined-code" not in json.dumps(details)
+    log = _log(_Context(), exit_code=1, exception=error)
+    assert log["failure_message"] == "private"
+    assert "private-user-defined-code" not in json.dumps(log)
 
 
 def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):
@@ -323,11 +322,10 @@ def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch)
     result = CliRunner().invoke(run)
     assert result.exit_code == 1
     assert records[0]["exit_code"] == 1
-    assert records[0]["diagnostics"] == {
-        "failure_message": "private child output",
-        "subprocess_exit_code": 17,
-    }
-    assert "failure_reason" not in records[0]["diagnostics"]
+    assert records[0]["failure_message"] == "private child output"
+    assert "diagnostics" not in records[0]
+    assert "subprocess_exit_code" not in records[0]
+    assert "failure_reason" not in records[0]
 
 
 def test_outer_phase_preserves_the_inner_failure_stage():
@@ -681,7 +679,7 @@ def test_new_commands_emit_click_resolved_defaults_automatically(monkeypatch, fa
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_ALL"},
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_NEW"},
     ]
-    message = records[0].get("diagnostics", {}).pop("failure_message", None)
+    message = records[0].pop("failure_message", None)
     assert message == ("private-error" if fails else None)
     assert "private-" not in json.dumps(records)
 
@@ -705,7 +703,7 @@ def test_real_init_defaults_are_emitted_for_success_and_failure(monkeypatch, tmp
     assert parameters["agentbricks init.existing"]["bool_value"] is False
     assert parameters["agentbricks init.disable_chat_app"]["bool_value"] is False
     assert log["exit_code"] == result.exit_code
-    message = log.get("diagnostics", {}).pop("failure_message", None)
+    message = log.pop("failure_message", None)
     assert (message is not None) == fails
     assert "private-project" not in json.dumps(log)
     assert "agentbricks init.profile" not in parameters
@@ -907,16 +905,22 @@ def test_parameter_entry_preserves_false_boolean_value():
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
 
 
-def test_readiness_telemetry_preserves_only_bounded_observations():
+def test_workflow_observations_are_not_emitted():
     context = _Context()
     context.obj.diagnostics = CommandDiagnostics(
-        readiness=Readiness.UNREACHABLE, probe_http_status=None
+        failure_stage=FailureStage.ROLLOUT,
+        readiness=Readiness.UNREACHABLE,
+        probe_http_status=503,
+        app_listened=True,
+        time_to_listen_ms=100,
+        prepare_environment=True,
+        subprocess_exit_code=17,
     )
-    assert _log(context, exit_code=0)["diagnostics"] == {"readiness": "READINESS_UNREACHABLE"}
-    context.obj.diagnostics.probe_http_status = 503
-    assert _log(context, exit_code=0)["diagnostics"]["probe_http_status"] == 503
-    context.obj.diagnostics.probe_http_status = 999
-    assert "probe_http_status" not in _log(context, exit_code=0)["diagnostics"]
+    error = ValueError("service error")
+    assert _log(context, exit_code=1, exception=error) == _log(
+        _Context(), exit_code=1, exception=error
+    )
+    assert _log(context, exit_code=0) == _log(_Context(), exit_code=0)
 
 
 def test_failed_subprocess_detail_is_scrubbed_before_upload():
@@ -924,7 +928,7 @@ def test_failed_subprocess_detail_is_scrubbed_before_upload():
         "Could not start",
         failure_detail="ModuleNotFoundError: package_missing\nAuthorization: Bearer synthetic-secret",
     )
-    details = _log(_Context(), exit_code=1, exception=error)["diagnostics"]
+    details = _log(_Context(), exit_code=1, exception=error)
     assert "ModuleNotFoundError: package_missing" in details["failure_message"]
     assert "synthetic-secret" not in json.dumps(details)
 
@@ -933,19 +937,14 @@ def test_failed_subprocess_detail_is_scrubbed_before_upload():
     "error", [click.UsageError("private arg"), click.Abort(), KeyboardInterrupt(), SystemExit(1)]
 )
 def test_parser_and_control_exceptions_have_no_failure_text(error):
-    assert "failure_message" not in _log(_Context(), exit_code=1, exception=error).get(
-        "diagnostics", {}
-    )
+    assert "failure_message" not in _log(_Context(), exit_code=1, exception=error)
 
 
-def test_exception_string_failure_does_not_discard_diagnostics():
+def test_exception_string_failure_preserves_cause_text():
     class BrokenMessage(Exception):
         def __str__(self):
             raise ValueError("cannot stringify")
 
     error = BrokenMessage()
     error.__cause__ = ValueError("root cause")
-    assert (
-        _log(_Context(), exit_code=1, exception=error)["diagnostics"]["failure_message"]
-        == "root cause"
-    )
+    assert _log(_Context(), exit_code=1, exception=error)["failure_message"] == "root cause"
