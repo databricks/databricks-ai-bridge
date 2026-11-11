@@ -23,6 +23,8 @@ from typing import Any
 import click
 from click.core import ParameterSource
 
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
+
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
 
@@ -97,6 +99,7 @@ class _AgentBricksCliLog:
     exit_code: int
     error_category: str | None = None
     parameters: tuple[_ParameterEntry, ...] = ()
+    diagnostics: dict[str, str | int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -110,6 +113,8 @@ class _AgentBricksCliLog:
             data["error_category"] = self.error_category
         if self.parameters:
             data["parameters"] = [parameter.to_dict() for parameter in self.parameters]
+        if self.diagnostics:
+            data["diagnostics"] = self.diagnostics
         return data
 
 
@@ -140,6 +145,7 @@ def emit_command(
     execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
+    exception: BaseException | None = None,
 ) -> None:
     """Emit one command record in a daemon worker, bounded by a short foreground join."""
 
@@ -150,6 +156,7 @@ def emit_command(
         execution_time_ms=execution_time_ms,
         exit_code=exit_code,
         error_category=error_category,
+        exception=exception,
     )
     payload = _FrontendLogPayload(
         log=log,
@@ -187,6 +194,55 @@ def _bounded_error_category(value: object | None) -> str:
     )
 
 
+def _exception_chain(exc: BaseException | None):
+    seen: set[int] = set()
+    for _ in range(8):
+        if exc is None or id(exc) in seen:
+            return
+        seen.add(id(exc))
+        yield exc
+        exc = exc.__cause__
+
+
+def _failure_reason(exc: BaseException | None) -> FailureReason | None:
+    aliases = {
+        "INVALID_TOKEN": "UNAUTHENTICATED",
+        "INVALID_CREDENTIALS": "UNAUTHENTICATED",
+        "TOKEN_EXPIRED": "UNAUTHENTICATED",
+        "FORBIDDEN": "PERMISSION_DENIED",
+        "UNAUTHORIZED": "PERMISSION_DENIED",
+        "NOT_AUTHORIZED": "PERMISSION_DENIED",
+        "TIMEOUT": "DEADLINE_EXCEEDED",
+        "TIMED_OUT": "DEADLINE_EXCEEDED",
+        "CONNECTION_ERROR": "NETWORK_ERROR",
+        "CONFIGURATION_ERROR": "PROJECT_INVALID",
+        "UNIMPLEMENTED": "FEATURE_DISABLED",
+        "NOT_IMPLEMENTED": "FEATURE_DISABLED",
+    }
+    chain = list(_exception_chain(exc))
+    for error in chain:
+        reason = getattr(error, "failure_reason", None)
+        if isinstance(reason, FailureReason):
+            return reason
+        code = getattr(error, "error_code", None)
+        if isinstance(code, str):
+            code = code.upper()
+            try:
+                return FailureReason(aliases.get(code, code))
+            except ValueError:
+                pass
+    for error in chain:
+        if isinstance(error, ImportError):
+            return FailureReason.DEPENDENCY_MISSING
+        if isinstance(error, (TimeoutError, ConnectionError)):
+            return FailureReason.NETWORK_ERROR
+        if isinstance(
+            error, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
+        ):
+            return FailureReason.FILESYSTEM_ERROR
+    return None
+
+
 def _error_category(exc: BaseException) -> str:
     """Map an exception to the bounded enum in ``agentbricks_cli_log.proto``."""
 
@@ -198,37 +254,32 @@ def _error_category(exc: BaseException) -> str:
         return "ERROR_CATEGORY_USAGE"
     if isinstance(exc, (KeyboardInterrupt, click.Abort)):
         return "ERROR_CATEGORY_INTERRUPTED"
-    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+    reason = _failure_reason(exc)
+    if reason == FailureReason.UNAUTHENTICATED:
+        return "ERROR_CATEGORY_AUTHENTICATION"
+    if reason == FailureReason.PERMISSION_DENIED:
+        return "ERROR_CATEGORY_AUTHORIZATION"
+    if reason in {
+        FailureReason.DEPENDENCY_MISSING,
+        FailureReason.UV_MISSING,
+        FailureReason.PYTHON_UNAVAILABLE,
+    }:
         return "ERROR_CATEGORY_DEPENDENCY"
-    if isinstance(exc, (TimeoutError, ConnectionError)):
+    if reason in {
+        FailureReason.NETWORK_ERROR,
+        FailureReason.UNAVAILABLE,
+        FailureReason.DEADLINE_EXCEEDED,
+        FailureReason.CANCELLED,
+        FailureReason.ABORTED,
+    }:
         return "ERROR_CATEGORY_NETWORK"
-    if isinstance(exc, (FileNotFoundError, IsADirectoryError, NotADirectoryError)):
-        return "ERROR_CATEGORY_CONFIGURATION"
-
-    # AgentCliError deliberately exposes only a bounded error_code.  Keep this duck-typed so the
-    # telemetry module does not add a dependency edge to the CLI error implementation.
-    error_code = getattr(exc, "error_code", None)
-    if isinstance(error_code, str):
-        code = error_code.upper()
-        if code in {"UNAUTHENTICATED", "INVALID_TOKEN", "INVALID_CREDENTIALS", "TOKEN_EXPIRED"}:
-            return "ERROR_CATEGORY_AUTHENTICATION"
-        if code in {"PERMISSION_DENIED", "FORBIDDEN", "UNAUTHORIZED", "NOT_AUTHORIZED"}:
-            return "ERROR_CATEGORY_AUTHORIZATION"
-        if code in {
-            "CANCELLED",
-            "UNAVAILABLE",
-            "DEADLINE_EXCEEDED",
-            "ABORTED",
-            "TIMEOUT",
-            "TIMED_OUT",
-            "NETWORK_ERROR",
-            "CONNECTION_ERROR",
-        }:
-            return "ERROR_CATEGORY_NETWORK"
-        if code in {"INVALID_ARGUMENT", "FAILED_PRECONDITION", "CONFIGURATION_ERROR"}:
-            return "ERROR_CATEGORY_CONFIGURATION"
-
-    if isinstance(exc, PermissionError):
+    if reason in {
+        FailureReason.FILESYSTEM_ERROR,
+        FailureReason.PROJECT_INVALID,
+        FailureReason.PORT_IN_USE,
+        FailureReason.INVALID_ARGUMENT,
+        FailureReason.FAILED_PRECONDITION,
+    }:
         return "ERROR_CATEGORY_CONFIGURATION"
     return "ERROR_CATEGORY_RUNTIME"
 
@@ -351,6 +402,7 @@ def _build_log(
     execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
+    exception: BaseException | None = None,
 ) -> _AgentBricksCliLog:
     """Build a bounded log from static Click metadata and command outcome."""
 
@@ -371,7 +423,26 @@ def _build_log(
         exit_code=command_exit_code,
         error_category=_bounded_error_category(error_category) if command_exit_code else None,
         parameters=invocation.parameters,
+        diagnostics=_failure_details(ctx, exception) if command_exit_code else None,
     )
+
+
+def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int]:
+    details: dict[str, str | int] = {}
+    diagnostics = getattr(_root_obj(ctx), "diagnostics", None)
+    if isinstance(diagnostics, CommandDiagnostics) and isinstance(
+        diagnostics.failure_stage, FailureStage
+    ):
+        details["failure_stage"] = f"FAILURE_STAGE_{diagnostics.failure_stage.value}"
+    reason = _failure_reason(exc)
+    if reason is not None:
+        details["failure_reason"] = f"FAILURE_REASON_{reason.value}"
+    for error in _exception_chain(exc):
+        code = getattr(error, "subprocess_exit_code", None)
+        if type(code) is int and -(1 << 63) <= code < (1 << 63):
+            details["subprocess_exit_code"] = code
+            break
+    return details
 
 
 def _root_obj(ctx: Any) -> Any:

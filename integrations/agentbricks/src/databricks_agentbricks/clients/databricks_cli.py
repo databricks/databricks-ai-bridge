@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.clients import terminal_relay
+from databricks_agentbricks.diagnostics import FailureReason
 from databricks_agentbricks.errors import AgentCliError
 
 # Lines of relayed output a `tee` run keeps for callers that inspect a failure.
@@ -82,7 +83,12 @@ def _databricks(
         # leaks the underlying tool at the customer. The captured stderr still rides along as the
         # hint so debugging isn't lost.
         detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(action or "A Databricks CLI command failed.", hint=detail)
+        raise AgentCliError(
+            action or "A Databricks CLI command failed.",
+            hint=detail,
+            failure_reason=FailureReason.SUBPROCESS_FAILED,
+            subprocess_exit_code=result.returncode,
+        )
     return result
 
 

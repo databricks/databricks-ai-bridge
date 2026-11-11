@@ -184,6 +184,7 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
                 started,
                 exit_code=exit_code,
                 error_category=None if success else self._telemetry_error_category(exc),
+                exception=None if success else exc,
             )
             raise
         else:
@@ -215,6 +216,7 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
         *,
         exit_code: int,
         error_category: Optional[str] = None,
+        exception: BaseException | None = None,
     ) -> None:
         # Lazy import and a final guard keep telemetry entirely outside command behavior.  In
         # particular, an SDK import or a malformed test context must never replace the original
@@ -228,6 +230,7 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
                 execution_time_ms=elapsed_ms,
                 exit_code=exit_code,
                 error_category=error_category,
+                exception=exception,
             )
         except BaseException:
             return

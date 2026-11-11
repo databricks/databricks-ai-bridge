@@ -186,6 +186,14 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
+Failure diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
+instance explicitly; `phase()` retains the innermost failed stage. `AgentCliError.failure_reason`
+and `subprocess_exit_code` preserve known facts without changing the displayed message or process
+exit code. The emitter follows bounded explicit exception causes and allowlists service codes;
+unknown codes and exception text never enter the payload. Deploy the matching
+`proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
+a CLI that emits new diagnostic fields or enum values.
+
 Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
 upload against the fake workspace's receiver. It verifies the FrontendLog payload without workspace

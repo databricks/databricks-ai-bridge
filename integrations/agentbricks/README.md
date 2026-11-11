@@ -125,7 +125,9 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Parameter entries include explicitly supplied options
+nonzero exits, a bounded error category). Failures can also include a code-defined reason, workflow
+stage, and child process exit code. Exception messages, hints, and subprocess output are excluded.
+Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
 values; fallbacks applied only inside command callbacks are not visible to Click. Omitted free-form

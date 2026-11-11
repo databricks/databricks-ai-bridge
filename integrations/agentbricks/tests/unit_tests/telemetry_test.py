@@ -17,6 +17,7 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.group import AgentBricksCommand
 
@@ -247,6 +248,85 @@ def test_keyboard_interrupt_uses_click_abort_exit_code():
     assert telemetry._exit_code(KeyboardInterrupt()) == 1
     assert telemetry._error_category(KeyboardInterrupt()) == "ERROR_CATEGORY_INTERRUPTED"
     assert telemetry._exit_code(SystemExit()) == 0
+
+
+def test_wrapped_failure_preserves_reason_without_exception_text():
+    context = _Context()
+    context.obj.diagnostics = CommandDiagnostics()
+    error = AgentCliError("private message", hint="private hint")
+    error.__cause__ = AgentCliError("private service detail", error_code="PERMISSION_DENIED")
+    with pytest.raises(AgentCliError), context.obj.diagnostics.phase(FailureStage.RUN_LOCAL):
+        raise error
+
+    log = _log(context, exit_code=1, exception=error)
+    assert log["diagnostics"] == {
+        "failure_stage": "FAILURE_STAGE_RUN_LOCAL",
+        "failure_reason": "FAILURE_REASON_PERMISSION_DENIED",
+    }
+    assert telemetry._error_category(error) == "ERROR_CATEGORY_AUTHORIZATION"
+    assert "private" not in json.dumps(log)
+
+
+@pytest.mark.parametrize(
+    ("cause", "reason", "category"),
+    [
+        (ConnectionError("private host"), "NETWORK_ERROR", "NETWORK"),
+        (FileNotFoundError("private path"), "FILESYSTEM_ERROR", "CONFIGURATION"),
+        (ImportError("private module"), "DEPENDENCY_MISSING", "DEPENDENCY"),
+        (
+            AgentCliError("private", failure_reason=FailureReason.UV_MISSING),
+            "UV_MISSING",
+            "DEPENDENCY",
+        ),
+    ],
+)
+def test_failure_classification_follows_explicit_causes(cause, reason, category):
+    error = AgentCliError("Could not start")
+    error.__cause__ = cause
+    assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
+    assert (
+        _log(_Context(), exit_code=1, exception=error)["diagnostics"]["failure_reason"]
+        == f"FAILURE_REASON_{reason}"
+    )
+
+
+def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
+    error = AgentCliError("private", error_code="private-user-defined-code")
+    error.__cause__ = error
+    assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
+    assert "diagnostics" not in _log(_Context(), exit_code=1, exception=error)
+
+
+def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):
+    records = []
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: records.append(_log(ctx, **kwargs))
+    )
+
+    @click.command(cls=AgentBricksCommand)
+    def run():
+        raise AgentCliError(
+            "private child output",
+            failure_reason=FailureReason.SUBPROCESS_FAILED,
+            subprocess_exit_code=17,
+        )
+
+    result = CliRunner().invoke(run)
+    assert result.exit_code == 1
+    assert records[0]["exit_code"] == 1
+    assert records[0]["diagnostics"] == {
+        "failure_reason": "FAILURE_REASON_SUBPROCESS_FAILED",
+        "subprocess_exit_code": 17,
+    }
+    assert "private" not in json.dumps(records)
+
+
+def test_outer_phase_preserves_the_inner_failure_stage():
+    diagnostics = CommandDiagnostics()
+    with pytest.raises(ValueError), diagnostics.phase(FailureStage.PREFLIGHT):
+        with diagnostics.phase(FailureStage.PROJECT):
+            raise ValueError("invalid project")
+    assert diagnostics.failure_stage == FailureStage.PROJECT
 
 
 def test_existing_workspace_client_receives_exact_transport_request(monkeypatch):

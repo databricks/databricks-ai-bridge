@@ -12,6 +12,8 @@ from typing import Optional
 import click
 from rich.console import Console
 
+from databricks_agentbricks.diagnostics import FailureReason
+
 # Error codes indicating that a preview API is not deployed to the workspace's region or shard.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED"})
 
@@ -58,11 +60,19 @@ class AgentCliError(click.ClickException):
     """A user-facing CLI error rendered without a Python traceback."""
 
     def __init__(
-        self, message: str, *, error_code: Optional[str] = None, hint: Optional[str] = None
+        self,
+        message: str,
+        *,
+        error_code: Optional[str] = None,
+        hint: Optional[str] = None,
+        failure_reason: FailureReason | None = None,
+        subprocess_exit_code: int | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
+        self.failure_reason = failure_reason
+        self.subprocess_exit_code = subprocess_exit_code
 
     def show(self, file=None) -> None:
         if _OUTPUT_MODE == "json":
