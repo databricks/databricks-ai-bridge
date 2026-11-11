@@ -104,8 +104,10 @@ def test_supported_requires_a_terminal_on_both_streams(monkeypatch):
 
 
 def test_failed_pty_output_is_available_without_spinner_text(capfd):
-    result = _run("import sys; print('Missing dependency'); sys.exit(3)")
+    result = _run("import sys, time; time.sleep(0.8); print('Missing dependency'); sys.exit(3)")
     assert result.returncode == 3
     assert "Missing dependency" in result.stdout
     assert "~ waiting" not in result.stdout
-    assert "Missing dependency" in capfd.readouterr().out
+    displayed = capfd.readouterr().out
+    assert "~ waiting" in displayed
+    assert "Missing dependency" in displayed
