@@ -476,8 +476,7 @@ def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.
 def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     # No stores + no auth: obj.client() would raise, but with nothing bound it's never called (and
     # local tracing needs no workspace), so dev still runs the agent locally offline.
-    from databricks_agentbricks.diagnostics import FailureStage
-from databricks_agentbricks.errors import AgentCliError
+    from databricks_agentbricks.errors import AgentCliError
 
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
