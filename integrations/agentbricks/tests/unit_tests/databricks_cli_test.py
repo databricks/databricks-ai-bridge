@@ -133,3 +133,52 @@ def test_databricks_with_ready_probe_uses_the_readiness_runner(monkeypatch):
     dc._databricks(["apps", "run-local"], "prof", ready_probe=probe, on_ready=on_ready)
     assert seen["cmd"] == ["databricks", "apps", "run-local", "--profile", "prof"]
     assert seen["probe"] is probe and seen["on_ready"] is on_ready
+
+
+def test_streamed_failure_keeps_bounded_output_and_stream_destinations(capfd):
+    result = dc._run_until_ready(
+        _python(
+            "import sys; print('out'); print('x' * 20000, file=sys.stderr); print('Missing dependency', file=sys.stderr); sys.exit(3)"
+        ),
+        cwd=None,
+        env=None,
+        probe=lambda: False,
+        on_ready=None,
+    )
+    output = capfd.readouterr()
+    assert output.out == "out\n"
+    assert "Missing dependency" in output.err
+    assert result.stdout == "out\n"
+    assert result.stderr == "Missing dependency\n"
+    assert result.returncode == 3
+
+
+def test_descendant_holding_pipe_open_does_not_delay_completion():
+    import time
+
+    start = time.monotonic()
+    result = dc._run_until_ready(
+        _python(
+            "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)']); print('parent done', flush=True)"
+        ),
+        cwd=None,
+        env=None,
+        probe=lambda: False,
+        on_ready=None,
+    )
+    assert time.monotonic() - start < 2.5
+    assert "parent done" in result.stdout
+
+
+def test_closed_output_destination_keeps_draining_child():
+    from databricks_agentbricks.clients.output_tail import StreamRelay
+
+    with dc.subprocess.Popen(
+        _python("print('x' * 1000000)"), stdout=dc.subprocess.PIPE, bufsize=0
+    ) as proc:
+        relay = StreamRelay(proc.stdout, -1)
+        try:
+            assert proc.wait(timeout=5) == 0
+        finally:
+            proc.kill()
+            relay.finish()

@@ -24,6 +24,8 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Optional
 
+from databricks_agentbricks.clients.output_tail import OutputTail
+
 # Seconds without output before the status line appears.
 _QUIET_AFTER_S = 1.0
 # Seconds between select() wakeups: how often the status line animates and the probe can run.
@@ -127,13 +129,14 @@ def run(
         signal.signal(signal.SIGWINCH, previous_winch)
         os.close(master)
         proc.wait()
-    return subprocess.CompletedProcess(cmd, proc.returncode)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout=relay.tail.text())
 
 
 class _Relay:
     """Copies the pseudo-terminal's output to our stdout and owns the in-place status line."""
 
     def __init__(self, master: int) -> None:
+        self.tail = OutputTail()
         self._master = master
         self.closed = False
         self._status_shown = False
@@ -159,6 +162,7 @@ class _Relay:
             self.closed = True
             return
         self.clear_status()
+        self.tail.append(data)
         _write(data)
         self._last_output = time.monotonic()
         self._at_line_start = data.endswith(b"\n")
