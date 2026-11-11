@@ -175,12 +175,12 @@ def _run_until_ready(
             raise
         finally:
             proc.wait()
+            if on_exit is not None:
+                on_exit(proc.returncode)
             if stdout is not None:
                 stdout.finish()
             if stderr is not None:
                 stderr.finish()
-            if on_exit is not None:
-                on_exit(proc.returncode)
     return subprocess.CompletedProcess(
         cmd,
         proc.returncode,

@@ -28,7 +28,7 @@ sys.exit(130)
 """
 
 _PARENT = """
-import json, pathlib, sys
+import json, os, pathlib, signal, sys
 import click
 from types import SimpleNamespace
 from databricks_agentbricks.cli import telemetry
@@ -38,6 +38,10 @@ from databricks_agentbricks.clients.local_ports import accepts_connections
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 root = pathlib.Path(sys.argv[1])
 facts = CommandDiagnostics()
+if sys.argv[3] == 'cleanup':
+    def interrupted_finish(self):
+        os.kill(os.getpid(), signal.SIGINT)
+    databricks_cli.StreamRelay.finish = interrupted_finish
 def runner(args, profile, **kwargs):
     def probe():
         port = root / 'port'
@@ -78,8 +82,18 @@ def _await_file(path, process):
 
 
 @pytest.mark.parametrize("listening", [False, True])
-@pytest.mark.parametrize("relay", [False, True])
-@pytest.mark.parametrize("target", ["group", "child", "exit130"])
+@pytest.mark.parametrize(
+    "relay,target",
+    [
+        (False, "group"),
+        (True, "group"),
+        (False, "child"),
+        (True, "child"),
+        (False, "exit130"),
+        (True, "exit130"),
+        (False, "cleanup"),
+    ],
+)
 def test_local_run_preserves_parent_and_child_interrupt_facts(tmp_path, listening, relay, target):
     if sys.platform == "win32" and (relay or target != "exit130"):
         pytest.skip(
@@ -92,7 +106,7 @@ def test_local_run_preserves_parent_and_child_interrupt_facts(tmp_path, listenin
             _PARENT,
             str(tmp_path),
             "listening" if listening else "starting",
-            "relay" if relay else "stream",
+            "cleanup" if target == "cleanup" else "relay" if relay else "stream",
             _CHILD,
         ],
         start_new_session=sys.platform != "win32",
@@ -116,16 +130,16 @@ def test_local_run_preserves_parent_and_child_interrupt_facts(tmp_path, listenin
         facts = result["facts"]
         assert "diagnostics" not in log
         assert facts["app_listened"] is listening
-        assert facts["parent_interrupted"] is (target == "group")
+        assert facts["parent_interrupted"] is (target in {"group", "cleanup"})
         assert log["exit_code"] == 1
-        if target == "group":
+        if target in {"group", "cleanup"}:
             assert log["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
             assert "failure_message" not in log
         else:
             assert log["error_category"] == "ERROR_CATEGORY_RUNTIME"
             assert "startup diagnostic" in log["failure_message"]
             assert "synthetic-secret" not in log["failure_message"]
-        if target == "exit130":
+        if target in {"exit130", "cleanup"}:
             assert facts["subprocess_exit_code"] == 130
         else:
             assert facts["subprocess_exit_code"] in (-signal.SIGINT, 130)
