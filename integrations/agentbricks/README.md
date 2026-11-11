@@ -133,10 +133,10 @@ may remain in service responses or application output.
 It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
 regionally only where customer logging and encryption policies permit. Error text is omitted for
 parser errors and interruptions. Collection requires Legal approval and schema deployment.
-For `dev`, the record also distinguishes environment creation from reuse, whether the agent's TCP
-port ever accepted a connection, and the time from launching run-local to that connection. Listening
-does not establish that model or tool calls work. These facts accompany the existing completion
-event, including interruptions; a killed process or unavailable upload can still leave no event.
+For `dev`, failure text can include a bounded tail of child output. With one output stream redirected,
+the terminal stream is inherited unchanged and only the redirected stream is retained. Output tails
+containing a PEM header are omitted to avoid retaining a private key after its header is truncated.
+Startup milestones remain internal; a killed process or unavailable upload can still leave no event.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
