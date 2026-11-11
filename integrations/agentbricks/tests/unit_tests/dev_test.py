@@ -15,6 +15,7 @@ from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
+from databricks_agentbricks.diagnostics import FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
@@ -23,7 +24,7 @@ from databricks_agentbricks.projects.config import write_project_metadata
 
 @pytest.mark.parametrize("listened", [False, True])
 @pytest.mark.parametrize("existing_venv", [False, True])
-def test_dev_telemetry_records_startup_and_environment_decisions(
+def test_dev_failure_text_omits_internal_startup_and_environment_facts(
     tmp_path, monkeypatch, listened, existing_venv
 ):
     (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
@@ -33,7 +34,9 @@ def test_dev_telemetry_records_startup_and_environment_decisions(
     monkeypatch.setattr(
         telemetry,
         "emit_command",
-        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
     )
 
     def failed_child(*args, on_ready, **kwargs):
@@ -47,14 +50,15 @@ def test_dev_telemetry_records_startup_and_environment_decisions(
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
     assert result.exit_code == 1
     assert len(records) == 1
-    facts = records[0]["diagnostics"]
-    assert facts["app_listened"] is listened
-    assert facts["prepare_environment"] is not existing_venv
-    assert facts["subprocess_exit_code"] == 17
-    assert facts["failure_stage"] == "FAILURE_STAGE_RUN_LOCAL"
-    assert "ModuleNotFoundError: missing_module" in facts["failure_message"]
+    log, facts = records[0]
+    assert "diagnostics" not in log
+    assert facts.app_listened is listened
+    assert facts.prepare_environment is not existing_venv
+    assert facts.subprocess_exit_code == 17
+    assert facts.failure_stage == FailureStage.RUN_LOCAL
+    assert "ModuleNotFoundError: missing_module" in log["failure_message"]
     assert "synthetic-secret" not in str(records)
-    assert ("time_to_listen_ms" in facts) is listened
+    assert (facts.time_to_listen_ms is not None) is listened
     assert str(tmp_path) not in str(records)
 
 
@@ -63,16 +67,18 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     monkeypatch.setattr(
         telemetry,
         "emit_command",
-        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
     )
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
     assert result.exit_code == 1
-    facts = records[0]["diagnostics"]
-    assert facts["outcome"] == "OUTCOME_FAILED"
-    assert facts["app_listened"] is False
-    assert facts["failure_stage"] == "FAILURE_STAGE_PROJECT"
-    assert facts["failure_message"]
-    assert "failure_reason" not in facts
+    log, facts = records[0]
+    assert "diagnostics" not in log
+    assert facts.app_listened is False
+    assert facts.failure_stage == FailureStage.PROJECT
+    assert log["failure_message"]
+    assert "failure_reason" not in log
 
 
 def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):
@@ -81,7 +87,9 @@ def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):
     monkeypatch.setattr(
         telemetry,
         "emit_command",
-        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
     )
 
     def interrupted_child(*args, on_ready, **kwargs):
@@ -92,8 +100,11 @@ def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
     assert result.exit_code == 1
     assert len(records) == 1
-    assert records[0]["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
-    assert records[0]["diagnostics"]["app_listened"] is True
+    log, facts = records[0]
+    assert log["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
+    assert facts.app_listened is True
+    assert "diagnostics" not in log
+    assert "failure_message" not in log
 
 
 def _write_agent_manifest(
@@ -465,7 +476,8 @@ def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.
 def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     # No stores + no auth: obj.client() would raise, but with nothing bound it's never called (and
     # local tracing needs no workspace), so dev still runs the agent locally offline.
-    from databricks_agentbricks.errors import AgentCliError
+    from databricks_agentbricks.diagnostics import FailureStage
+from databricks_agentbricks.errors import AgentCliError
 
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
