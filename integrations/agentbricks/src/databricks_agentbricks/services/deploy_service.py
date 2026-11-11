@@ -686,10 +686,9 @@ class DeployService:
             memory_store_name, session_store_name, experiment_name = (
                 self._project_resolver.resource_bindings(source_dir)
             )
+            client = self._api_client_provider.get()
         name = prepared.name
         instance_count = request.instance_count
-        # The shared provider stays lazy through every local project/auth validation above.
-        client = self._api_client_provider.get()
         ctx = ResourceContext(
             project=ProjectContext(
                 source_dir=source_dir, name=name, agent_project=prepared.agent_project
@@ -744,7 +743,8 @@ class DeployService:
         )
         tool_plan, env = rollout.tool_plan, rollout.env
         if tool_plan is not None:
-            self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
+            with timer(FailureStage.ROLLOUT):
+                self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
 
         # 6. Grants remain best-effort. Resolve the App identity once and pass it with each
         #    reconciled store identifier; store clients need no knowledge of Apps.

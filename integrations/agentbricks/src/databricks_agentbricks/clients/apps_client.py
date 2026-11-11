@@ -209,8 +209,18 @@ class AppsClient:
             detail = (
                 _failure_detail(result).splitlines()[-1:] if relayed else [_failure_detail(result)]
             )
-            raise AgentCliError(action, hint="\n".join([*detail, _app_busy_hint(name)]))
-        raise AgentCliError(action, hint=None if relayed else (_failure_detail(result) or None))
+            raise AgentCliError(
+                action,
+                hint="\n".join([*detail, _app_busy_hint(name)]),
+                failure_reason=FailureReason.SUBPROCESS_FAILED,
+                subprocess_exit_code=result.returncode,
+            )
+        raise AgentCliError(
+            action,
+            hint=None if relayed else (_failure_detail(result) or None),
+            failure_reason=FailureReason.SUBPROCESS_FAILED,
+            subprocess_exit_code=result.returncode,
+        )
 
     def _get_json(self, name: str) -> Optional[dict]:
         result = self._run(
