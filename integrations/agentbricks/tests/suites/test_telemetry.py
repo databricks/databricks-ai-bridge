@@ -33,7 +33,8 @@ def test_telemetry(
     log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
     assert log["command_path"] == "agentbricks init"
     assert log["exit_code"] == 0
-    assert log["diagnostics"]["outcome"] == "OUTCOME_SUCCEEDED"
+    assert "failure_message" not in log
+    assert "diagnostics" not in log
 
 
 def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> TelemetryUpload:
@@ -60,6 +61,7 @@ def test_failure_telemetry(
     assert upload.authorization == "Bearer fake-token"
     (proto_log,) = upload.body["protoLogs"]
     log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
-    assert log["diagnostics"]["outcome"] == "OUTCOME_FAILED"
-    assert "already exists" in log["diagnostics"]["failure_message"]
+    assert log["exit_code"] == 1
+    assert "diagnostics" not in log
+    assert "already exists" in log["failure_message"]
     assert "synthetic-secret" not in proto_log
