@@ -633,7 +633,7 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
-| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled or always-on runs; active runs continue and manual runs remain available. |
 | [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
 | [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
@@ -650,7 +650,7 @@ agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [opt
 | `--model` | string | - | no | Model service used for Dreamer distillation. |
 | `--display-name` | string | - | no | Optional human-readable pipeline name. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
-| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | `manual` | no | How runs start: only when you start one, or also automatically about every 24 hours. |
+| `--trigger <manual\|scheduled\|always-on>` | `manual` \| `scheduled` \| `always-on` | `manual` | no | How runs start: only when you start one, also automatically about every 24 hours, or always-on (distill as sessions update, plus daily maintenance). |
 
 ```bash
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
@@ -663,6 +663,17 @@ Create a pipeline that also runs automatically about every 24 hours:
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
   --trigger scheduled
 ```
+
+Create an always-on pipeline, which distills each actor's sessions as they update and runs
+maintenance daily:
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --trigger always-on
+```
+
+`always-on` requires always-on extraction to be enabled in the workspace; otherwise the API
+returns `FEATURE_DISABLED`.
 
 ##### `agentbricks memory pipeline list`
 
@@ -693,7 +704,7 @@ agentbricks memory pipeline update NAME [options]
 | --- | --- | --- | --- | --- |
 | `--display-name` | string | - | no | New human-readable pipeline name. |
 | `--model` | string | - | no | Model service for distillation; empty string clears the override. |
-| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | - | no | How runs start: only when you start one, or also automatically about every 24 hours. |
+| `--trigger <manual\|scheduled\|always-on>` | `manual` \| `scheduled` \| `always-on` | - | no | How runs start: only when you start one, also automatically about every 24 hours, or always-on (distill as sessions update, plus daily maintenance). |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
 
 Load complex instructions from a UTF-8 file (also supported by `create`):
@@ -707,8 +718,9 @@ Instructions are sent as `dreamer_policy.instructions` with that leaf field in t
 `--model ""` clears the override. Create and update send only `dreamer_policy.model`;
 updates use the `dreamer_policy.model` field mask. There is no legacy top-level model fallback.
 List and detail views accept either model location, preferring the nested value when present.
-`--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
-`scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
+`--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, `scheduled`
+maps to `SCHEDULED`, and `always-on` maps to `ALWAYS_ON`. Omit the flag to preserve the current
+trigger.
 
 ##### `agentbricks memory pipeline pause`
 
@@ -716,7 +728,7 @@ List and detail views accept either model location, preferring the nested value 
 agentbricks memory pipeline pause NAME
 ```
 
-Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled or always-on runs. Active runs continue;
 manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
 Returns an error if the pipeline is already manual-only (paused).
 
@@ -728,7 +740,9 @@ agentbricks memory pipeline resume NAME
 
 Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
 This also enables scheduling for a pipeline originally created as manual-only.
-Returns an error if the pipeline is already scheduled (resumed).
+Returns an error if the pipeline is already scheduled or always-on (resumed), so `resume`
+never downgrades an always-on pipeline. To return a paused pipeline to always-on, use
+`update --trigger always-on`.
 Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`

@@ -430,7 +430,8 @@ def test_update_memory_pipeline_model_and_instructions(workspace_client, model, 
 
 
 @pytest.mark.parametrize(
-    "trigger,expected", [("manual", "MANUAL_ONLY"), ("scheduled", "SCHEDULED")]
+    "trigger,expected",
+    [("manual", "MANUAL_ONLY"), ("scheduled", "SCHEDULED"), ("always-on", "ALWAYS_ON")],
 )
 @pytest.mark.parametrize("combined", [False, True])
 @mock.patch("databricks.sdk.WorkspaceClient")
@@ -468,12 +469,14 @@ def test_memory_pipeline_trigger_maps_to_api_enum(workspace_client):
         memory_store="m", session_store="s", trigger="scheduled", instructions="Only durable facts."
     )
     c.create_memory_pipeline(memory_store="m", session_store="s", trigger="manual")
+    c.create_memory_pipeline(memory_store="m", session_store="s", trigger="always-on")
     with pytest.raises(AgentCliError, match="hourly"):
         c.create_memory_pipeline(memory_store="m", session_store="s", trigger="hourly")
 
     assert [call.kwargs["body"]["dreamer_policy"] for call in do.call_args_list] == [
         {"trigger": "SCHEDULED", "instructions": "Only durable facts."},
         {"trigger": "MANUAL_ONLY"},
+        {"trigger": "ALWAYS_ON"},
     ]
 
 
