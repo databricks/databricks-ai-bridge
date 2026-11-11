@@ -1,5 +1,7 @@
 """Credential examples are synthetic; scrubbing does not make error text non-sensitive."""
 
+import time
+
 import pytest
 
 from databricks_agentbricks.cli.failure_text import MAX_FAILURE_BYTES, scrub_failure_text
@@ -25,6 +27,14 @@ from databricks_agentbricks.cli.failure_text import MAX_FAILURE_BYTES, scrub_fai
 )
 def test_credentials_are_scrubbed(value):
     result = scrub_failure_text("Connection failed\n" + value)
+    assert "synthetic-secret" not in result
+    assert "Connection failed" in result
+    assert "[REDACTED]" in result
+
+
+@pytest.mark.parametrize("scheme", ["postgres", "jdbc:postgresql", "ssh", "redis+tls"])
+def test_url_credentials_are_scrubbed_for_any_scheme(scheme):
+    result = scrub_failure_text(f"Connection failed: {scheme}://name:synthetic-secret@host/db")
     assert "synthetic-secret" not in result
     assert "Connection failed" in result
     assert "[REDACTED]" in result
@@ -70,6 +80,16 @@ def test_email_is_scrubbed_without_losing_the_error():
     assert scrub_failure_text("Access denied for private-user@example.com") == (
         "Access denied for [REDACTED_EMAIL]"
     )
+
+
+@pytest.mark.parametrize("suffix", ["", "@localhost", "@example.com"])
+def test_long_identifier_does_not_delay_failure_reporting(suffix):
+    start = time.monotonic()
+    result = scrub_failure_text("a" * 60000 + suffix)
+    assert time.monotonic() - start < 1.0
+    assert len(result.encode()) <= MAX_FAILURE_BYTES
+    if suffix == "@example.com":
+        assert result == "[REDACTED_EMAIL]"
 
 
 def test_single_component_endpoint_path_is_preserved():
