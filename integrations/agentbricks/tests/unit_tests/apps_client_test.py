@@ -485,3 +485,20 @@ def test_create_blocks_by_default_for_other_callers():
     AppsClient("prof", runner=_runner(calls)).create("agent-bricks-myapp", None)
 
     assert calls[0][0] == ["apps", "create", "agent-bricks-myapp"]
+
+
+@pytest.mark.parametrize("detail", ["private failure", "Another operation is in progress"])
+def test_deploy_retains_the_final_child_exit_code(detail):
+    import subprocess
+
+    from databricks_agentbricks.diagnostics import FailureReason
+
+    client = AppsClient(
+        None,
+        runner=lambda *a, **kw: subprocess.CompletedProcess([], 17, detail, ""),
+        sleep=lambda _: None,
+    )
+    with pytest.raises(AgentCliError) as raised:
+        client.deploy("agent-bricks-demo", "/Workspace/demo")
+    assert raised.value.subprocess_exit_code == 17
+    assert raised.value.failure_reason == FailureReason.SUBPROCESS_FAILED
