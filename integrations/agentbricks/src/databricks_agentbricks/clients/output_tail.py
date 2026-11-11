@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import codecs
 import os
+import re
 import threading
 import time
 from typing import IO
 
 # Leave room for the enclosing error message in the 4096-byte telemetry field.
 _MAX_TAIL_BYTES = 3072
-_PEM_PREFIX = b"-----BEGIN "
+_PEM_PREFIX = "-----BEGIN "
+_REDACTION_CONTEXT = re.compile(r"""(?i)[:={"'\[]|bearer|basic""")
 _DRAIN_GRACE_S = 0.25
 
 
@@ -17,27 +20,33 @@ class OutputTail:
     def __init__(self) -> None:
         self._data = b""
         self._truncated = False
-        self._marker_suffix = b""
+        self._marker_suffix = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pem_seen = False
-        self._structured_seen = False
+        self._context_seen = False
 
     def append(self, data: bytes) -> None:
         if self._pem_seen:
             return
-        scanned = self._marker_suffix + data
+        self._context_seen |= b"\x1b" in data
+        # Match the printable text seen by the downstream scrubber before losing context.
+        normalized = "".join(
+            c for c in self._decoder.decode(data) if c in "\n\t" or c.isprintable()
+        )
+        scanned = self._marker_suffix + normalized
         if _PEM_PREFIX in scanned:
             # Omit PEM-bearing diagnostics even when retention would discard their opening marker.
             self._pem_seen = True
             self._data = b""
             return
         self._marker_suffix = scanned[-(len(_PEM_PREFIX) - 1) :]
-        self._structured_seen |= any(marker in data for marker in (b"{", b"[", b'"', b"'"))
+        self._context_seen |= _REDACTION_CONTEXT.search(scanned) is not None
         self._truncated |= len(self._data) + len(data) > _MAX_TAIL_BYTES
         self._data = (self._data + data)[-_MAX_TAIL_BYTES:]
 
     def text(self) -> str:
-        # Quoted or structured values can outlive their identifying key when earlier bytes are lost.
-        if self._pem_seen or (self._truncated and self._structured_seen):
+        # Credential values can outlive their identifying key or auth scheme when bytes are lost.
+        if self._pem_seen or (self._truncated and self._context_seen):
             return "[REDACTED]"
         data = self._data
         if self._truncated:
