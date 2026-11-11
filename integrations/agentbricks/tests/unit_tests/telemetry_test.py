@@ -718,6 +718,18 @@ def test_default_free_form_and_unresolved_values_are_omitted():
     assert "parameters" not in _log(context, exit_code=0)
 
 
+def test_callback_error_redacts_url_credentials_from_uploaded_message(monkeypatch):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    error = AgentCliError("Unsupported source type: ssh://user:synthetic-secret@host/db")
+    telemetry.emit_command(context, exit_code=1, execution_time_ms=1, exception=error)
+    assert len(api.calls) == 1
+    payload = json.dumps(api.calls[0][2])
+    assert "synthetic-secret" not in payload
+    assert "Unsupported source type" in payload
+
+
 @pytest.mark.parametrize(
     "source", [ParameterSource.ENVIRONMENT, ParameterSource.DEFAULT_MAP, ParameterSource.PROMPT]
 )
