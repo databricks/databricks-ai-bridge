@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 import tomlkit
 from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
-from tomlkit.items import Array
+from tomlkit.items import Array, Table
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.types import (
@@ -467,11 +467,14 @@ def _tool_table(spec: ToolSpec) -> Any:
     return table
 
 
-def _tool_inline_table(spec: ToolSpec) -> Any:
+def _tool_inline_table(value: Any) -> Any:
     # For hand-written `tools = [{...}]` arrays, where a `[[tools]]` table can't go.
-    table = tomlkit.inline_table()
-    table.update(_tool_table(spec).unwrap())
-    return table
+    if isinstance(value, Table):
+        table = tomlkit.inline_table()
+        for key, item in value.value.items():
+            table[key] = _tool_inline_table(item)
+        return table
+    return value
 
 
 def _tool_fields(spec: ToolSpec) -> dict[str, str]:
@@ -732,7 +735,7 @@ class AgentProject:
         elif not hasattr(raw_tools, "append"):
             raise AgentCliError("agent.toml tools must be an array of tables.")
         if isinstance(raw_tools, Array):
-            raw_tools.append(_tool_inline_table(spec))
+            raw_tools.append(_tool_inline_table(_tool_table(spec)))
         else:
             raw_tools.append(_tool_table(spec))
         self.tools.append(spec)

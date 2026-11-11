@@ -791,6 +791,12 @@ def test_add_into_hand_written_inline_tools_array(tmp_path: pathlib.Path, existi
         *before,
         ToolSpec.mcp("web_search", service="system.ai.web_search", auth="user"),
     ]
+    text = manifest.read_text()
+    if existing.startswith("tools = [{"):
+        assert (
+            '{id = "web_search", auth = "user", source = {kind = "mcp", '
+            'service = "system.ai.web_search"}}' in text
+        )
     assert _invoke(project, "add", "mcp", "system.ai.web_search").exit_code == 0
 
 
