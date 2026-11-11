@@ -17,7 +17,12 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import telemetry
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureReason,
+    FailureStage,
+    Readiness,
+)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.group import AgentBricksCommand
 
@@ -892,3 +897,15 @@ def test_parameter_entry_preserves_false_boolean_value():
     )
     entry = telemetry._ParameterEntry.from_option("agentbricks init.existing", option, False)
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
+
+
+def test_readiness_telemetry_preserves_only_bounded_observations():
+    context = _Context()
+    context.obj.diagnostics = CommandDiagnostics(
+        readiness=Readiness.UNREACHABLE, probe_http_status=None
+    )
+    assert _log(context, exit_code=0)["diagnostics"] == {"readiness": "READINESS_UNREACHABLE"}
+    context.obj.diagnostics.probe_http_status = 503
+    assert _log(context, exit_code=0)["diagnostics"]["probe_http_status"] == 503
+    context.obj.diagnostics.probe_http_status = 999
+    assert "probe_http_status" not in _log(context, exit_code=0)["diagnostics"]

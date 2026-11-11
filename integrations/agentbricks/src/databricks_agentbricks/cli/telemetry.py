@@ -23,7 +23,12 @@ from typing import Any
 import click
 from click.core import ParameterSource
 
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureReason,
+    FailureStage,
+    Readiness,
+)
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
@@ -439,6 +444,13 @@ def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int
             value = getattr(diagnostics, name)
             if type(value) is bool:
                 details[name] = value
+        if isinstance(diagnostics.readiness, Readiness):
+            details["readiness"] = f"READINESS_{diagnostics.readiness.value}"
+        if (
+            type(diagnostics.probe_http_status) is int
+            and 100 <= diagnostics.probe_http_status <= 599
+        ):
+            details["probe_http_status"] = diagnostics.probe_http_status
         for name in ("time_to_listen_ms", "subprocess_exit_code"):
             value = getattr(diagnostics, name)
             if type(value) is int and -(1 << 63) <= value < (1 << 63):

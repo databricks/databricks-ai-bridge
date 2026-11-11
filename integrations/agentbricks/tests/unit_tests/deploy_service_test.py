@@ -33,6 +33,12 @@ from databricks_agentbricks.clients.apps_user_auth_client import (
     AppUserScopeUpdatePlan,
 )
 from databricks_agentbricks.clients.tracing_client import TraceTable, TraceTableKind
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureReason,
+    FailureStage,
+    Readiness,
+)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.app_manifest import AppManifest
@@ -1802,7 +1808,12 @@ def test_wait_reports_the_apps_failure_message(deployment_fixture, tmp_path):
 
 # --- readiness: wait until the App answers ---------------------------------------------------
 
-_PROBE_DETAIL = {"answered": "HTTP 200", "booting": "HTTP 502", "unverifiable": "HTTP 403"}
+_PROBE_DETAIL = {
+    "answered": "HTTP 200",
+    "booting": "HTTP 502",
+    "unverifiable": "HTTP 403",
+    "unreachable": "connection refused",
+}
 _SUCCEEDED_APP = {
     "url": "https://demo.example",
     "compute_status": {"state": "ACTIVE"},
@@ -1823,7 +1834,11 @@ class _ScriptedProbe:
         if self._on_probe is not None:
             self._on_probe()
         outcome = self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
-        return ProbeResult(outcome, _PROBE_DETAIL[outcome])
+        return ProbeResult(
+            outcome,
+            _PROBE_DETAIL[outcome],
+            {"answered": 200, "booting": 502, "unverifiable": 403}.get(outcome),
+        )
 
 
 def test_deploy_waits_for_the_app_to_answer_after_rollout_and_grants(
@@ -1910,7 +1925,7 @@ def test_deploy_succeeds_with_a_note_when_the_app_cant_be_checked(
     assert result.ready is None
     (note,) = [n for n in _notes(deployment_fixture) if n.startswith("Couldn't check")]
     assert note.startswith("Couldn't check the agent answers: ")
-    assert note.endswith(". It may return 502 for a few seconds.")
+    assert note.endswith(". The deployment completed, but readiness is unverified.")
     assert not any(
         c.args[0].startswith("Waiting for the agent")
         for c in deployment_fixture.reporter.progress.call_args_list
@@ -1950,3 +1965,61 @@ def test_server_wait_treats_an_uncheckable_app_as_deployed_and_says_so(
 
     assert (result.status, result.ready) == ("succeeded", None)
     assert any(n.startswith("Couldn't check the agent answers") for n in _notes(deployment_fixture))
+
+
+@pytest.mark.parametrize("outcome", ["booting", "unreachable"])
+def test_readiness_timeout_retains_observation_without_misreporting_network_failure(
+    deployment_fixture, tmp_path, outcome
+):
+    diagnostics = CommandDiagnostics()
+    clock = _Clock()
+    service = _service_with(
+        deployment_fixture, clock, diagnostics=diagnostics, app_probe=_ScriptedProbe(outcome)
+    )
+    if outcome == "booting":
+        with pytest.raises(AgentCliError) as raised:
+            service.deploy(_request(tmp_path))
+        assert raised.value.failure_reason == FailureReason.APP_READINESS_TIMEOUT
+        assert diagnostics.failure_stage == FailureStage.READY
+        assert diagnostics.readiness == Readiness.BOOTING
+        assert diagnostics.probe_http_status == 502
+    else:
+        assert service.deploy(_request(tmp_path)).ready is None
+        assert diagnostics.failure_stage is None
+        assert diagnostics.readiness == Readiness.UNREACHABLE
+        assert diagnostics.probe_http_status is None
+    assert sum(clock.sleeps) == 300
+
+
+def test_network_recovery_can_confirm_readiness(deployment_fixture, tmp_path):
+    diagnostics = CommandDiagnostics()
+    service = _service_with(
+        deployment_fixture,
+        _Clock(),
+        diagnostics=diagnostics,
+        app_probe=_ScriptedProbe("unreachable", "booting", "answered"),
+    )
+    assert service.deploy(_request(tmp_path)).ready is True
+    assert diagnostics.readiness == Readiness.ANSWERED
+    assert diagnostics.probe_http_status == 200
+    assert diagnostics.failure_stage is None
+
+
+@pytest.mark.parametrize(
+    ("collaborator", "method", "stage"),
+    [
+        ("resolver", "load", FailureStage.PREFLIGHT),
+        ("app", "start_compute", FailureStage.APP_START),
+        ("memory", "reconcile", FailureStage.RECONCILE),
+        ("app", "roll_out", FailureStage.ROLLOUT),
+    ],
+)
+def test_deploy_preserves_the_failed_phase(
+    deployment_fixture, tmp_path, collaborator, method, stage
+):
+    diagnostics = CommandDiagnostics()
+    getattr(getattr(deployment_fixture, collaborator), method).side_effect = AgentCliError("failed")
+    service = _service_with(deployment_fixture, _Clock(), diagnostics=diagnostics)
+    with pytest.raises(AgentCliError):
+        service.deploy(_request(tmp_path))
+    assert diagnostics.failure_stage == stage

@@ -1571,3 +1571,9 @@ sync/streaming/background transport selector is manual.
 Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Deployment diagnostics record the failed workflow phase and the last readiness observation
+(answered, booting, unverifiable, or unreachable), with the HTTP status when available. Network
+errors are retried within the existing readiness budget; if the final probe remains unreachable,
+the deployed app has unverified readiness rather than a reported application failure. These
+observations do not validate model or tool behavior.
