@@ -127,8 +127,9 @@ The CLI sends best effort command usage telemetry after leaf commands. Its log r
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Failures can also include a workflow stage, child exit
 code, and up to 4096 UTF-8 bytes of error text. Error text includes exception messages and available
-failed subprocess output, with recognized credential formats scrubbed. This is best effort;
-remaining text may contain customer content such as project paths or service response details.
+failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
+This follows the Asset Bundles minimization pattern and is best effort; other customer content
+may remain in service responses or application output.
 It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
 regionally only where customer logging and encryption policies permit. Error text is omitted for
 parser errors and interruptions. Collection requires Legal approval and schema deployment.

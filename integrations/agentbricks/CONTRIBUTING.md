@@ -192,8 +192,11 @@ and `subprocess_exit_code` preserve known facts without changing the displayed m
 exit code. The emitter follows bounded explicit exception causes and allowlists service codes for the
 centralized `error_category`. It sends no exhaustive failure-reason enum. `failure_message` carries
 up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
-credential scrubbing; this remains sensitive, labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`.
-Do not add raw text to centralizable fields. LPP approval is required before collection ships.
+credential, path, and email scrubbing; this remains sensitive, labeled
+`DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
+Do not add raw text to centralizable fields. Privacy review is tracked in
+[LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
+[LPP-5543](https://databricks.atlassian.net/browse/LPP-5543); collection awaits that review.
 Regional logging and CMK policies can remove the text entirely; central analytics must use the
 remaining typed facts and account for missing text. Deploy the matching
 `proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
