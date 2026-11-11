@@ -65,8 +65,8 @@ env:
     port_in_use = Mock(return_value=False)
     free_port = Mock(return_value=54321)
 
-    # Hermetic by default: the uv preflight is exercised by the preflight tests below, which route
-    # it through the real check with an injected ``which``.
+    # Hermetic by default: the uv/Python preflight is exercised by the preflight tests below,
+    # which route it through the real checks with injected fakes.
     monkeypatch.setattr(dev_service_module, "run_dev_preflight", Mock())
 
     service = DevService(
@@ -391,12 +391,38 @@ def test_prepare_omits_the_bound_memory_store_note_when_none_is_bound(
         assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in _manifest_env(plan.entry_point)
 
 
-def _wire_real_preflight(monkeypatch: pytest.MonkeyPatch, *, which, os_name="posix") -> None:
-    """Route dev's preflight through the real check with an injected ``which``."""
+class _UvRun:
+    """Fake subprocess.run for the uv probes: records calls and returns scripted outcomes.
+
+    Outcomes are keyed by the subcommand (e.g. ``("python", "find")``); an Exception outcome is
+    raised instead of returned, like a real spawn or timeout failure.
+    """
+
+    def __init__(
+        self,
+        results: dict[tuple[str, ...], object] | None = None,
+        events: list[str] | None = None,
+    ) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self._results = results or {}
+        self._events = events
+
+    def __call__(self, args, **kwargs):
+        self.calls.append((list(args), kwargs))
+        if self._events is not None:
+            self._events.append(args[2])  # "find" / "install"
+        outcome = self._results[tuple(args[1:3])]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _wire_real_preflight(monkeypatch: pytest.MonkeyPatch, *, which, run, os_name="posix") -> None:
+    """Route dev's preflight through the real checks with injected fakes."""
     real = dev_preflight_module.run_dev_preflight
 
     def wired(source_dir, command_tokens, prepare_environment):
-        real(source_dir, command_tokens, prepare_environment, which=which, os_name=os_name)
+        real(source_dir, command_tokens, prepare_environment, which=which, run=run, os_name=os_name)
 
     monkeypatch.setattr(dev_service_module, "run_dev_preflight", wired)
 
@@ -430,7 +456,7 @@ def test_missing_uv_fails_before_tracing_or_local_manifest(
 ) -> None:
     _uv_app(tmp_path, command)
     which = Mock(return_value=None)
-    _wire_real_preflight(monkeypatch, which=which)
+    _wire_real_preflight(monkeypatch, which=which, run=_UvRun())
 
     with pytest.raises(AgentCliError) as raised:
         with service_fixture.service.prepare(
@@ -466,7 +492,7 @@ def test_missing_uv_hint_names_install_verify_and_rerun(
     install_command: str,
 ) -> None:
     _uv_app(tmp_path, "[uv, run, start-server]")
-    _wire_real_preflight(monkeypatch, which=Mock(return_value=None), os_name=os_name)
+    _wire_real_preflight(monkeypatch, which=Mock(return_value=None), run=_UvRun(), os_name=os_name)
 
     with pytest.raises(AgentCliError) as raised:
         with service_fixture.service.prepare(
@@ -488,7 +514,7 @@ def test_windows_uv_exe_command_triggers_the_uv_check(
 ) -> None:
     _uv_app(tmp_path, '["uv.exe", "run", "start-server"]')
     which = Mock(return_value=None)
-    _wire_real_preflight(monkeypatch, which=which, os_name="nt")
+    _wire_real_preflight(monkeypatch, which=which, run=_UvRun(), os_name="nt")
 
     with pytest.raises(AgentCliError, match="uv was not found on PATH"):
         with service_fixture.service.prepare(
@@ -499,19 +525,26 @@ def test_windows_uv_exe_command_triggers_the_uv_check(
     which.assert_called_once_with("uv.exe")
 
 
-def test_uv_found_proceeds_as_before(
+def test_uv_found_probes_python_once_then_proceeds_as_before(
     service_fixture: SimpleNamespace,
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "agent"\nversion = "0.1.0"\nrequires-python = ">=3.11"\n'
+    )
     events: list[str] = []
-
-    def which(name):
-        events.append(f"which {name}")
-        return "/usr/bin/uv"
-
-    _wire_real_preflight(monkeypatch, which=which)
+    runner = _UvRun(
+        {
+            ("python", "find"): SimpleNamespace(
+                returncode=0, stdout="/usr/bin/python3.11", stderr=""
+            )
+        },
+        events=events,
+    )
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
 
     def _start_dev(source_dir):
         events.append("start_dev")
@@ -525,8 +558,13 @@ def test_uv_found_proceeds_as_before(
         assert plan.prepare_environment is False
         service_fixture.service.run(plan)
 
-    # The check runs before anything starts, and a found uv ends it quietly.
-    assert events == ["which uv", "start_dev"]
+    # The probe runs before anything starts, and a match ends the check quietly.
+    assert events == ["find", "start_dev"]
+    assert len(runner.calls) == 1
+    args, kwargs = runner.calls[0]
+    assert args == ["/usr/bin/uv", "python", "find", ">=3.11"]
+    assert kwargs["cwd"] == tmp_path
+    assert capsys.readouterr().err == ""
     service_fixture.apps.run_local.assert_called_once()
 
 
@@ -540,7 +578,8 @@ def test_non_uv_run_with_reused_venv_makes_no_uv_probes(
     if prepare_environment is None:
         (tmp_path / ".venv").mkdir()  # auto-detection reuses it: prepare is False
     which = Mock(return_value=None)
-    _wire_real_preflight(monkeypatch, which=which)
+    runner = _UvRun()
+    _wire_real_preflight(monkeypatch, which=which, run=runner)
 
     with service_fixture.service.prepare(
         DevRequest(source=str(tmp_path), prepare_environment=prepare_environment, app_port=None)
@@ -549,6 +588,7 @@ def test_non_uv_run_with_reused_venv_makes_no_uv_probes(
         service_fixture.service.run(plan)
 
     which.assert_not_called()
+    assert runner.calls == []
     service_fixture.apps.run_local.assert_called_once()
 
 
@@ -560,7 +600,7 @@ def test_environment_prepare_triggers_the_uv_check_for_non_uv_commands(
     # run-local's --prepare-environment (the default without a .venv) builds the venv with uv, so
     # the uv check applies even though the app command itself does not use uv.
     which = Mock(return_value=None)
-    _wire_real_preflight(monkeypatch, which=which)
+    _wire_real_preflight(monkeypatch, which=which, run=_UvRun())
 
     with pytest.raises(AgentCliError, match="uv was not found on PATH"):
         with service_fixture.service.prepare(
@@ -571,6 +611,160 @@ def test_environment_prepare_triggers_the_uv_check_for_non_uv_commands(
     which.assert_called_once_with("uv")
 
 
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        None,  # no pyproject.toml at all
+        '[project]\nname = "agent"\n',  # no requires-python key
+        "not toml\n",  # unparseable
+        '[project]\nrequires-python = ">=banana"\n',  # a spec uv would reject too
+    ],
+)
+def test_unreadable_or_invalid_python_spec_skips_the_probe(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pyproject: str | None,
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    if pyproject is not None:
+        (tmp_path / "pyproject.toml").write_text(pyproject)
+    runner = _UvRun()
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert runner.calls == []
+    service_fixture.apps.run_local.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [subprocess.TimeoutExpired(cmd="uv", timeout=15), OSError("spawn not permitted")],
+)
+def test_inconclusive_python_probe_does_not_block_the_run(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun({("python", "find"): failure})
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    # The find probe ran; without a conclusive answer nothing else is attempted and dev proceeds.
+    assert len(runner.calls) == 1
+    service_fixture.apps.run_local.assert_called_once()
+
+
+def test_uv_installs_python_when_the_probe_finds_nothing(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun(
+        {
+            ("python", "find"): SimpleNamespace(returncode=1, stdout="", stderr="no match"),
+            ("python", "install"): SimpleNamespace(returncode=0, stdout="", stderr="Installed"),
+        }
+    )
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert [args for args, _kwargs in runner.calls] == [
+        ["/usr/bin/uv", "python", "find", ">=3.11"],
+        ["/usr/bin/uv", "python", "install", ">=3.11"],
+    ]
+    assert 'Installing Python ">=3.11" with uv (this can take a minute)...' in (
+        capsys.readouterr().err
+    )
+    service_fixture.apps.run_local.assert_called_once()
+
+
+def test_failed_python_install_fails_before_starting(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun(
+        {
+            ("python", "find"): SimpleNamespace(returncode=1, stdout="", stderr="no match"),
+            ("python", "install"): SimpleNamespace(
+                returncode=2,
+                stdout="",
+                stderr="error: No download found for request: cpython->=3.11-linux-x86_64-gnu\n",
+            ),
+        }
+    )
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a failed Python install must not yield a plan")
+
+    assert raised.value.message == 'uv couldn\'t get Python ">=3.11" (required by pyproject.toml).'
+    assert raised.value.hint == (
+        'Run `uv python install ">=3.11"`, then re-run `agentbricks dev`.\n'
+        "uv said: error: No download found for request: cpython->=3.11-linux-x86_64-gnu"
+    )
+    service_fixture.tracing.start_dev.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+
+
+def test_failed_install_names_the_spec_from_pyproject(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The version comes from the project, not a hardcoded floor, and a long last uv line is not
+    # quoted (only short reasons make the `uv said:` cut).
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.12,<3.14"\n')
+    runner = _UvRun(
+        {
+            ("python", "find"): SimpleNamespace(returncode=1, stdout="", stderr="no match"),
+            ("python", "install"): SimpleNamespace(
+                returncode=2,
+                stdout="",
+                stderr="first line\n" + "x" * 300 + "\n",
+            ),
+        }
+    )
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a failed Python install must not yield a plan")
+
+    assert '">=3.12,<3.14"' in raised.value.message
+    assert 'uv python install ">=3.12,<3.14"' in raised.value.hint
+    assert "re-run `agentbricks dev`" in raised.value.hint
+    assert "uv said:" not in raised.value.hint
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable bit")
 def test_project_relative_uv_resolves_against_the_source_dir(
     service_fixture: SimpleNamespace,
@@ -578,25 +772,28 @@ def test_project_relative_uv_resolves_against_the_source_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # run-local starts the command from the project, so `./bin/uv` must be found there even when
-    # dev runs from another directory with --source.
+    # dev runs from another directory with --source; the Python probe then uses that same uv.
     project = tmp_path / "project"
     (project / "bin").mkdir(parents=True)
     vendored_uv = project / "bin" / "uv"
     vendored_uv.write_text("#!/bin/sh\n")
     vendored_uv.chmod(0o755)
     _uv_app(project, '["./bin/uv", "run", "start-server"]')
+    (project / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
-    which = Mock(side_effect=shutil.which)
-    _wire_real_preflight(monkeypatch, which=which)
+    runner = _UvRun({("python", "find"): SimpleNamespace(returncode=0, stdout="", stderr="")})
+    _wire_real_preflight(monkeypatch, which=shutil.which, run=runner)
 
     with service_fixture.service.prepare(
         DevRequest(source=str(project), prepare_environment=False, app_port=None)
     ) as plan:
         service_fixture.service.run(plan)
 
-    which.assert_called_once_with(str(project / "./bin/uv"))
+    assert [args for args, _kwargs in runner.calls] == [
+        [str(vendored_uv), "python", "find", ">=3.11"]
+    ]
     service_fixture.apps.run_local.assert_called_once()
 
 
@@ -607,7 +804,7 @@ def test_missing_project_relative_uv_fails_before_starting(
 ) -> None:
     _uv_app(tmp_path, '["./bin/uv", "run", "start-server"]')
     which = Mock(return_value=None)
-    _wire_real_preflight(monkeypatch, which=which)
+    _wire_real_preflight(monkeypatch, which=which, run=_UvRun())
 
     with pytest.raises(AgentCliError) as raised:
         with service_fixture.service.prepare(
@@ -635,7 +832,7 @@ def test_environment_build_needs_path_uv_even_with_a_project_uv(
     _uv_app(tmp_path, '["./bin/uv", "run", "start-server"]')
     project_uv = str(tmp_path / "./bin/uv")
     which = Mock(side_effect=lambda name: name if name == project_uv else None)
-    _wire_real_preflight(monkeypatch, which=which)
+    _wire_real_preflight(monkeypatch, which=which, run=_UvRun())
 
     with pytest.raises(AgentCliError, match="uv was not found on PATH"):
         with service_fixture.service.prepare(
@@ -645,3 +842,154 @@ def test_environment_build_needs_path_uv_even_with_a_project_uv(
 
     assert [call.args[0] for call in which.call_args_list] == [project_uv, "uv"]
     service_fixture.tracing.start_dev.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [subprocess.TimeoutExpired(cmd="uv", timeout=180), OSError("spawn not permitted")],
+)
+def test_inconclusive_python_install_does_not_block_the_run(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    # An install that times out or cannot spawn is inconclusive, like the find probe: fail open.
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun(
+        {
+            ("python", "find"): SimpleNamespace(returncode=1, stdout="", stderr="no match"),
+            ("python", "install"): failure,
+        }
+    )
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert len(runner.calls) == 2
+    service_fixture.apps.run_local.assert_called_once()
+
+
+@pytest.mark.parametrize(("prepare_environment", "probes"), [(False, 0), (True, 1)])
+@pytest.mark.parametrize(
+    "command",
+    [
+        '["uv", "run", "--no-project", "python", "app.py"]',
+        '["uv", "run", "--project", "service", "--no-sync", "python", "app.py"]',
+        '["uv", "run", "--project=service", "python", "app.py"]',
+        '["uv", "--directory", "service", "run", "python", "app.py"]',
+        '["uv", "run", "--script", "app.py"]',
+        '["uv", "run", "-s", "app.py"]',
+        '["uv", "run", "--frozen", "--project", "service", "python", "app.py"]',
+        '["uv", "run", "--python", "/opt/custom/python", "--no-sync", "start-server"]',
+        '["uv", "run", "--python=3.12", "start-server"]',
+        '["uv", "run", "-p", "3.12", "start-server"]',
+        '["uv", "run", "-p3.12", "start-server"]',
+    ],
+)
+def test_project_override_command_skips_the_python_check_unless_the_environment_is_built(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    prepare_environment: bool,
+    probes: int,
+) -> None:
+    # A uv command that selects another project (or none), or picks its own interpreter, is not
+    # bound by uv's discovery of source_dir's requires-python, which then only matters when
+    # run-local builds the project environment.
+    _uv_app(tmp_path, command)
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=99"\n')
+    runner = _UvRun({("python", "find"): SimpleNamespace(returncode=0, stdout="", stderr="")})
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=prepare_environment, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert len(runner.calls) == probes
+    service_fixture.apps.run_local.assert_called_once()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bit")
+def test_relative_source_resolves_project_uv_to_an_absolute_path(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The probe runs from the project, so a uv found via a relative --source must not stay
+    # relative (it would then resolve under project/project/...).
+    project = tmp_path / "project"
+    (project / "bin").mkdir(parents=True)
+    vendored_uv = project / "bin" / "uv"
+    vendored_uv.write_text("#!/bin/sh\n")
+    vendored_uv.chmod(0o755)
+    _uv_app(project, '["./bin/uv", "run", "start-server"]')
+    (project / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    monkeypatch.chdir(tmp_path)
+    runner = _UvRun({("python", "find"): SimpleNamespace(returncode=0, stdout="", stderr="")})
+    _wire_real_preflight(monkeypatch, which=shutil.which, run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source="project", prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert [args[0] for args, _kwargs in runner.calls] == [str(vendored_uv)]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        '["uv", "run", "start-server", "--project", "demo"]',
+        '["uv", "run", "--no-sync", "start-server", "--directory", "x"]',
+        '["uv", "run", "--", "start-server", "--no-project"]',
+        '["uv", "run", "start-server", "--python", "3.12"]',
+    ],
+)
+def test_project_options_after_the_app_command_still_check_python(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    # Options after the command uv runs are that command's arguments; uv still uses source_dir's
+    # project, so its requires-python is still checked.
+    _uv_app(tmp_path, command)
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun({("python", "find"): SimpleNamespace(returncode=0, stdout="", stderr="")})
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    assert len(runner.calls) == 1
+
+
+def test_uv_probe_output_is_decoded_as_utf8_with_replacement(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # uv writes UTF-8; decoding with the locale codec could raise on a legacy Windows code page.
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11"\n')
+    runner = _UvRun({("python", "find"): SimpleNamespace(returncode=0, stdout="", stderr="")})
+    _wire_real_preflight(monkeypatch, which=Mock(return_value="/usr/bin/uv"), run=runner)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    _args, kwargs = runner.calls[0]
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+    assert "text" not in kwargs

@@ -86,9 +86,9 @@ def _stub_free_port(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _stub_dev_preflight(monkeypatch):
-    """`agentbricks dev` preflights uv before starting; stub the check so ordinary dev tests
-    neither probe uv nor depend on this machine's tooling. The check is covered in
-    dev_service_test.py, and test_dev_missing_uv_fails_before_starting wires the real one."""
+    """`agentbricks dev` preflights uv and its Python before starting; stub the checks so ordinary
+    dev tests neither probe uv nor depend on this machine's tooling. The checks are covered in
+    dev_service_test.py, and test_dev_missing_uv_fails_before_starting wires the real ones."""
     monkeypatch.setattr(dev_service_module, "run_dev_preflight", mock.Mock())
 
 

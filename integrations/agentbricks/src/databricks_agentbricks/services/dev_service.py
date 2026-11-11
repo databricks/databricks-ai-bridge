@@ -147,9 +147,9 @@ class DevService:
         if prepare_environment is None:
             prepare_environment = not (source_dir / ".venv").exists()
 
-        # Fail before starting tracing or writing the local manifest: without uv, the run would
-        # otherwise die later with run-local's generic "Could not start the agent locally." and no
-        # fix.
+        # Fail before starting tracing or writing the local manifest: without uv (or a Python uv
+        # can provide), the run would otherwise die later with run-local's generic "Could not
+        # start the agent locally." and no fix.
         run_dev_preflight(source_dir, manifest.command_tokens(), prepare_environment)
 
         # Resource bindings are read only for the preview/presentation.  Dev is fully local and
