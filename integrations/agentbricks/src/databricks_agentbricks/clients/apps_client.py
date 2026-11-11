@@ -214,12 +214,14 @@ class AppsClient:
                 hint="\n".join([*detail, _app_busy_hint(name)]),
                 failure_reason=FailureReason.SUBPROCESS_FAILED,
                 subprocess_exit_code=result.returncode,
+                failure_detail=_failure_detail(result) or None,
             )
         raise AgentCliError(
             action,
             hint=None if relayed else (_failure_detail(result) or None),
             failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=result.returncode,
+            failure_detail=_failure_detail(result) or None,
         )
 
     def _get_json(self, name: str) -> Optional[dict]:
