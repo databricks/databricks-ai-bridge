@@ -33,6 +33,7 @@ def test_telemetry(
     log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
     assert log["command_path"] == "agentbricks init"
     assert log["exit_code"] == 0
+    assert log["diagnostics"]["outcome"] == "OUTCOME_SUCCEEDED"
 
 
 def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> TelemetryUpload:
