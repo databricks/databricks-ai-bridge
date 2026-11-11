@@ -299,3 +299,28 @@ series starts with a new release branch from `main`. Tagging does not publish th
 secure public registry release and its approval to publish to PyPI. The gate runs the unit and framework tests and the E2E suites
 against the fake workspace (`--workspace fake`) from the built wheels. The live workspace E2E suites
 run separately in the private integration runner and are not included in this gate.
+
+## Interpreting command and deployment outcomes
+
+New completion events carry `diagnostics.outcome`: `SUCCEEDED`, `FAILED`, `INTERRUPTED`,
+`PENDING` (only `deployments wait` exit 75), or `SUBMITTED` (the `deploy --no-wait` launcher).
+Exit codes stay unchanged. Treat pending and submitted as separate populations in dashboards;
+exclude interruptions from a product failure rate, and report them separately. For older events,
+derive outcomes in this order: interrupted category; wait + exit 75; deploy + exit 0 + no-wait;
+exit 0; otherwise failed. The legacy no-wait flag is insufficient unless its recorded boolean is
+true: newer events include false defaults. Missing outcomes and missing terminal events are
+unknown coverage, not evidence of success.
+
+For deployment reliability, select `command_path = 'agentbricks deploy'`, exclude `SUBMITTED`,
+and count terminal `SUCCEEDED`/`FAILED` once per `diagnostics.operation_id`. Do not add
+`deployments wait` rows to that denominator; repeated waits observe the same operation. A random
+UUID is created for each deployment attempt and shared with the detached child and the local
+state record. Waits without a local record have no correlation ID. Keep legacy events without
+an ID in a separate cohort; do not group all null IDs together. Use the FrontendLog event ID to
+deduplicate uploads, and flag conflicting outcomes for the same operation for investigation.
+
+Startup reliability should use `dev`'s `app_listened`, `time_to_listen_ms`, failed phase/reason,
+child exit code, and platform/version. These are completion-only observations: abrupt process
+termination or failed/unauthenticated upload remains invisible. Compare event coverage as well as
+failure rate. The schema must be deployed before shipping these fields; this change does not
+modify the production dashboard or confirm live ingestion.

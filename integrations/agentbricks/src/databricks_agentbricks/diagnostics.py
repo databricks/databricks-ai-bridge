@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -63,9 +64,30 @@ class Readiness(str, Enum):
     UNREACHABLE = "UNREACHABLE"
 
 
+class Outcome(str, Enum):
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
+    PENDING = "PENDING"
+    SUBMITTED = "SUBMITTED"
+
+
+def operation_uuid(value: object) -> str | None:
+    """Accept only canonical random UUIDs, never project-derived identifiers."""
+    if not isinstance(value, str) or len(value) != 36:
+        return None
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        return None
+    return str(parsed) if parsed.version == 4 and str(parsed) == value else None
+
+
 @dataclass
 class CommandDiagnostics:
     failure_stage: FailureStage | None = None
+    outcome: Outcome | None = None
+    operation_id: str | None = None
     app_listened: bool | None = None
     time_to_listen_ms: int | None = None
     prepare_environment: bool | None = None

@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import types
+import uuid
 
 import pytest
 from click.testing import CliRunner
@@ -17,6 +18,7 @@ from deploy_test import _DeployApi, _DeployRunner, _real_deploy_context
 from databricks_agentbricks import errors
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients.app_probe import ProbeOutcome, ProbeResult
+from databricks_agentbricks.diagnostics import CommandDiagnostics, Outcome
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deployment import deploy_state
@@ -789,3 +791,48 @@ def test_deploy_help_and_reference_say_deploy_waits_for_the_answer():
     assert "Deploy finishes once the agent answers requests." in " ".join(result.output.split())
     assert "Deploy finishes once the agent answers requests." in reference
     assert "0 deployed and answering" in reference
+
+
+def test_launcher_child_and_wait_share_a_random_operation_id(project, monkeypatch, popen):
+    events = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    parent = _real_deploy_context(_DeployApi(events))
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["demo", "--source", str(project), "--no-wait"], obj=parent
+    )
+    assert result.exit_code == 0, result.output
+    operation_id = parent.diagnostics.operation_id
+    assert uuid.UUID(operation_id).version == 4
+    assert parent.diagnostics.outcome == Outcome.SUBMITTED
+    assert _state(project)["operation_id"] == operation_id
+    assert popen.calls[0][1]["env"][deploy_mod._DEPLOY_OPERATION_ENV] == operation_id
+
+    monkeypatch.setenv(deploy_mod._DEPLOY_OPERATION_ENV, operation_id)
+    _write_state(project, operation_id=operation_id)
+    child = _real_deploy_context(_DeployApi(events))
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["demo", "--source", str(project), "--background-child"], obj=child
+    )
+    assert result.exit_code == 0, result.output
+    assert child.diagnostics.operation_id == operation_id
+    assert child.diagnostics.outcome != Outcome.SUBMITTED
+    assert _state(project)["operation_id"] == operation_id
+    assert _state(project)["status"] == "succeeded"
+
+    waiter = _real_deploy_context(_DeployApi(events))
+    result = CliRunner().invoke(
+        deploy_mod.deployments, ["wait", "demo", "--source", str(project)], obj=waiter
+    )
+    assert result.exit_code == 0, result.output
+    assert waiter.diagnostics.operation_id == operation_id
+
+
+def test_wait_does_not_upload_invalid_local_correlation(project):
+    _write_state(project, operation_id="private-project-name", status="succeeded", result={})
+    obj = _real_deploy_context(_DeployApi([]))
+    obj.diagnostics = CommandDiagnostics()
+    result = CliRunner().invoke(
+        deploy_mod.deployments, ["wait", "demo", "--source", str(project)], obj=obj
+    )
+    assert result.exit_code == 0, result.output
+    assert obj.diagnostics.operation_id is None

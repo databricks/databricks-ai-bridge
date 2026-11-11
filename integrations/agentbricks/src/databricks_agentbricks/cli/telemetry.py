@@ -27,7 +27,9 @@ from databricks_agentbricks.diagnostics import (
     CommandDiagnostics,
     FailureReason,
     FailureStage,
+    Outcome,
     Readiness,
+    operation_uuid,
 )
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
@@ -420,15 +422,33 @@ def _build_log(
         command_exit_code = int(exit_code)
     except (TypeError, ValueError, OverflowError):
         command_exit_code = 1
+    details = _failure_details(ctx, exception)
+    category = _bounded_error_category(error_category) if command_exit_code else None
+    if category == "ERROR_CATEGORY_INTERRUPTED":
+        outcome = Outcome.INTERRUPTED
+    elif invocation.command_path == "agentbricks deployments wait" and command_exit_code == 75:
+        outcome = Outcome.PENDING
+        category = None
+    elif command_exit_code:
+        outcome = Outcome.FAILED
+    else:
+        diagnostics = getattr(_root_obj(ctx), "diagnostics", None)
+        outcome = (
+            Outcome.SUBMITTED
+            if isinstance(diagnostics, CommandDiagnostics)
+            and diagnostics.outcome == Outcome.SUBMITTED
+            else Outcome.SUCCEEDED
+        )
+    details["outcome"] = f"OUTCOME_{outcome.value}"
     return _AgentBricksCliLog(
         command_path=invocation.command_path,
         package_version=_package_version(),
         operating_system=platform.system().lower(),
         execution_time_ms=duration_ms,
         exit_code=command_exit_code,
-        error_category=_bounded_error_category(error_category) if command_exit_code else None,
+        error_category=category,
         parameters=invocation.parameters,
-        diagnostics=_failure_details(ctx, exception),
+        diagnostics=details,
     )
 
 
@@ -440,6 +460,8 @@ def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int
     ):
         details["failure_stage"] = f"FAILURE_STAGE_{diagnostics.failure_stage.value}"
     if isinstance(diagnostics, CommandDiagnostics):
+        if operation_id := operation_uuid(diagnostics.operation_id):
+            details["operation_id"] = operation_id
         for name in ("app_listened", "prepare_environment"):
             value = getattr(diagnostics, name)
             if type(value) is bool:

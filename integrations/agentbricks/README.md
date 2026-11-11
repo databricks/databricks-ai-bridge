@@ -1577,3 +1577,9 @@ Deployment diagnostics record the failed workflow phase and the last readiness o
 errors are retried within the existing readiness budget; if the final probe remains unreachable,
 the deployed app has unverified readiness rather than a reported application failure. These
 observations do not validate model or tool behavior.
+
+Completion events distinguish succeeded, failed, interrupted, pending (`deployments wait` exit 75),
+and submitted (`deploy --no-wait`). Deployment attempts use a random operation UUID shared with
+the background worker and waits reading the local state; no project identifiers are used.
+See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
+failure-rate denominators and legacy events.

@@ -69,6 +69,7 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
     assert result.exit_code == 1
     assert records[0]["diagnostics"] == {
+        "outcome": "OUTCOME_FAILED",
         "app_listened": False,
         "failure_stage": "FAILURE_STAGE_PROJECT",
         "failure_reason": "FAILURE_REASON_PROJECT_INVALID",

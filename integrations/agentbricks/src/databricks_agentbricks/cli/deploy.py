@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 import click
@@ -37,7 +38,12 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
-from databricks_agentbricks.diagnostics import CommandDiagnostics
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureStage,
+    Outcome,
+    operation_uuid,
+)
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     deploy_result_payload,
@@ -87,6 +93,7 @@ from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthentica
 # EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
 _WAIT_TIMEOUT_S = 100
 _EX_TEMPFAIL = 75
+_DEPLOY_OPERATION_ENV = "AGENTBRICKS_DEPLOY_OPERATION_ID"
 
 
 def build_deploy_service(obj, *, background: bool = False) -> DeployService:
@@ -96,8 +103,13 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
     terminal one; ``background`` marks the detached child of `deploy --no-wait`.
     """
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
     api_client_provider = obj.api_client_provider
-    state_tracker = DeployStateTracker(result_payload=deploy_result_payload, background=background)
+    state_tracker = DeployStateTracker(
+        result_payload=deploy_result_payload,
+        background=background,
+        operation_id=diagnostics.operation_id,
+    )
     reporter = DeployStateReporter(ClickReporter(), state_tracker)
     apps_client = AppsClient(obj.profile, runner=_databricks, on_busy=reporter.note)
     apps_user_auth_client = AppsUserAuthClient(obj.profile)
@@ -160,7 +172,11 @@ def _background_argv(obj, request: DeployRequest) -> list[str]:
 
 
 def spawn_background_deploy(
-    argv: list[str], *, log: pathlib.Path, popen: Optional[Callable[..., Any]] = None
+    argv: list[str],
+    *,
+    log: pathlib.Path,
+    popen: Optional[Callable[..., Any]] = None,
+    operation_id: str | None = None,
 ) -> int:
     """Start ``argv`` detached from this terminal, writing its output to ``log``; return its pid.
 
@@ -175,13 +191,17 @@ def spawn_background_deploy(
         )
     else:
         kwargs["start_new_session"] = True
+    child_env = {**os.environ, "PYTHONUNBUFFERED": "1", "AGENTBRICKS_DISABLE_AGENT_HINT": "1"}
+    child_env.pop(_DEPLOY_OPERATION_ENV, None)
+    if correlation := operation_uuid(operation_id):
+        child_env[_DEPLOY_OPERATION_ENV] = correlation
     with log.open("wb") as out:
         process = (popen or subprocess.Popen)(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=out,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "PYTHONUNBUFFERED": "1", "AGENTBRICKS_DISABLE_AGENT_HINT": "1"},
+            env=child_env,
             close_fds=True,
             **kwargs,
         )
@@ -297,6 +317,11 @@ def deploy(
     agent answers requests. From a coding agent or script with a short command timeout, use
     --no-wait and then `agentbricks deployments wait`.
     """
+    diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
+    diagnostics.operation_id = (
+        operation_uuid(os.environ.get(_DEPLOY_OPERATION_ENV)) if background_child else None
+    ) or str(uuid.uuid4())
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
@@ -313,15 +338,23 @@ def deploy(
     service = build_deploy_service(obj, background=background_child)
     if no_wait and not background_child:
         # Fail fast in the foreground on anything quick to check; the child repeats these checks.
-        prepared = service.prepare(request)
-        service.check_auth()
+        with diagnostics.phase(FailureStage.PREFLIGHT):
+            prepared = service.prepare(request)
+            service.check_auth()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)
-        pid = spawn_background_deploy(_background_argv(obj, request), log=log)
+        pid = spawn_background_deploy(
+            _background_argv(obj, request), log=log, operation_id=diagnostics.operation_id
+        )
         state_file = deploy_state.record_background_start(
-            source_dir, prepared.name, pid=pid, now=time.time()
+            source_dir,
+            prepared.name,
+            pid=pid,
+            now=time.time(),
+            operation_id=diagnostics.operation_id,
         )
         present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
+        diagnostics.outcome = Outcome.SUBMITTED
         return
     started = time.monotonic()
     result = service.deploy(request)

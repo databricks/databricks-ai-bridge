@@ -126,6 +126,7 @@ def test_build_payload_matches_frontend_log_schema():
     assert _inner(payload) == {
         "agentbricks_cli_log": {
             "command_path": "agentbricks init",
+            "diagnostics": {"outcome": "OUTCOME_SUCCEEDED"},
             "execution_time_ms": 17,
             "exit_code": 0,
             "operating_system": telemetry.platform.system().lower(),
@@ -194,6 +195,7 @@ def test_real_init_telemetry_captures_safe_options_without_values(monkeypatch, t
         "execution_time_ms",
         "exit_code",
         "parameters",
+        "diagnostics",
     }
     assert log["command_path"] == "agentbricks init"
     assert log["exit_code"] == 0
@@ -267,6 +269,7 @@ def test_wrapped_failure_preserves_reason_without_exception_text():
     assert log["diagnostics"] == {
         "failure_stage": "FAILURE_STAGE_RUN_LOCAL",
         "failure_reason": "FAILURE_REASON_PERMISSION_DENIED",
+        "outcome": "OUTCOME_FAILED",
     }
     assert telemetry._error_category(error) == "ERROR_CATEGORY_AUTHORIZATION"
     assert "private" not in json.dumps(log)
@@ -299,7 +302,9 @@ def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
     error = AgentCliError("private", error_code="private-user-defined-code")
     error.__cause__ = error
     assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
-    assert "diagnostics" not in _log(_Context(), exit_code=1, exception=error)
+    assert _log(_Context(), exit_code=1, exception=error)["diagnostics"] == {
+        "outcome": "OUTCOME_FAILED"
+    }
 
 
 def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):
@@ -322,6 +327,7 @@ def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch)
     assert records[0]["diagnostics"] == {
         "failure_reason": "FAILURE_REASON_SUBPROCESS_FAILED",
         "subprocess_exit_code": 17,
+        "outcome": "OUTCOME_FAILED",
     }
     assert "private" not in json.dumps(records)
 
@@ -904,8 +910,34 @@ def test_readiness_telemetry_preserves_only_bounded_observations():
     context.obj.diagnostics = CommandDiagnostics(
         readiness=Readiness.UNREACHABLE, probe_http_status=None
     )
-    assert _log(context, exit_code=0)["diagnostics"] == {"readiness": "READINESS_UNREACHABLE"}
+    assert _log(context, exit_code=0)["diagnostics"] == {
+        "readiness": "READINESS_UNREACHABLE",
+        "outcome": "OUTCOME_SUCCEEDED",
+    }
     context.obj.diagnostics.probe_http_status = 503
     assert _log(context, exit_code=0)["diagnostics"]["probe_http_status"] == 503
     context.obj.diagnostics.probe_http_status = 999
     assert "probe_http_status" not in _log(context, exit_code=0)["diagnostics"]
+
+
+@pytest.mark.parametrize(
+    ("path", "code", "category", "outcome"),
+    [
+        (("deployments", "wait"), 75, "ERROR_CATEGORY_RUNTIME", "PENDING"),
+        (("deploy",), 75, "ERROR_CATEGORY_RUNTIME", "FAILED"),
+        (("deployments", "wait"), 1, "ERROR_CATEGORY_RUNTIME", "FAILED"),
+        (("dev",), 1, "ERROR_CATEGORY_INTERRUPTED", "INTERRUPTED"),
+    ],
+)
+def test_outcomes_preserve_exit_codes_and_scope_pending_to_wait(path, code, category, outcome):
+    log = _log(_real_context(*path), exit_code=code, error_category=category)
+    assert log["exit_code"] == code
+    assert log["diagnostics"]["outcome"] == "OUTCOME_" + outcome
+    assert ("error_category" in log) == (outcome != "PENDING")
+
+
+@pytest.mark.parametrize("value", ["private-project-name", str(uuid.uuid1()), "0" * 36])
+def test_invalid_operation_ids_are_omitted(value):
+    context = _Context()
+    context.obj.diagnostics = CommandDiagnostics(operation_id=value)
+    assert "operation_id" not in _log(context, exit_code=0)["diagnostics"]
