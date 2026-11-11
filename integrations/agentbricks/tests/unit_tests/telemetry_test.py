@@ -289,7 +289,7 @@ def test_failure_classification_follows_explicit_causes(cause, reason, category)
     error = AgentCliError("Could not start")
     error.__cause__ = cause
     assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
-    assert telemetry._failure_reason(error).value == reason
+    assert telemetry._failure_reason(error) == FailureReason(reason)
 
 
 def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
