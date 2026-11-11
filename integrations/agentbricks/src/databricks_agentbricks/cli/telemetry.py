@@ -423,7 +423,7 @@ def _build_log(
         exit_code=command_exit_code,
         error_category=_bounded_error_category(error_category) if command_exit_code else None,
         parameters=invocation.parameters,
-        diagnostics=_failure_details(ctx, exception) if command_exit_code else None,
+        diagnostics=_failure_details(ctx, exception),
     )
 
 
@@ -434,6 +434,15 @@ def _failure_details(ctx: Any, exc: BaseException | None) -> dict[str, str | int
         diagnostics.failure_stage, FailureStage
     ):
         details["failure_stage"] = f"FAILURE_STAGE_{diagnostics.failure_stage.value}"
+    if isinstance(diagnostics, CommandDiagnostics):
+        for name in ("app_listened", "prepare_environment"):
+            value = getattr(diagnostics, name)
+            if type(value) is bool:
+                details[name] = value
+        for name in ("time_to_listen_ms", "subprocess_exit_code"):
+            value = getattr(diagnostics, name)
+            if type(value) is int and -(1 << 63) <= value < (1 << 63):
+                details[name] = value
     reason = _failure_reason(exc)
     if reason is not None:
         details["failure_reason"] = f"FAILURE_REASON_{reason.value}"

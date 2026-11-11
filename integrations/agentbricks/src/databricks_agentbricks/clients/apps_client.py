@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.local_ports import accepts_connections
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
@@ -163,12 +164,14 @@ class AppsClient:
         runner: DatabricksRunner = _databricks,
         on_busy: Optional[Callable[[str], None]] = None,
         sleep: Callable[[float], None] = time.sleep,
+        diagnostics: CommandDiagnostics | None = None,
     ) -> None:
         self._profile = profile
         self._run = runner
         self._on_busy = on_busy
         self._sleep = sleep
         self._sp_cache: dict[str, str] = {}
+        self._diagnostics = diagnostics or CommandDiagnostics()
 
     def _run_app_change(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         """Run one App-modifying call, retrying while Apps reports another operation in progress.
@@ -574,10 +577,12 @@ class AppsClient:
             return
 
         started = False
+        self._diagnostics.starting_local_agent()
 
         def _on_ready() -> None:
             nonlocal started
             started = True
+            self._diagnostics.local_agent_listened()
             on_ready()
 
         result = self._run(
@@ -590,15 +595,20 @@ class AppsClient:
             on_ready=_on_ready,
             quiet_status=quiet_status,
         )
+        self._diagnostics.subprocess_exit_code = result.returncode
         if result.returncode != 0:
             if started:
                 raise AgentCliError(
                     "The local agent stopped unexpectedly.",
                     hint="See the output above for the cause.",
+                    failure_reason=FailureReason.CHILD_EXIT_AFTER_LISTENING,
+                    subprocess_exit_code=result.returncode,
                 )
             raise AgentCliError(
                 "Could not start the agent locally.",
                 hint="See the output above for the cause.",
+                failure_reason=FailureReason.CHILD_EXIT_BEFORE_LISTENING,
+                subprocess_exit_code=result.returncode,
             )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:

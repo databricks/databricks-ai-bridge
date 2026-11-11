@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -58,6 +59,20 @@ class FailureStage(str, Enum):
 @dataclass
 class CommandDiagnostics:
     failure_stage: FailureStage | None = None
+    app_listened: bool | None = None
+    time_to_listen_ms: int | None = None
+    prepare_environment: bool | None = None
+    subprocess_exit_code: int | None = None
+    _run_started: float | None = None
+
+    def starting_local_agent(self) -> None:
+        self.app_listened = False
+        self._run_started = time.monotonic()
+
+    def local_agent_listened(self) -> None:
+        self.app_listened = True
+        if self._run_started is not None:
+            self.time_to_listen_ms = max(0, int((time.monotonic() - self._run_started) * 1000))
 
     @contextmanager
     def phase(self, stage: FailureStage) -> Iterator[None]:

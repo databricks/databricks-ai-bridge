@@ -12,11 +12,88 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import dev as dev_mod
+from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
+
+
+@pytest.mark.parametrize("listened", [False, True])
+@pytest.mark.parametrize("existing_venv", [False, True])
+def test_dev_telemetry_records_startup_and_environment_decisions(
+    tmp_path, monkeypatch, listened, existing_venv
+):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    if existing_venv:
+        (tmp_path / ".venv").mkdir()
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+    )
+
+    def failed_child(*args, on_ready, **kwargs):
+        if listened:
+            on_ready()
+        return subprocess.CompletedProcess(["databricks"], 17)
+
+    monkeypatch.setattr(dev_mod, "_databricks", failed_child)
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    facts = records[0]["diagnostics"]
+    assert facts["app_listened"] is listened
+    assert facts["prepare_environment"] is not existing_venv
+    assert facts["subprocess_exit_code"] == 17
+    assert facts["failure_stage"] == "FAILURE_STAGE_RUN_LOCAL"
+    assert facts["failure_reason"] == (
+        "FAILURE_REASON_CHILD_EXIT_AFTER_LISTENING"
+        if listened
+        else "FAILURE_REASON_CHILD_EXIT_BEFORE_LISTENING"
+    )
+    assert ("time_to_listen_ms" in facts) is listened
+    assert str(tmp_path) not in str(records)
+
+
+def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+    )
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert records[0]["diagnostics"] == {
+        "app_listened": False,
+        "failure_stage": "FAILURE_STAGE_PROJECT",
+        "failure_reason": "FAILURE_REASON_PROJECT_INVALID",
+    }
+
+
+def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+    )
+
+    def interrupted_child(*args, on_ready, **kwargs):
+        on_ready()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dev_mod, "_databricks", interrupted_child)
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    assert records[0]["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
+    assert records[0]["diagnostics"]["app_listened"] is True
 
 
 def _write_agent_manifest(

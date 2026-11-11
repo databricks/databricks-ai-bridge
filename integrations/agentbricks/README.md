@@ -127,6 +127,10 @@ The CLI sends best effort command usage telemetry after leaf commands. Its log r
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Failures can also include a code-defined reason, workflow
 stage, and child process exit code. Exception messages, hints, and subprocess output are excluded.
+For `dev`, the record also distinguishes environment creation from reuse, whether the agent's TCP
+port ever accepted a connection, and the time from launching run-local to that connection. Listening
+does not establish that model or tool calls work. These facts accompany the existing completion
+event, including interruptions; a killed process or unavailable upload can still leave no event.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
