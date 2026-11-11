@@ -41,6 +41,15 @@ def test_url_credentials_are_scrubbed_for_any_scheme(scheme):
 
 
 @pytest.mark.parametrize(
+    "name", ["secretKey", "tokenValue", "access_token_value", "apiKeyValue", "private-token-value"]
+)
+def test_credential_marker_can_appear_anywhere_in_the_assignment_name(name):
+    result = scrub_failure_text(f"Request failed: data={{'{name}': 'synthetic-opaque-value'}}")
+    assert "synthetic-opaque-value" not in result
+    assert "Request failed" in result
+
+
+@pytest.mark.parametrize(
     "value",
     [
         r'{"client_secret": "synthetic-prefix\"synthetic-tail"}',
@@ -59,7 +68,7 @@ def test_escaped_backslash_keeps_following_error_text():
     assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
 
 
-@pytest.mark.parametrize("pattern", ["a-", "a/", "http://"])
+@pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])
 def test_dense_delimiters_do_not_delay_failure_reporting(pattern):
     start = time.monotonic()
     result = scrub_failure_text(pattern * (64000 // len(pattern)))
@@ -73,6 +82,11 @@ def test_dense_delimiters_do_not_delay_failure_reporting(pattern):
 )
 def test_recognizable_standalone_tokens_are_scrubbed(value):
     assert scrub_failure_text(f"Rejected {value}") == "Rejected [REDACTED]"
+
+
+@pytest.mark.parametrize("prefix", ["error-", "outer.", "outer.error-"])
+def test_jwt_redaction_preserves_surrounding_context(prefix):
+    assert scrub_failure_text(f"{prefix}eyJheader.payload.signature") == f"{prefix}[REDACTED]"
 
 
 def test_customer_content_remains_sensitive_and_unknown_errors_need_no_enum():
