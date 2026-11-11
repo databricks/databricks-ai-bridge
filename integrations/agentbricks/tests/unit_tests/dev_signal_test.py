@@ -14,13 +14,17 @@ import pytest
 _CHILD = """
 import os, pathlib, socket, sys, time
 root = pathlib.Path(sys.argv[1])
+def publish(name, value):
+    temporary = root / (name + '.tmp')
+    temporary.write_text(str(value))
+    temporary.replace(root / name)
 if sys.argv[2] == 'listening':
     sock = socket.socket()
     sock.bind(('127.0.0.1', 0))
     sock.listen()
-    (root / 'port').write_text(str(sock.getsockname()[1]))
+    publish('port', sock.getsockname()[1])
 print('startup diagnostic token=synthetic-secret', file=sys.stderr, flush=True)
-(root / 'child').write_text(str(os.getpid()))
+publish('child', os.getpid())
 deadline = time.monotonic() + 30
 while not (root / 'exit').exists() and time.monotonic() < deadline:
     time.sleep(0.02)
