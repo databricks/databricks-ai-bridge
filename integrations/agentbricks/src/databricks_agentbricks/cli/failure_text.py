@@ -17,13 +17,13 @@ _HEADER = re.compile(
     r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=][^\n]*"
 )
 _ASSIGNMENT = re.compile(
-    r"(?ix)\b[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
+    r"(?ix)(?<![\w-])[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
     r"credential|signature|sig)\b[\"']?\s*[:=]\s*"
-    r"(?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s,;&}\]]+)"
+    r"""(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z)|[^\s,;&}\]]+)"""
 )
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
 _URL_USERINFO = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/@]+@")
-_URL_QUERY = re.compile(r"(?i)(https?://[^\s?#'\"<>]+)[?#][^\s'\"<>]*")
+_URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
 _TOKEN = re.compile(
     r"\b(?:dapi[a-fA-F0-9]{16,}|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|"
     r"sk-[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|"
@@ -37,10 +37,22 @@ _PATHS = tuple(
         r"(^|[\s:,\"'])(/Workspace/[^\s:,\"']+)",
         r"(^|[\s:,\"'])(~?/[^\s:,\"'/]+/[^\s:,\"']+)",
         r"(^|[\s:,\"'])((?:\.\.?|\.[a-zA-Z][^\s:,\"'/]*)/[^\s:,\"']+)",
-        r"(^|[\s:,\"'])([a-zA-Z0-9_][^\s:,\"']*/[^\s:,\"']*\.[a-zA-Z][^\s:,\"']*)",
     )
 )
+_PATH_CANDIDATE = re.compile(r"(^|[\s:,\"'])([a-zA-Z0-9_][^\s:,\"']*)")
 _EMAIL = re.compile(r"(?<![a-zA-Z0-9._%+\-])[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def _scrub_relative_path(match: re.Match[str]) -> str:
+    _, slash, remainder = match[2].partition("/")
+    if slash and re.search(r"\.[a-zA-Z]", remainder):
+        return match[1] + "[REDACTED_PATH]"
+    return match[0]
+
+
+def _scrub_url_query(match: re.Match[str]) -> str:
+    parts = re.split(r"[?#]", match[0], maxsplit=1)
+    return parts[0] + "?[REDACTED]" if len(parts) == 2 else parts[0]
 
 
 def scrub_failure_text(value: str) -> str:
@@ -51,13 +63,14 @@ def scrub_failure_text(value: str) -> str:
     value = _PRIVATE_KEY.sub(_REDACTED, value)
     value = _HEADER.sub(_REDACTED, value)
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
-    value = _URL_QUERY.sub(r"\1?[REDACTED]", value)
+    value = _URL.sub(_scrub_url_query, value)
     value = _ASSIGNMENT.sub(_REDACTED, value)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)
     value = _WINDOWS_PATH.sub("[REDACTED_PATH]", value)
     for pattern in _PATHS:
         value = pattern.sub(r"\1[REDACTED_PATH]", value)
+    value = _PATH_CANDIDATE.sub(_scrub_relative_path, value)
     value = _EMAIL.sub("[REDACTED_EMAIL]", value).strip()
     encoded = value.encode("utf-8", errors="replace")
     if truncated or len(encoded) > MAX_FAILURE_BYTES:
