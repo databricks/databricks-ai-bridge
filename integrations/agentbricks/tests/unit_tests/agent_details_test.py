@@ -270,3 +270,98 @@ def test_local_wait_omits_unprovable_links_without_authenticating(tmp_path, stat
     assert payload["url"] == "https://agent.example"
     assert "details_url" not in payload
     assert auth_attempts == []
+
+
+@pytest.mark.parametrize("command", ["get", "list"])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize("ui,beta", [(True, True), (False, True), (True, False)])
+def test_get_and_list_keep_app_links_and_gate_details(monkeypatch, command, output, ui, beta):
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(render, "_stdout", Console(width=200, force_terminal=True))
+    items = [
+        {"name": _APP, "url": "https://agent.example", "app_status": {"state": "RUNNING"}},
+        {"name": "agent-bricks-other", "url": "https://other.example"},
+    ]
+
+    # Only the Apps subprocess and UI flag transport are replaced; command, client, and
+    # presentation run together without a workspace or credentials.
+    def run(args, profile, **kwargs):
+        payload = items if args[:2] == ["apps", "list"] else items[0]
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", run)
+    provider, api = _provider({"flags": {_UI_FLAG: ui, _PREVIEW: beta}})
+    ctx = types.SimpleNamespace(profile="test", output=output, api_client_provider=provider)
+    result = CliRunner().invoke(
+        getattr(deploy_mod, f"deployments_{command}"),
+        [_APP] if command == "get" else [],
+        obj=ctx,
+        color=True,
+    )
+    assert result.exit_code == 0, result.output
+    assert len(api.requests) == 1
+    enabled = ui and beta
+    if output == "json":
+        payload = json.loads(result.stdout)
+        rows = payload if command == "list" else [payload]
+        for row in rows:
+            assert row["url"] == next(item["url"] for item in items if item["name"] == row["name"])
+            if enabled:
+                assert (
+                    row["details_url"]
+                    == f"https://workspace.example/ml/agents/details/{row['name']}?o=123"
+                )
+            else:
+                assert "details_url" not in row
+    else:
+        assert "https://agent.example" in result.stdout
+        if enabled:
+            assert _DETAILS_URL in result.stdout
+            assert "\x1b]8;" in result.stdout
+            assert ("Open app" if command == "list" else "Agent details") in result.stdout
+        else:
+            assert "/ml/agents/details/" not in result.stdout
+            assert "Open app" not in result.stdout
+
+
+def test_batch_links_share_lookup_and_encode_each_name():
+    provider, api = _provider({"flags": {_UI_FLAG: True, _PREVIEW: True}})
+    names = [_APP, "agent/name ?#"]
+    assert AgentDetailsClient(provider).get_urls(names) == {
+        _APP: _DETAILS_URL,
+        "agent/name ?#": "https://workspace.example/ml/agents/details/agent%2Fname%20%3F%23?o=123",
+    }
+    assert len(api.requests) == 1
+
+
+def test_empty_list_skips_flag_lookup(monkeypatch):
+    provider, api = _provider({})
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deployments_list,
+        obj=types.SimpleNamespace(profile="test", output="json", api_client_provider=provider),
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == []
+    assert api.requests == []
+
+
+def test_batch_lookup_timeout_omits_all_links(monkeypatch):
+    release = threading.Event()
+    provider, api = _provider({})
+
+    def blocked_request(*args, **kwargs):
+        release.wait(5)
+        return {"flags": {_UI_FLAG: True, _PREVIEW: True}}
+
+    api.do = blocked_request
+    monkeypatch.setattr(agent_details_client, "_DETAILS_LOOKUP_TIMEOUT_S", 0.01)
+    try:
+        assert AgentDetailsClient(provider).get_urls([_APP, "agent-bricks-other"]) == {}
+    finally:
+        release.set()

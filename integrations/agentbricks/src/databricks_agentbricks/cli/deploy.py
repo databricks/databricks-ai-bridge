@@ -350,7 +350,10 @@ def deployments() -> None:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
-    present_deployments_list(build_deploy_service(obj).list_deployments(), output=obj.output)
+    items = build_deploy_service(obj).list_deployments()
+    names = [item["name"] for item in items if item.get("name")]
+    details_urls = AgentDetailsClient(obj.api_client_provider).get_urls(names)
+    present_deployments_list(items, output=obj.output, details_urls=details_urls)
 
 
 @deployments.command("get")
@@ -358,7 +361,13 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
-    present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
+    data = build_deploy_service(obj).get(name)
+    present_deployment_detail(
+        data,
+        name,
+        output=obj.output,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(name),
+    )
 
 
 @deployments.command("wait")

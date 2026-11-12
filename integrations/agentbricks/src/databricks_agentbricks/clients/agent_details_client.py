@@ -33,30 +33,37 @@ class AgentDetailsClient:
     def get_url(
         self, deployment: str, *, expected_workspace: WorkspaceIdentity | None = None
     ) -> str | None:
-        """Omit the optional link rather than delay or fail a deployment."""
-        urls: queue.Queue[str | None] = queue.Queue(maxsize=1)
+        return self.get_urls([deployment], expected_workspace=expected_workspace).get(deployment)
+
+    def get_urls(
+        self, deployments: list[str], *, expected_workspace: WorkspaceIdentity | None = None
+    ) -> dict[str, str]:
+        """Share one bounded flag lookup across all rows in a command's output."""
+        if not deployments:
+            return {}
+        urls: queue.Queue[dict[str, str]] = queue.Queue(maxsize=1)
 
         def fetch() -> None:
             try:
-                urls.put(self._fetch_url(deployment, expected_workspace))
+                urls.put(self._fetch_urls(deployments, expected_workspace))
             except Exception:  # noqa: BLE001 - optional UI discovery must not change deploy outcomes
-                urls.put(None)
+                urls.put({})
 
         threading.Thread(target=fetch, name="agentbricks-details-link", daemon=True).start()
         try:
             return urls.get(timeout=_DETAILS_LOOKUP_TIMEOUT_S)
         except queue.Empty:
-            return None
+            return {}
 
-    def _fetch_url(
-        self, deployment: str, expected_workspace: WorkspaceIdentity | None
-    ) -> str | None:
+    def _fetch_urls(
+        self, deployments: list[str], expected_workspace: WorkspaceIdentity | None
+    ) -> dict[str, str]:
         client = self._api_client_provider.get()
         if (
             expected_workspace is not None
             and WorkspaceIdentity.from_client(client) != expected_workspace
         ):
-            return None
+            return {}
         workspace = client.workspace_client
         workspace_id = workspace.config.workspace_id
         # Request named items so SAFE's compact, hashed browser representation is unnecessary.
@@ -65,12 +72,15 @@ class AgentDetailsClient:
             query["o"] = str(workspace_id)
         snapshot = workspace.api_client.do("GET", "/api/2.0/ui-flags", query=query)
         if not isinstance(snapshot, dict):
-            return None
+            return {}
         flags = cast(dict[str, Any], snapshot)
         if not all(_enabled(flags, flag) for flag in (_AGENT_UI_FLAG, _AGENT_PREVIEW)):
-            return None
+            return {}
         host = client.host
         if not host or host == "unknown":
-            return None
-        url = f"{host.rstrip('/')}/ml/agents/details/{quote(deployment, safe='')}"
-        return f"{url}?{urlencode({'o': workspace_id})}" if workspace_id else url
+            return {}
+        suffix = f"?{urlencode({'o': workspace_id})}" if workspace_id else ""
+        return {
+            deployment: f"{host.rstrip('/')}/ml/agents/details/{quote(deployment, safe='')}{suffix}"
+            for deployment in deployments
+        }
