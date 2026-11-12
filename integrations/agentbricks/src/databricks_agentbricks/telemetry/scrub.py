@@ -22,11 +22,8 @@ _CREDENTIAL_NAME = (
 )
 _ASSIGNMENT = re.compile(rf"(?ix)(?<![\w-]){_CREDENTIAL_NAME}[\"']?\s*[:=][^\S\n]*")
 _OPTION = re.compile(rf"(?ix)(?<![\w-])--?{_CREDENTIAL_NAME}[\"']?(?:\s*,\s*|(?=\s)[^\S\n]*)")
-_QUOTED_VALUE = re.compile(
-    r"(?<!\w)(?i:br|rb|fr|rf|[rubf])?"
-    r"""(?:"{3}[\s\S]*|'{3}[\s\S]*|"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
-)
-_VALUE_SEPARATOR = re.compile(r"\s*[:=][^\S\n]*")
+# Encoded text may hide credential names, so omit it without trying to decode it.
+_ENCODED = re.compile(r"""\\(?:["'\\]|[uUxX][0-9a-fA-F])""")
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
 _URL_USERINFO = re.compile(r"""(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#"'<>]+@""")
 _URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
@@ -47,68 +44,6 @@ _PATHS = tuple(
 )
 _PATH_CANDIDATE = re.compile(r"(^|[\s:=,\"'])([a-zA-Z0-9_][^\s:,\"']*)")
 _EMAIL = re.compile(r"(?<![a-zA-Z0-9._%+\-])[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-
-
-def _container_end(value: str, start: int) -> int:
-    closers: list[str] = []
-    quote = ""
-    escaped = False
-    for index in range(start, len(value)):
-        char = value[index]
-        if escaped:
-            escaped = False
-        elif quote:
-            if char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = ""
-        elif char in "\"'":
-            if value[index : index + 3] == char * 3:
-                return len(value)
-            quote = char
-        elif char in "{[":
-            closers.append("}" if char == "{" else "]")
-        elif char in "}]":
-            if char != closers.pop():
-                return len(value)
-            if not closers:
-                return index + 1
-    return len(value)
-
-
-def _value_end(value: str, start: int) -> int:
-    if start < len(value) and value[start] in "{[":
-        return _container_end(value, start)
-    if quoted := _QUOTED_VALUE.match(value, start):
-        return quoted.end()
-    # Free-form text cannot establish a safe boundary for unquoted or multiline credentials.
-    return len(value)
-
-
-def _scrub_values(value: str, pattern: re.Pattern[str]) -> str:
-    parts: list[str] = []
-    end = 0
-    while match := pattern.search(value, end):
-        parts.extend((value[end : match.start()], _REDACTED))
-        end = _value_end(value, match.end())
-    return "".join((*parts, value[end:]))
-
-
-def _scrub_encoded_values(value: str) -> str:
-    parts: list[str] = []
-    end = cursor = 0
-    while match := _QUOTED_VALUE.search(value, cursor):
-        cursor = match.end()
-        if "\\" not in match[0] or _WINDOWS_PATH.fullmatch(match[0][1:-1]):
-            continue
-        # Omit encoded strings instead of recursively decoding potentially nested credentials.
-        parts.extend((value[end : match.start()], _REDACTED))
-        end = match.end()
-        if separator := _VALUE_SEPARATOR.match(value, end):
-            # An encoded field name must be removed together with its complete value.
-            end = _value_end(value, separator.end())
-        cursor = end
-    return "".join((*parts, value[end:]))
 
 
 def _scrub_relative_path(match: re.Match[str]) -> str:
@@ -140,13 +75,13 @@ def scrub_failure_text(value: str) -> str:
     truncated = len(value) > _MAX_INPUT_CHARS
     value = _ANSI.sub("", value[:_MAX_INPUT_CHARS])
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
-    value = _scrub_encoded_values(value)
+    # Free-form credential values have no reliable end boundary; retain only preceding text.
+    for pattern in (_ENCODED, _HEADER, _ASSIGNMENT, _OPTION):
+        if match := pattern.search(value):
+            value = value[: match.start()] + _REDACTED
     value = _PRIVATE_KEY.sub(_REDACTED, value)
-    value = _scrub_values(value, _HEADER)
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     value = _URL.sub(_scrub_url_query, value)
-    value = _scrub_values(value, _ASSIGNMENT)
-    value = _scrub_values(value, _OPTION)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)
     value = _JWT_CANDIDATE.sub(_scrub_jwt, value)
