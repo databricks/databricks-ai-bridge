@@ -32,7 +32,7 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
 ## Work from installed evidence
 
 Run `agentbricks <command> --help` for the relevant command, not every command in the CLI.
-Global `--profile/-p` and `--output/-o` precede subcommands. Use `--output json` when consuming
+Global `--profile/-p` precedes subcommands; `--output/-o` goes before or after them. Use `--output json` when consuming
 command results programmatically. Resource lists are workspace-wide, not proof of project ownership.
 
 In scaffolded projects, `AGENTKIT_CONTRACT.md` owns runtime wiring and transport requirements;

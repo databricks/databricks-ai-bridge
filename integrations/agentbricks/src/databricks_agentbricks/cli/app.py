@@ -123,9 +123,9 @@ def _emit_trailing_spacer() -> None:
     try:
         # Suppress under `-o json` even on a (pseudo-)TTY — a machine may be parsing stdout under
         # `docker run -t` / `script` / a CI PTY, where isatty() alone would wrongly allow the
-        # spacer. `errors._OUTPUT_MODE` is a process global (set by the root group, read the same
-        # way by render.py), so it's still available here after the Click context is torn down.
-        if errors._OUTPUT_MODE == "json" or not sys.stdout.isatty():
+        # spacer. `errors.error_output_mode()` is a process global (set by the root group, read the
+        # same way by render.py), so it's still available here after the Click context is torn down.
+        if errors.error_output_mode() == "json" or not sys.stdout.isatty():
             return
         click.echo()
     except Exception:
