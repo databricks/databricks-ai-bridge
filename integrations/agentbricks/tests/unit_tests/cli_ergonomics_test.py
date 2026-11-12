@@ -209,12 +209,11 @@ def root(monkeypatch):
     errors.set_output_mode("text")
 
 
-def _leaf_paths(group, prefix=()):
+def _command_paths(group, prefix=()):
     for name, command in group.commands.items():
+        yield (*prefix, name)
         if isinstance(command, click.Group):
-            yield from _leaf_paths(command, (*prefix, name))
-        else:
-            yield (*prefix, name)
+            yield from _command_paths(command, (*prefix, name))
 
 
 @pytest.mark.parametrize(
@@ -301,13 +300,79 @@ def test_telemetry_records_output_after_command_like_before_it(root, monkeypatch
     }
 
 
-def test_every_leaf_accepts_output_and_lists_it_in_help(root):
-    leaves = list(_leaf_paths(root))
-    assert len(leaves) > 50
-    for path in leaves:
+def test_every_command_accepts_output_and_lists_it_in_help(root):
+    paths = list(_command_paths(root))
+    assert len(paths) > 50
+    for path in paths:
         result = CliRunner().invoke(root, [*path, "-o", "json", "--help"])
         assert result.exit_code == 0, (path, result.output)
         assert "-o, --output [text|json]" in result.stdout, path
+
+
+@pytest.mark.parametrize("at", [1, 2])
+def test_output_between_group_names_matches_root_placement(root, at):
+    cmd = ["sessions", "stores", "create", "--name", "s"]
+    before = CliRunner().invoke(root, ["-o", "json", *cmd])
+    between = CliRunner().invoke(root, [*cmd[:at], "-o", "json", *cmd[at:]])
+    assert between.exit_code == before.exit_code == 0, between.output
+    assert between.stdout == before.stdout
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [
+            "sessions",
+            "stores",
+            "create",
+            "--name",
+            "s",
+            "--description",
+            "--output=text",
+            "--bogus",
+        ],
+        [
+            "sessions",
+            "stores",
+            "create",
+            "--name",
+            "s",
+            "--description",
+            "--output",
+            "text",
+            "--bogus",
+        ],
+        ["sessions", "stores", "create", "--name", "s", "--description", "--output", "text"],
+    ],
+)
+def test_option_value_that_looks_like_output_does_not_override_root(root, args):
+    """`--output` consumed as an option's value is not an output choice, so the root `-o json` holds."""
+    result = CliRunner().invoke(root, ["-o", "json", *args])
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_output_flag_consumed_as_option_value_stays_text(root):
+    """Click reads `-o` as `--description`'s value, so no output option was parsed and the usage
+    error renders as text - matching what Click itself decided."""
+    result = CliRunner().invoke(
+        root, ["sessions", "stores", "create", "--name", "s", "--description", "-o", "json"]
+    )
+    assert result.exit_code == 2
+    assert "{" not in result.stderr
+    assert "error:" in result.stderr
+
+
+def test_flag_named_like_a_value_option_elsewhere_keeps_trailing_output(root):
+    """`--auth` is a flag on `endpoint invoke` but takes a value on `tools add`; only the command's
+    own options decide, so its trailing `-o json` still counts."""
+    result = CliRunner().invoke(
+        root, ["-o", "text", "endpoint", "invoke", "--auth", "-o", "json", "--bogus"]
+    )
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
 
 
 def test_invalid_output_after_command_lists_choices(root):

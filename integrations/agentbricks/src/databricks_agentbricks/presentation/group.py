@@ -85,7 +85,7 @@ class AgentBricksGroup(_FlushEpilog, click.Group):
             # Usage errors can fire before any command callback runs, so record the raw line's
             # `-o/--output` choice (if any) up front: the last value on the line decides how errors
             # render, even when the bad option or unknown command comes before it.
-            errors.set_usage_output_mode(_scan_output(args))
+            errors.set_usage_output_mode(_scan_output(self, args))
         return super().make_context(info_name, args, parent=parent, **extra)
 
     def resolve_command(self, ctx: click.Context, args: list[str]):
@@ -173,9 +173,25 @@ class AgentBricksHelpFormatter(click.HelpFormatter):
 _OUTPUT_CHOICES = ("text", "json")
 
 
-def _scan_output(args: list[str]) -> Optional[str]:
-    """Return the last valid `-o/--output` value in a leaf's raw args, before any `--`."""
+def _takes_value(command: click.Command) -> set[str]:
+    """Option spellings on `command` that consume the next token as their value."""
+    return {
+        opt
+        for param in command.params
+        if isinstance(param, click.Option) and not (param.is_flag or param.count)
+        for opt in param.opts
+    }
+
+
+def _scan_output(root: click.Group, args: list[str]) -> Optional[str]:
+    """Return the last valid `-o/--output` value in the raw line, before any `--`.
+
+    Walks the line with each command's own options, so a value like `--description --output=text`
+    is not read as an output choice.
+    """
     found: Optional[str] = None
+    command: click.Command = root
+    value_opts = _takes_value(root)
     tokens = iter(args)
     for token in tokens:
         if token == "--":
@@ -186,6 +202,13 @@ def _scan_output(args: list[str]) -> Optional[str]:
             value = token.partition("=")[2]
         elif token.startswith("-o") and not token.startswith("--"):
             value = token[2:]
+        elif token in value_opts:
+            next(tokens, None)
+            continue
+        elif isinstance(command, click.Group) and token in command.commands:
+            command = command.commands[token]
+            value_opts = _takes_value(command)
+            continue
         else:
             continue
         if value in _OUTPUT_CHOICES:
@@ -194,7 +217,7 @@ def _scan_output(args: list[str]) -> Optional[str]:
 
 
 def _apply_output(ctx: click.Context, _param: click.Parameter, value: Optional[str]) -> None:
-    """Let a leaf's `-o/--output` override the root group's choice."""
+    """Let a command's `-o/--output` override the root group's choice."""
     if value is None:
         return
     errors.set_output_mode(value)
@@ -212,7 +235,7 @@ def _apply_output(ctx: click.Context, _param: click.Parameter, value: Optional[s
 
 
 def _output_option() -> click.Option:
-    """The leaf-level `-o/--output`; `None` means "keep the root's value"."""
+    """The per-command `-o/--output`; `None` means "keep the root's value"."""
     return click.Option(
         ["--output", "-o"],
         type=click.Choice(list(_OUTPUT_CHOICES)),
@@ -353,7 +376,7 @@ def _upgrade(command: click.Command) -> None:
     else:
         if not isinstance(command, AgentBricksCommand):
             command.__class__ = AgentBricksCommand
-        # Accept `-o/--output` after the command too, unless the leaf already defines it.
-        taken = {opt for param in command.params for opt in param.opts}
-        if not taken & {"-o", "--output"}:
-            command.params.append(_output_option())
+    # Accept `-o/--output` after any command or group name, unless it already defines the option.
+    taken = {opt for param in command.params for opt in param.opts}
+    if not taken & {"-o", "--output"}:
+        command.params.append(_output_option())
