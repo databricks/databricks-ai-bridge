@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -124,7 +124,7 @@ class DevService:
                 raise AgentCliError(
                     f"No app.yaml found at {app_yaml}.",
                     hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
-                    failure_reason=FailureReason.PROJECT_INVALID,
+                    error_category="ERROR_CATEGORY_CONFIGURATION",
                 )
 
             project = self._project_resolver.load(source_dir)
@@ -138,7 +138,7 @@ class DevService:
                 raise AgentCliError(
                     f"Port {port} is already in use (possibly a previous agentbricks dev run).",
                     hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
-                    failure_reason=FailureReason.PORT_IN_USE,
+                    error_category="ERROR_CATEGORY_CONFIGURATION",
                 )
 
             # Resource bindings are read only for the preview/presentation.  Dev is fully local and

@@ -38,7 +38,6 @@ from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
 from databricks_agentbricks.diagnostics import (
     CommandDiagnostics,
-    FailureReason,
     FailureStage,
     Readiness,
     operation_uuid,
@@ -347,7 +346,6 @@ def _not_answering(name: str, last: ProbeResult) -> AgentCliError:
         f"Agent '{name}' didn't answer within {format_elapsed(_READY_TIMEOUT_S)}{last_seen}.",
         hint=f"check `agentbricks deployments logs {name}`, fix the cause, then re-run "
         "`agentbricks deploy`",
-        failure_reason=FailureReason.APP_READINESS_TIMEOUT,
     )
 
 
