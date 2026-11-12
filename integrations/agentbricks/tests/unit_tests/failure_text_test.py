@@ -76,8 +76,8 @@ def test_quoted_credentials_respect_escapes_and_incomplete_values(value):
     assert "synthetic-tail" not in result
 
 
-def test_escaped_backslash_keeps_following_error_text():
-    assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
+def test_credential_value_omits_following_text_without_parsing_escapes():
+    assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED]"
 
 
 @pytest.mark.parametrize("prefix", ["b", "B", "r", "u", "br", "rb", "f", "fr", "rf"])
@@ -85,9 +85,7 @@ def test_escaped_backslash_keeps_following_error_text():
 @pytest.mark.parametrize("separator", [" ", ",", ";", "\n"])
 def test_prefixed_credential_literals_are_scrubbed_completely(prefix, quote, separator):
     value = f"{prefix}{quote}{separator}synthetic-opaque-value{quote}"
-    assert scrub_failure_text(f"password={value}\nConnection failed") == (
-        "[REDACTED]\nConnection failed"
-    )
+    assert scrub_failure_text(f"password={value}\nConnection failed") == "[REDACTED]"
 
 
 def test_prose_apostrophes_do_not_hide_the_following_error():
@@ -111,7 +109,7 @@ def test_encoded_values_are_omitted_with_their_credential_context(value, depth):
     result = scrub_failure_text(f"Request failed: {value}\nConnection failed")
     assert "synthetic-opaque-value" not in result
     assert result.startswith("Request failed: ")
-    assert result.endswith("\nConnection failed")
+    assert result.endswith("[REDACTED]")
 
 
 @pytest.mark.parametrize(
@@ -129,9 +127,9 @@ def test_encoded_values_are_omitted_with_their_credential_context(value, depth):
         r"""{'value': 'synthetic-opaque-value\'with}braces'}""",
     ],
 )
-def test_credential_containers_are_scrubbed_without_losing_following_error(name, value):
+def test_credential_containers_omit_following_text_without_parsing(name, value):
     result = scrub_failure_text(f"{name}: {value}\nConnection failed")
-    assert result == "[REDACTED]\nConnection failed"
+    assert result == "[REDACTED]"
 
 
 @pytest.mark.parametrize(
