@@ -742,6 +742,9 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         "example://name:synthetic-secret@synthetic-tail@host/db",
         "client_secret: |\n  synthetic-opaque-value",
         "client_secret: >-\n  synthetic-opaque-value",
+        repr({"password": b" synthetic-opaque-value"}),
+        repr({"password": b",synthetic-opaque-value"}),
+        repr({"password": b";synthetic-opaque-value"}),
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
@@ -757,6 +760,18 @@ def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, d
     assert "synthetic-tail" not in payload
     assert "synthetic-opaque-value" not in payload
     assert "Request failed" in payload
+
+
+def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeypatch):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    detail = r"Error: app doesn't exist in workspace; see .\logs\x.log; Final error: quota exceeded"
+    telemetry.emit_command(
+        context, exit_code=1, execution_time_ms=1, exception=AgentCliError(detail)
+    )
+    assert len(api.calls) == 1
+    assert _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"] == detail
 
 
 @pytest.mark.parametrize(
