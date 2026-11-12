@@ -24,7 +24,6 @@ from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.presentation.help import configure_help
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
@@ -36,7 +35,6 @@ class CliContext:
         self.profile = profile
         self.output = output
         self.api_client_provider = ApiClientProvider(profile)
-        self.diagnostics = CommandDiagnostics()
 
     def client(self) -> _AgentBricksApiClient:
         """Compatibility accessor for commands not yet migrated to ``api_client_provider``."""

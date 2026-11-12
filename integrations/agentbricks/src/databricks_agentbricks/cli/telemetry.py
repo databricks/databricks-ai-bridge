@@ -26,8 +26,7 @@ from click.core import ParameterSource
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
 
-from databricks_agentbricks.cli.failure_text import scrub_failure_text
-from databricks_agentbricks.diagnostics import FailureReason
+from databricks_agentbricks.telemetry.scrub import scrub_failure_text
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
@@ -208,46 +207,39 @@ def _exception_chain(exc: BaseException | None):
         exc = exc.__cause__
 
 
-def _failure_reason(exc: BaseException | None) -> FailureReason | None:
-    aliases = {
-        "INVALID_TOKEN": "UNAUTHENTICATED",
-        "INVALID_CREDENTIALS": "UNAUTHENTICATED",
-        "TOKEN_EXPIRED": "UNAUTHENTICATED",
-        "FORBIDDEN": "PERMISSION_DENIED",
-        "UNAUTHORIZED": "PERMISSION_DENIED",
-        "NOT_AUTHORIZED": "PERMISSION_DENIED",
-        "TIMEOUT": "DEADLINE_EXCEEDED",
-        "TIMED_OUT": "DEADLINE_EXCEEDED",
-        "CONNECTION_ERROR": "NETWORK_ERROR",
-        "CONFIGURATION_ERROR": "PROJECT_INVALID",
-        "UNIMPLEMENTED": "FEATURE_DISABLED",
-        "NOT_IMPLEMENTED": "FEATURE_DISABLED",
-    }
-    chain = list(_exception_chain(exc))
-    for error in chain:
-        reason = getattr(error, "failure_reason", None)
-        if isinstance(reason, FailureReason):
-            return reason
-        code = getattr(error, "error_code", None)
-        if isinstance(code, str):
-            code = code.upper()
-            try:
-                return FailureReason(aliases.get(code, code))
-            except ValueError:
-                pass
-    for error in chain:
-        if isinstance(error, ImportError):
-            return FailureReason.DEPENDENCY_MISSING
-        if isinstance(
-            error,
-            (TimeoutError, ConnectionError, URLError, RequestsConnectionError, RequestsTimeout),
-        ):
-            return FailureReason.NETWORK_ERROR
-        if isinstance(
-            error, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
-        ):
-            return FailureReason.FILESYSTEM_ERROR
-    return None
+_SERVICE_ERROR_CATEGORIES = {
+    code: f"ERROR_CATEGORY_{category}"
+    for category, codes in {
+        "AUTHENTICATION": (
+            "UNAUTHENTICATED",
+            "INVALID_TOKEN",
+            "INVALID_CREDENTIALS",
+            "TOKEN_EXPIRED",
+        ),
+        "AUTHORIZATION": ("PERMISSION_DENIED", "FORBIDDEN", "UNAUTHORIZED", "NOT_AUTHORIZED"),
+        "NETWORK": (
+            "NETWORK_ERROR",
+            "CONNECTION_ERROR",
+            "UNAVAILABLE",
+            "DEADLINE_EXCEEDED",
+            "TIMEOUT",
+            "TIMED_OUT",
+            "CANCELLED",
+            "ABORTED",
+        ),
+        "CONFIGURATION": ("INVALID_ARGUMENT", "FAILED_PRECONDITION", "CONFIGURATION_ERROR"),
+        "RUNTIME": (
+            "NOT_FOUND",
+            "ALREADY_EXISTS",
+            "RESOURCE_EXHAUSTED",
+            "INTERNAL_ERROR",
+            "FEATURE_DISABLED",
+            "UNIMPLEMENTED",
+            "NOT_IMPLEMENTED",
+        ),
+    }.items()
+    for code in codes
+}
 
 
 def _error_category(exc: BaseException) -> str:
@@ -260,33 +252,26 @@ def _error_category(exc: BaseException) -> str:
         return "ERROR_CATEGORY_USAGE"
     if isinstance(exc, (KeyboardInterrupt, click.Abort)):
         return "ERROR_CATEGORY_INTERRUPTED"
-    reason = _failure_reason(exc)
-    if reason == FailureReason.UNAUTHENTICATED:
-        return "ERROR_CATEGORY_AUTHENTICATION"
-    if reason == FailureReason.PERMISSION_DENIED:
-        return "ERROR_CATEGORY_AUTHORIZATION"
-    if reason in {
-        FailureReason.DEPENDENCY_MISSING,
-        FailureReason.UV_MISSING,
-        FailureReason.PYTHON_UNAVAILABLE,
-    }:
-        return "ERROR_CATEGORY_DEPENDENCY"
-    if reason in {
-        FailureReason.NETWORK_ERROR,
-        FailureReason.UNAVAILABLE,
-        FailureReason.DEADLINE_EXCEEDED,
-        FailureReason.CANCELLED,
-        FailureReason.ABORTED,
-    }:
-        return "ERROR_CATEGORY_NETWORK"
-    if reason in {
-        FailureReason.FILESYSTEM_ERROR,
-        FailureReason.PROJECT_INVALID,
-        FailureReason.PORT_IN_USE,
-        FailureReason.INVALID_ARGUMENT,
-        FailureReason.FAILED_PRECONDITION,
-    }:
-        return "ERROR_CATEGORY_CONFIGURATION"
+    chain = list(_exception_chain(exc))
+    for error in chain:
+        category = getattr(error, "error_category", None)
+        if isinstance(category, str) and category in _ERROR_CATEGORIES:
+            return category
+        code = getattr(error, "error_code", None)
+        if isinstance(code, str) and (category := _SERVICE_ERROR_CATEGORIES.get(code.upper())):
+            return category
+    for error in chain:
+        if isinstance(error, ImportError):
+            return "ERROR_CATEGORY_DEPENDENCY"
+        if isinstance(
+            error,
+            (TimeoutError, ConnectionError, URLError, RequestsConnectionError, RequestsTimeout),
+        ):
+            return "ERROR_CATEGORY_NETWORK"
+        if isinstance(
+            error, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
+        ):
+            return "ERROR_CATEGORY_CONFIGURATION"
     return "ERROR_CATEGORY_RUNTIME"
 
 
