@@ -1696,7 +1696,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--source <SOURCE>` | path | `.` | no | Local source directory for the deployment (containing app.yaml). Defaults to the current directory. |
+| `--source <SOURCE>` | path | `.` | no | Project directory (with app.yaml). Defaults to the current directory. |
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
@@ -1705,7 +1705,7 @@ _Options_
 | `--allow-user-scope-update` | flag | - | no | Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool inference and `[auth.user]` additions. Once added, later deploys do not need this flag. |
 | `--no-wait` | flag | - | no | Run the quick checks, then finish the deploy in a background process and exit. Follow it with `agentbricks deployments wait`. |
 
-`deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. After rollout, `deploy` waits up to 5 minutes for the app to stop returning 502/503/504 (`• Waiting for the agent to answer…`), then prints `Deployed`; if it never answers, it exits 1 and points at `agentbricks deployments logs <app>`. When the profile can't call the app (a PAT, or 401/403), it prints `Couldn't check the agent answers: <reason>.` on stderr and still succeeds. The `-o json` result includes `"ready"`: `true` once the app answered, `null` when it couldn't be checked. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
+`deploy` exits 1 before deploying or creating any resources when the source has no app.yaml, or its app.yaml can't be parsed or still has a placeholder command. `deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. After rollout, `deploy` waits up to 5 minutes for the app to stop returning 502/503/504 (`• Waiting for the agent to answer…`), then prints `Deployed`; if it never answers, it exits 1 and points at `agentbricks deployments logs <app>`. When the profile can't call the app (a PAT, or 401/403), it prints `Couldn't check the agent answers: <reason>.` on stderr and still succeeds. The `-o json` result includes `"ready"`: `true` once the app answered, `null` when it couldn't be checked. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
 
 ### `agentbricks deployments`
 
