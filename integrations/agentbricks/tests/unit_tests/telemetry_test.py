@@ -757,6 +757,9 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         "client_secret: !!str\n  synthetic-opaque-value",
         'password="""first line\n"}synthetic-opaque-value"""',
         'credentials={nested: """first line\n"}synthetic-opaque-value"""}',
+        "--password synthetic-opaque-value",
+        "private_key = synthetic-opaque-value",
+        "['tool', '--password', 'synthetic-opaque-value']",
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
@@ -784,6 +787,21 @@ def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeyp
     )
     assert len(api.calls) == 1
     assert _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"] == detail
+
+
+def test_uploaded_signal_diagnosis_preserves_reason_and_minimizes_assignment_paths(monkeypatch):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    detail = "Child failed: signal: killed; --config=/home/example/private/app.py; quota exceeded"
+    telemetry.emit_command(
+        context, exit_code=1, execution_time_ms=1, exception=AgentCliError(detail)
+    )
+    assert len(api.calls) == 1
+    message = _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"]
+    assert "signal: killed" in message
+    assert "quota exceeded" in message
+    assert "/home/example/private" not in message
 
 
 @pytest.mark.parametrize(
