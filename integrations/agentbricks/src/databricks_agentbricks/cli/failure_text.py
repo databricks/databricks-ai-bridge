@@ -14,7 +14,7 @@ _PRIVATE_KEY = re.compile(
     re.DOTALL,
 )
 _HEADER = re.compile(
-    r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=][^\n]*"
+    r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=]\s*"
 )
 _ASSIGNMENT = re.compile(
     r"(?ix)(?<![\w-])(?=[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
@@ -70,15 +70,19 @@ def _container_end(value: str, start: int) -> int:
     return len(value)
 
 
-def _scrub_assignments(value: str) -> str:
+def _scrub_values(value: str, pattern: re.Pattern[str], *, unquoted_line: bool = False) -> str:
     parts: list[str] = []
     end = 0
-    while match := _ASSIGNMENT.search(value, end):
+    while match := pattern.search(value, end):
         parts.extend((value[end : match.start()], _REDACTED))
         end = match.end()
         if end < len(value) and value[end] in "{[":
             # Redact the whole credential container, including unnamed values and nested keys.
             end = _container_end(value, end)
+        elif unquoted_line and value[end : end + 1] not in ('"', "'"):
+            # Unquoted headers can contain multiple credentials or an authentication scheme.
+            newline = value.find("\n", end)
+            end = len(value) if newline == -1 else newline
         elif scalar := _SCALAR_VALUE.match(value, end):
             end = scalar.end()
     return "".join((*parts, value[end:]))
@@ -114,10 +118,10 @@ def scrub_failure_text(value: str) -> str:
     value = _ANSI.sub("", value[:_MAX_INPUT_CHARS])
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
     value = _PRIVATE_KEY.sub(_REDACTED, value)
-    value = _HEADER.sub(_REDACTED, value)
+    value = _scrub_values(value, _HEADER, unquoted_line=True)
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     value = _URL.sub(_scrub_url_query, value)
-    value = _scrub_assignments(value)
+    value = _scrub_values(value, _ASSIGNMENT)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)
     value = _JWT_CANDIDATE.sub(_scrub_jwt, value)
