@@ -23,7 +23,8 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
   [development and deployment](references/deployment.md) for local-versus-deployed behavior.
 - **Deployment or proof of life:** read [development and deployment](references/deployment.md).
   If the goal is a deployed agent, a local dev server is optional, not a prerequisite. Retain
-  relevant offline checks and perform only the live validation the user has requested.
+  relevant offline checks and perform only the live validation the user has requested. Deploy needs
+  a project `app.yaml` with a real `command:`; deploy never creates one.
 - **Tools, memory, sessions, store permissions, or tracing:** read
   [state and tools](references/state-and-tools.md) for resource identity, permissions, and focused
   diagnostics.

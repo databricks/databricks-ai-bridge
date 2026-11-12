@@ -30,8 +30,7 @@ import yaml
 
 from databricks_agentbricks.errors import AgentCliError
 
-# Placeholder commands from older deploy scaffolds and templates. An app.yaml still carrying one can
-# never start, so deploy refuses it and doctor's `app_command` check fails it.
+# Scaffold placeholder commands; deploy refuses them because such an app.yaml can never start.
 _PLACEHOLDER_MARKERS = ("# todo: set your run command", "replace_with")
 
 

@@ -22,6 +22,11 @@ as `[agent].deployment_name` and prints it as `Deploy name`; from the project di
 Provisioning takes real time; do not start repeated deployments merely because one is still running.
 Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment before retrying.
 
+`deploy` needs an `app.yaml` with a real `command:` in the source directory. If it exits before
+deploying with "No app.yaml", "No Agent Bricks project", or a placeholder command, run it from the
+project directory, pass `--source <directory>`, add the real start command to `app.yaml`, or create
+a project with `agentbricks init`.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
