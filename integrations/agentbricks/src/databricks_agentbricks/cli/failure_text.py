@@ -22,7 +22,7 @@ _ASSIGNMENT = re.compile(
 )
 _QUOTED_VALUE = re.compile(
     r"(?<!\w)(?i:br|rb|fr|rf|[rubf])?"
-    r"""(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
+    r"""(?:"{3}[\s\S]*|'{3}[\s\S]*|"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
 )
 _VALUE_SEPARATOR = re.compile(r"\s*[:=][^\S\n]*")
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
@@ -61,6 +61,8 @@ def _container_end(value: str, start: int) -> int:
             elif char == quote:
                 quote = ""
         elif char in "\"'":
+            if value[index : index + 3] == char * 3:
+                return len(value)
             quote = char
         elif char in "{[":
             closers.append("}" if char == "{" else "]")
@@ -73,16 +75,12 @@ def _container_end(value: str, start: int) -> int:
 
 
 def _value_end(value: str, start: int) -> int:
-    if value[start : start + 1] in ("|", ">", "\n"):
-        # Free-form error text cannot reliably establish the end of a YAML credential block.
-        return len(value)
     if start < len(value) and value[start] in "{[":
         return _container_end(value, start)
     if quoted := _QUOTED_VALUE.match(value, start):
         return quoted.end()
-    # Unquoted credentials may contain spaces or auth schemes whose context must stay intact.
-    newline = value.find("\n", start)
-    return len(value) if newline == -1 else newline
+    # Free-form text cannot establish a safe boundary for unquoted or multiline credentials.
+    return len(value)
 
 
 def _scrub_values(value: str, pattern: re.Pattern[str]) -> str:

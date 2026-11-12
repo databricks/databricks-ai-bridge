@@ -154,6 +154,10 @@ def test_yaml_credential_blocks_are_omitted_conservatively(marker, name):
         "\n  client_secret: synthetic-opaque-value",
         " \n  - synthetic-opaque-value\n  - another-opaque-value",
         "\n  nested:\n    value: synthetic-opaque-value",
+        " # configured\n  - synthetic-opaque-value",
+        " synthetic-first\n  synthetic-opaque-value",
+        " &anchor\n  - synthetic-opaque-value",
+        " !!str\n  synthetic-opaque-value",
     ],
 )
 def test_multiline_credential_containers_are_omitted_conservatively(name, value):
@@ -163,10 +167,19 @@ def test_multiline_credential_containers_are_omitted_conservatively(name, value)
 @pytest.mark.parametrize("separator", [": ", "="])
 @pytest.mark.parametrize("name", ["token", "client_secret"])
 @pytest.mark.parametrize("prefix", ["Bearer ", "Basic ", "multiple words "])
-def test_unquoted_credentials_are_removed_through_the_end_of_the_line(name, separator, prefix):
+def test_unquoted_credentials_omit_the_remaining_capture(name, separator, prefix):
     assert scrub_failure_text(
-        f"{name}{separator}{prefix}synthetic-opaque-value\nConnection failed"
-    ) == ("[REDACTED]\nConnection failed")
+        f"Request failed: {name}{separator}{prefix}synthetic-opaque-value\ncontinuation"
+    ) == ("Request failed: [REDACTED]")
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("container", [False, True])
+def test_triple_quoted_credentials_omit_ambiguous_multiline_context(quote, container):
+    detail = f"password={quote * 3}synthetic-first\n{quote}}}synthetic-last{quote * 3}"
+    if container:
+        detail = f"credentials={{nested: {detail}}}"
+    assert scrub_failure_text(f"Request failed: {detail}") == "Request failed: [REDACTED]"
 
 
 @pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])
