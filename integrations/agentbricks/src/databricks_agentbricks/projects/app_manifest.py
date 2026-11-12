@@ -53,9 +53,11 @@ class AppManifest:
         non-list ``env``.
         """
         try:
-            doc = yaml.safe_load(text) or {}
+            doc = yaml.safe_load(text)
         except yaml.YAMLError as exc:
             raise AgentCliError(f"Could not parse {source}: {exc}") from exc
+        if doc is None:  # An empty or comment-only file is an empty document, not a falsey value.
+            doc = {}
         if not isinstance(doc, dict):
             raise AgentCliError(f"Invalid {source}: top level must be an object.")
         env = doc.get("env")

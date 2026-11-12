@@ -762,6 +762,9 @@ def test_deploy_of_a_project_without_app_yaml_names_the_expected_path(
     [
         ("command: ['# TODO: set your run command']\n", "has a placeholder command"),
         ("command: [unterminated", "Could not parse"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
     ],
 )
 def test_deploy_rejects_an_unusable_app_yaml_before_any_workspace_call(

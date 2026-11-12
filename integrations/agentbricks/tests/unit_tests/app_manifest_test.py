@@ -96,6 +96,9 @@ def test_require_deployable_rejects_placeholder_commands(tmp_path: pathlib.Path,
     [
         ("command: [unterminated", "Could not parse"),
         ("- just\n- a\n- list\n", "top level must be an object"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
         ("command: [x]\nenv: not-a-list\n", "env must be a list"),
     ],
 )
@@ -107,7 +110,9 @@ def test_require_deployable_rejects_unparseable_app_yaml(
         AppManifest.require_deployable(tmp_path)
 
 
-@pytest.mark.parametrize("text", ["command: ['uvicorn', 'app:app']\n", "env: []\n", ""])
+@pytest.mark.parametrize(
+    "text", ["command: ['uvicorn', 'app:app']\n", "env: []\n", "", "# only a comment\n"]
+)
 def test_require_deployable_accepts_a_real_or_default_command(tmp_path: pathlib.Path, text: str):
     (tmp_path / "app.yaml").write_text(text)
     AppManifest.require_deployable(tmp_path)
