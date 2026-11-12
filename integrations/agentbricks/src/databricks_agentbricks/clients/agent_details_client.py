@@ -62,5 +62,5 @@ class AgentDetailsClient:
         host = client.host
         if not host or host == "unknown":
             return None
-        url = f"{host.rstrip('/')}/ml/agents/apps/{quote(deployment, safe='')}"
+        url = f"{host.rstrip('/')}/ml/agents/details/{quote(deployment, safe='')}"
         return f"{url}?{urlencode({'o': workspace_id})}" if workspace_id else url
