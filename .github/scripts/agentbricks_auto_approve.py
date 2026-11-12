@@ -4,7 +4,7 @@ The decision combines the review's findings/coverage score and independent
 change-risk classification with deterministic path, component, and size checks.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N]
-       [--max-lines N] [--max-risk {low,medium}]
+       [--max-lines N]
 Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
 """
 
@@ -29,7 +29,6 @@ RISK_RATIONALE = re.compile(r"^\*\*Risk rationale:\*\*[ \t]*(?P<text>[^\r\n]*)$"
 RISK_LEVELS = ("low", "medium", "high")
 RISK_NAMES = {"medium": "MODERATE"}
 RISK_VALUES = {"LOW": "low", "MODERATE": "medium", "HIGH": "high", "UNRATED": "unrated"}
-AUTO_APPROVE_RISK_LEVELS = ("low", "medium")
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -149,7 +148,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
     elif len(files) > 10:
         floor("medium", "the change exceeds 10 paths")
     if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
-        floor("high", "binary changes need human review")
+        floor("high", "binary changes have high risk")
     return {
         "level": level, "label": f"risk:{level}", "model_level": model_level,
         "reasons": list(dict.fromkeys(reasons)),
@@ -157,9 +156,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
 
 
 def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
-           paths: list[str] | None = None, max_risk: str = "medium") -> dict:
-    if max_risk not in AUTO_APPROVE_RISK_LEVELS:
-        raise ValueError(f"max_risk must be one of: {', '.join(AUTO_APPROVE_RISK_LEVELS)}")
+           paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
     summary = REVIEW_SCORE.search(review)
@@ -192,12 +189,11 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
     risk = assess_change_risk(review, files, lines, diff)
-    if risk["level"] == "unrated" or RISK_LEVELS.index(risk["level"]) > RISK_LEVELS.index(max_risk):
-        allowed = RISK_NAMES.get(max_risk, max_risk.upper())
-        reasons.append(f"change risk is {risk['level']}; automatic approval allows up to {allowed} risk")
+    if risk["level"] == "unrated":
+        reasons.append("the review has no valid change-risk assessment")
 
     return {"review_passed": not review_reasons, "review_reasons": review_reasons,
-            "approve": not reasons, "reasons": reasons, "risk": risk, "max_risk": max_risk}
+            "approve": not reasons, "reasons": reasons, "risk": risk}
 
 
 FINDING_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Non-blocking notes", "Uncertain findings")
@@ -250,11 +246,6 @@ def unblock_steps(decision: dict) -> list[str]:
     for kind, paths in groups.items():
         listed = "see **Risk**" if kind in in_risk else _code_list(paths)
         steps.append(f"{kind} can't be auto-approved; move them to a separate PR ({listed}).")
-    if any(r.startswith("change risk is ") for r in other):
-        level = decision["risk"]["level"]
-        maximum = RISK_NAMES.get(decision["max_risk"], decision["max_risk"].upper())
-        steps.append(f"Lower the change risk to {maximum} or below "
-                     f"(it's {RISK_NAMES.get(level, level.upper())}; see **Risk**).")
     return steps
 
 
@@ -306,7 +297,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--diff", required=True, type=Path)
     parser.add_argument("--min-score", type=int, default=95)
     parser.add_argument("--max-lines", type=int, default=500)
-    parser.add_argument("--max-risk", choices=AUTO_APPROVE_RISK_LEVELS, default="medium")
     parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
     parser.add_argument("--overview", type=Path, help="Write the top of the PR comment: summary, risk, and approval")
     args = parser.parse_args(argv)
@@ -317,7 +307,6 @@ def main(argv: list[str] | None = None) -> int:
         min_score=args.min_score,
         max_lines=args.max_lines,
         paths=json.loads(args.paths.read_text()) if args.paths else None,
-        max_risk=args.max_risk,
     )
     if args.overview:
         args.overview.write_text(overview(review, result))

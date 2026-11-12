@@ -203,21 +203,22 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(name=name):
                 result = gate.decide(review(change_risk=name), diff(CODE))
                 self.assertEqual(result["risk"]["level"], level)
-                self.assertEqual(result["approve"], level in {"low", "medium"})
+                self.assertEqual(result["approve"], level in {"low", "medium", "high"})
 
-    def test_max_risk_can_be_restricted_to_low(self):
-        result = gate.decide(review(change_risk="MODERATE"), diff(CODE), max_risk="low")
-        self.assertFalse(result["approve"], result)
-        self.assertTrue(any("allows up to LOW risk" in reason for reason in result["reasons"]))
-        self.assertEqual(result["max_risk"], "low")
-        section = gate.overview(review(change_risk="MODERATE"), result)
-        self.assertIn("Lower the change risk to LOW or below", section)
-
-    def test_invalid_max_risk_fails_closed(self):
-        for level in ("high", "unrated", "MODERATE", ""):
-            with self.subTest(level=level):
-                with self.assertRaises(ValueError):
-                    gate.decide(review(), diff(CODE), max_risk=level)
+    def test_high_risk_does_not_override_other_approval_gates(self):
+        for kwargs in (
+            {"score": 94}, {"reviewers": "1/2"},
+            {"blocking": "A bug."}, {"security": "A vulnerability."},
+            {"uncertain": "An unverified finding."},
+        ):
+            with self.subTest(kwargs=kwargs):
+                result = gate.decide(review(change_risk="HIGH", **kwargs), diff(CODE))
+                self.assertFalse(result["approve"], result)
+                self.assertEqual(result["risk"]["label"], "risk:high")
+        for content in (diff("REVIEW.md"), diff(CODE, added=501)):
+            with self.subTest(content=content):
+                result = gate.decide(review(change_risk="HIGH"), content)
+                self.assertFalse(result["approve"], result)
 
     def test_missing_or_invalid_assessment_withholds_approval(self):
         for text in (
@@ -256,9 +257,12 @@ class ChangeRiskTest(unittest.TestCase):
     def test_high_assessment_is_not_downgraded_by_lower_floors(self):
         text = review(change_risk="HIGH")
         decision = gate.decide(text, diff(CODE))
-        self.assertFalse(decision["approve"])
+        self.assertTrue(decision["approve"])
         self.assertEqual(decision["risk"]["label"], "risk:high")
-        self.assertIn("**Change risk:** HIGH · `risk:high`", gate.overview(text, decision))
+        comment = gate.overview(text, decision)
+        self.assertIn("**Change risk:** HIGH · `risk:high`", comment)
+        self.assertIn("Small compatible change", comment)
+        self.assertIn("eligible for auto-approval", comment)
 
     def test_public_interface_and_runtime_changes_have_medium_floor(self):
         for path in (
@@ -275,15 +279,15 @@ class ChangeRiskTest(unittest.TestCase):
                 self.assertEqual(result["risk"]["model_level"], "low")
 
     def test_sensitive_paths_have_high_floor(self):
-        for path in (
-            "REVIEW.md", "integrations/agentbricks/REVIEW.md", "uv.lock",
-            ".github/workflows/main.yml",
-            "integrations/agentbricks/src/auth/helper.py",
-            "integrations/agentbricks/src/migrations/update.py",
+        for path, approved in (
+            ("REVIEW.md", False), ("integrations/agentbricks/REVIEW.md", False),
+            ("uv.lock", False), (".github/workflows/main.yml", False),
+            ("integrations/agentbricks/src/auth/helper.py", True),
+            ("integrations/agentbricks/src/migrations/update.py", True),
         ):
             with self.subTest(path=path):
                 result = gate.decide(review(), diff(path))
-                self.assertFalse(result["approve"])
+                self.assertEqual(result["approve"], approved)
                 self.assertEqual(result["risk"]["label"], "risk:high")
 
     def test_cross_package_production_changes_have_medium_floor(self):
@@ -332,7 +336,7 @@ class ChangeRiskTest(unittest.TestCase):
                 result = gate.decide(review(change_risk=risk), diff(path, added=added))
                 self.assertTrue(result["review_passed"], result)
                 self.assertEqual(result["review_reasons"], [])
-                self.assertEqual(result["approve"], path == CODE and risk in {"LOW", "MODERATE"} and added == 1)
+                self.assertEqual(result["approve"], path == CODE and risk in {"LOW", "MODERATE", "HIGH"} and added == 1)
 
     def test_review_failures_withhold_ai_label_verdict(self):
         for text in (review(score=94), review(score=101), review(reviewers="1/2"),

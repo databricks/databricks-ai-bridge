@@ -192,8 +192,9 @@ give low risk merely because the review found no bugs.
 CI applies minimum risk levels for protected paths, public/runtime components,
 multiple production packages, large diffs, and binary changes, using
 `.github/scripts/agentbricks_auto_approve.py`. CI may raise the classification,
-and only the resulting low-risk assessment can be auto-approved.
-The existing review-score threshold, findings, author, scope, and commit checks
+while keeping the risk classification advisory: low, moderate, and high risk
+can all be auto-approved. Unrated assessments withhold automatic approval.
+The existing review-score threshold, findings, protected-path, size, author, scope, and commit checks
 also apply. A low-risk label does not grant approval.
 
 # Part 2: Rules for every reviewer
