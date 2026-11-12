@@ -27,7 +27,7 @@ from databricks_agentbricks.clients.databricks_cli import (
 )
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.local_ports import accepts_connections
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason
+from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
@@ -217,14 +217,12 @@ class AppsClient:
             raise AgentCliError(
                 action,
                 hint="\n".join([*detail, _app_busy_hint(name)]),
-                failure_reason=FailureReason.SUBPROCESS_FAILED,
                 subprocess_exit_code=result.returncode,
                 failure_detail=_failure_detail(result) or None,
             )
         raise AgentCliError(
             action,
             hint=None if relayed else (_failure_detail(result) or None),
-            failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=result.returncode,
             failure_detail=_failure_detail(result) or None,
         )
@@ -619,14 +617,12 @@ class AppsClient:
                 raise AgentCliError(
                     "The local agent stopped unexpectedly.",
                     hint="See the output above for the cause.",
-                    failure_reason=FailureReason.CHILD_EXIT_AFTER_LISTENING,
                     subprocess_exit_code=result.returncode,
                     failure_detail=detail,
                 )
             raise AgentCliError(
                 "Could not start the agent locally.",
                 hint="See the output above for the cause.",
-                failure_reason=FailureReason.CHILD_EXIT_BEFORE_LISTENING,
                 subprocess_exit_code=result.returncode,
                 failure_detail=detail,
             )

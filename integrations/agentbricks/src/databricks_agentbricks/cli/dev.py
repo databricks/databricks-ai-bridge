@@ -40,6 +40,7 @@ from databricks_agentbricks.services.dev_service import (
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
     diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),

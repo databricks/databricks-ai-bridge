@@ -533,8 +533,6 @@ def test_create_blocks_by_default_for_other_callers():
 def test_deploy_retains_the_final_child_exit_code(detail):
     import subprocess
 
-    from databricks_agentbricks.diagnostics import FailureReason
-
     client = AppsClient(
         None,
         runner=lambda *a, **kw: subprocess.CompletedProcess([], 17, detail, ""),
@@ -544,4 +542,3 @@ def test_deploy_retains_the_final_child_exit_code(detail):
         client.deploy("agent-bricks-demo", "/Workspace/demo")
     assert raised.value.failure_detail == detail
     assert raised.value.subprocess_exit_code == 17
-    assert raised.value.failure_reason == FailureReason.SUBPROCESS_FAILED

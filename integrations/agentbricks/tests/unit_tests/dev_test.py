@@ -64,7 +64,11 @@ def test_dev_failure_text_omits_internal_startup_and_environment_facts(
     assert str(tmp_path) not in str(records)
 
 
-def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("busy_port", [False, True])
+def test_dev_preflight_failure_has_configuration_category(tmp_path, monkeypatch, busy_port):
+    if busy_port:
+        (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+        monkeypatch.setattr(dev_mod, "port_in_use", lambda port: True)
     records = []
     monkeypatch.setattr(
         telemetry,
@@ -79,6 +83,7 @@ def test_dev_preflight_failure_has_a_reason_and_stage(tmp_path, monkeypatch):
     assert "diagnostics" not in log
     assert facts.app_listened is False
     assert facts.failure_stage == FailureStage.PROJECT
+    assert log["error_category"] == "ERROR_CATEGORY_CONFIGURATION"
     assert log["failure_message"]
     assert "failure_reason" not in log
 
