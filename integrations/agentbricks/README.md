@@ -128,6 +128,8 @@ command path, package version, operating system, duration, and process outcome (
 nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
 error text in `failure_message`. Error text includes exception messages and available
 failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
+An ambiguous credential value, including unquoted or multiline text, causes the remaining captured
+text to be omitted; diagnostic text before that value is retained.
 This follows the Asset Bundles minimization pattern and is best effort; other customer content
 may remain in service responses or application output.
 It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
