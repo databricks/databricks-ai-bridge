@@ -198,15 +198,24 @@ class _StoreClient:
     def create_memory_store(self, display_name, description=None):
         return {"name": "memory-stores/new", "display_name": display_name}
 
+    def delete_session_store(self, name):
+        return None
+
+
+def _reset_output_modes():
+    """Clear both process-global error modes, including the line-level one a CLI run leaves behind."""
+    errors.set_output_mode("text")
+    errors.set_usage_output_mode(None)
+
 
 @pytest.fixture
 def root(monkeypatch):
-    """The real root group with a fake client; resets the process-global error mode afterwards."""
+    """The real root group with a fake client; resets the process-global error modes afterwards."""
     from databricks_agentbricks.cli import app
 
     monkeypatch.setattr(app.CliContext, "client", lambda self: _StoreClient())
     yield app.agentbricks
-    errors.set_output_mode("text")
+    _reset_output_modes()
 
 
 def _command_paths(group, prefix=()):
@@ -379,3 +388,36 @@ def test_invalid_output_after_command_lists_choices(root):
     result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "yaml"])
     assert result.exit_code == 2
     assert "'yaml' is not one of 'text', 'json'" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-o", "text", "sessions", "stores", "delete", "example", "-yojson", "--bogus"],
+        ["-o", "text", "sessions", "stores", "delete", "example", "-yo", "json", "--bogus"],
+        ["sessions", "stores", "delete", "example", "-yojson", "--bogus"],
+    ],
+)
+def test_output_inside_short_option_cluster_renders_json_errors(root, args):
+    """`-y` is a flag and `-o` takes the rest of the cluster (or the next token), as in Click."""
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_output_inside_short_option_cluster_parses_as_json(root):
+    result = CliRunner().invoke(
+        root, ["-o", "text", "sessions", "stores", "delete", "example", "-yojson"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"deleted": "example"}
+
+
+def test_reset_clears_error_mode_left_by_an_output_line(root):
+    """A CLI run leaves its `-o` choice behind; the reset must clear it too, or later error
+    rendering in other tests would come out as JSON."""
+    CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    assert errors.error_output_mode() == "json"
+    _reset_output_modes()
+    assert errors.error_output_mode() == "text"

@@ -20,7 +20,7 @@ from __future__ import annotations
 import difflib
 import inspect
 import time
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 import click
 from click.core import ParameterSource
@@ -183,6 +183,23 @@ def _takes_value(command: click.Command) -> set[str]:
     }
 
 
+def _short_cluster_output(token: str, tokens: Iterator[str], value_opts: set[str]) -> Optional[str]:
+    """Return the `-o` value inside a short-option cluster such as `-yojson`, consuming its value.
+
+    Like Click, flags are read until a value-taking option, which takes the rest of the token or else
+    the next token.
+    """
+    for i in range(1, len(token)):
+        opt, rest = f"-{token[i]}", token[i + 1 :]
+        if opt == "-o":
+            return rest or next(tokens, None)
+        if opt in value_opts:
+            if not rest:
+                next(tokens, None)
+            return None
+    return None
+
+
 def _scan_output(root: click.Group, args: list[str]) -> Optional[str]:
     """Return the last valid `-o/--output` value in the raw line, before any `--`.
 
@@ -200,11 +217,11 @@ def _scan_output(root: click.Group, args: list[str]) -> Optional[str]:
             value = next(tokens, None)
         elif token.startswith("--output="):
             value = token.partition("=")[2]
-        elif token.startswith("-o") and not token.startswith("--"):
-            value = token[2:]
         elif token in value_opts:
             next(tokens, None)
             continue
+        elif token.startswith("-") and not token.startswith("--"):
+            value = _short_cluster_output(token, tokens, value_opts)
         elif isinstance(command, click.Group) and token in command.commands:
             command = command.commands[token]
             value_opts = _takes_value(command)
