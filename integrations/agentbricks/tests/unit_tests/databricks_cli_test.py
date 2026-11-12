@@ -305,6 +305,49 @@ def test_closed_output_destination_keeps_draining_child():
             relay.finish()
 
 
+@pytest.mark.skipif(
+    os.name != "posix", reason="uses POSIX process-group signals and pipe readiness"
+)
+def test_interrupt_does_not_wait_for_a_blocked_output_consumer(tmp_path):
+    ready = tmp_path / "output-blocked"
+    child = "import os; os.write(1, b'x' * 1000000)"
+    runner = f"""
+import pathlib, select, sys
+from databricks_agentbricks.clients.databricks_cli import _run_until_ready
+
+def probe():
+    if not select.select([], [1], [], 0)[1]:
+        pathlib.Path({str(ready)!r}).touch()
+    return False
+
+try:
+    _run_until_ready([sys.executable, '-c', {child!r}],
+                     cwd=None, env=None, probe=probe, on_ready=None)
+except KeyboardInterrupt:
+    sys.exit(130)
+"""
+    with subprocess.Popen(
+        _python(runner),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    ) as proc:
+        try:
+            deadline = time.monotonic() + 5
+            while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ready.exists(), "relay did not fill its unread output pipe"
+            os.killpg(proc.pid, signal.SIGINT)
+            # Leave stdout unread so draining cannot hide a cancellation deadlock.
+            assert proc.wait(timeout=3) == 130
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="uses a POSIX pseudo-terminal")
 @pytest.mark.parametrize("terminal_fd", [1, 2])
 def test_mixed_terminal_and_redirected_stream_keep_original_behavior(tmp_path, terminal_fd):
