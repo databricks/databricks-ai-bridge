@@ -26,7 +26,7 @@ _QUOTED_VALUE = re.compile(
 _SCALAR_VALUE = re.compile(_QUOTED_VALUE.pattern + r"|[^\s,;&}\]]+")
 _VALUE_SEPARATOR = re.compile(r"\s*[:=]\s*")
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
-_URL_USERINFO = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/@]+@")
+_URL_USERINFO = re.compile(r"""(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#"'<>]+@""")
 _URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
 _TOKEN = re.compile(
     r"\b(?:dapi[a-fA-F0-9]{16,}|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|"
@@ -73,6 +73,9 @@ def _container_end(value: str, start: int) -> int:
 
 
 def _value_end(value: str, start: int, *, unquoted_line: bool = False) -> int:
+    if value[start : start + 1] in ("|", ">"):
+        # Free-form error text cannot reliably establish the end of a YAML credential block.
+        return len(value)
     if start < len(value) and value[start] in "{[":
         return _container_end(value, start)
     if unquoted_line and value[start : start + 1] not in ('"', "'"):
