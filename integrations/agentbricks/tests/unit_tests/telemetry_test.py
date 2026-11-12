@@ -740,6 +740,12 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         repr({"password": b" synthetic-opaque-value"}),
         repr({"password": b",synthetic-opaque-value"}),
         repr({"password": b";synthetic-opaque-value"}),
+        "credentials:\n  client_secret: synthetic-opaque-value",
+        "credentials:\n  - synthetic-opaque-value",
+        '"\\u0063redentials":\n  - synthetic-opaque-value',
+        "token: Bearer synthetic-opaque-value",
+        "token=Basic synthetic-opaque-value",
+        "password=multiple words synthetic-opaque-value",
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
