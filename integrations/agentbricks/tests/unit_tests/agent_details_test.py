@@ -21,7 +21,7 @@ from databricks_agentbricks.projects.agent_project import AgentProject
 _UI_FLAG = "databricks.fe.customagents.agentCentricView.enable"
 _PREVIEW = "agent_memory_sessions"
 _APP = "agent-bricks-demo"
-_DETAILS_URL = f"https://workspace.example/ml/agents/apps/{_APP}?o=123"
+_DETAILS_URL = f"https://workspace.example/ml/agents/details/{_APP}?o=123"
 
 
 class _UiApi:
