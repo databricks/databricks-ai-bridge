@@ -7,6 +7,8 @@ with `python -m databricks_agentkit.sandbox`; no separate orchestrator repositor
 or custom image is required. The workspace must enable the sandbox preview and
 managed Runtime Store APIs. This is an experimental path, not a released SDK feature.
 
+Start with the [local UV demo instructions](sandbox-demo.md).
+
 ## Template compatibility
 
 | Project | Requirements |

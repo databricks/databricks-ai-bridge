@@ -943,6 +943,9 @@ agentbricks [-p <profile>] [-o text|json]
 
 ## Sandbox deployments
 
+For this unreleased prototype, follow the [local UV demo setup](docs/sandbox-demo.md)
+to build the SDK wheel used by the sandbox. Existing project locks need that explicit update.
+
 Use `deploy --sandbox` to upload the agent source and deploy the generic App orchestrator
 in one command. Source publication is part of deployment. The App creates a
 sandbox and installs the agent when the UI explicitly prepares a session, or on the first
