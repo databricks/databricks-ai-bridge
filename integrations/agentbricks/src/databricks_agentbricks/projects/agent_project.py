@@ -8,6 +8,7 @@ import re
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Literal, cast
 
 import tomlkit
@@ -322,46 +323,93 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
-def _prompts_from_manifest(value: object) -> dict[str, str]:
-    """Read ``[experimental.prompts]`` (``key = "catalog.schema.name"``), or {} if there is none."""
+def _prompts_from_manifest(value: object, problems: list[ManifestProblem]) -> dict[str, str]:
+    """Read ``[experimental.prompts]`` (``key = "catalog.schema.name"``), or {} if there is none.
+
+    Each invalid key is recorded in ``problems`` under its own path; the rest are still returned.
+    """
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise AgentCliError(f"agent.toml [{PROMPTS_PATH}] must be a table of key = prompt name.")
+        problems.append(
+            ManifestProblem(
+                PROMPTS_PATH, f"agent.toml [{PROMPTS_PATH}] must be a table of key = prompt name."
+            )
+        )
+        return {}
     prompts: dict[str, str] = {}
     for key, name in cast(Mapping[str, Any], value).items():
-        model_role(key)
-        # Plain str, not tomlkit's String (see _model_services_from_manifest).
-        prompts[str(key)] = str(
-            _three_part_name(_required_string(name, f"[{PROMPTS_PATH}] {key}"), "prompt")
-        )
+        path = f"{PROMPTS_PATH}.{key}"
+        try:
+            model_role(key)
+        except AgentCliError as exc:
+            problems.append(ManifestProblem(path, _problem_text(exc)))
+            continue
+        prompt = _checked(problems, path, partial(_prompt_name, name, f"[{PROMPTS_PATH}] {key}"))
+        if prompt is not None:
+            # Plain str, not tomlkit's String (see _model_services_from_manifest).
+            prompts[str(key)] = prompt
     return prompts
 
 
-def _model_services_from_manifest(value: object) -> dict[str, ModelServiceBinding]:
-    """Read the ``[experimental.model_services.<role>]`` tables, or {} if there are none."""
+def _prompt_name(value: object, where: str) -> str:
+    return str(_three_part_name(_required_string(value, where), "prompt"))
+
+
+def _model_services_from_manifest(
+    value: object, problems: list[ManifestProblem]
+) -> dict[str, ModelServiceBinding]:
+    """Read the ``[experimental.model_services.<role>]`` tables, or {} if there are none.
+
+    Each invalid role or field is recorded in ``problems`` under its own path (for example
+    ``experimental.model_services.router.name``); the valid bindings are still returned.
+    """
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise AgentCliError(f"agent.toml [{MODEL_SERVICES_PATH}] must be a table of roles.")
+        problems.append(
+            ManifestProblem(
+                MODEL_SERVICES_PATH, f"agent.toml [{MODEL_SERVICES_PATH}] must be a table of roles."
+            )
+        )
+        return {}
     bindings: dict[str, ModelServiceBinding] = {}
     for role, table in cast(Mapping[str, Any], value).items():
-        model_role(role)
-        where = f"[{MODEL_SERVICES_PATH}.{role}]"
+        path = f"{MODEL_SERVICES_PATH}.{role}"
+        try:
+            model_role(role)
+        except AgentCliError as exc:
+            problems.append(ManifestProblem(path, _problem_text(exc)))
+            continue
+        where = f"[{path}]"
         if not isinstance(table, Mapping):
-            raise AgentCliError(f"agent.toml {where} must be a table.")
-        name = _three_part_name(
-            _required_string(table.get("name"), f"{where} name"), "model service"
+            problems.append(ManifestProblem(path, f"agent.toml {where} must be a table."))
+            continue
+        table = cast(Mapping[str, Any], table)
+        name = _checked(problems, f"{path}.name", partial(_model_service_name, table, where))
+        default = _checked(
+            problems,
+            f"{path}.{MODEL_SERVICE_DEFAULT_KEY}",
+            partial(_model_service_default, table, where),
         )
-        default = table.get(MODEL_SERVICE_DEFAULT_KEY)
-        if default is not None and not (isinstance(default, str) and default):
-            raise AgentCliError(
-                f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
-            )
-        # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
-        # can't represent tomlkit types.
-        bindings[role] = ModelServiceBinding(str(name), str(default) if default else None)
+        if name is not None:
+            # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
+            # can't represent tomlkit types.
+            bindings[role] = ModelServiceBinding(str(name), default)
     return bindings
+
+
+def _model_service_name(table: Mapping[str, Any], where: str) -> str:
+    return _three_part_name(_required_string(table.get("name"), f"{where} name"), "model service")
+
+
+def _model_service_default(table: Mapping[str, Any], where: str) -> str | None:
+    default = table.get(MODEL_SERVICE_DEFAULT_KEY)
+    if default is not None and not (isinstance(default, str) and default):
+        raise AgentCliError(
+            f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
+        )
+    return str(default) if default else None
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -523,6 +571,19 @@ def _problem_text(exc: AgentCliError) -> str:
     return f"{exc.message} {exc.hint}" if exc.hint else exc.message
 
 
+def _checked(
+    problems: list[ManifestProblem], field_name: str, read: Callable[[], Any], fallback: Any = None
+) -> Any:
+    """Run ``read``; an invalid value is recorded in ``problems`` under ``field_name``."""
+    try:
+        return read()
+    except AgentCliError as exc:
+        problems.append(ManifestProblem(field_name, _problem_text(exc)))
+    except (tool_manifest.ToolManifestError, ValueError) as exc:
+        problems.append(ManifestProblem(field_name, str(exc)))
+    return fallback
+
+
 _FRAMEWORKS = tuple(framework.value for framework in AgentFramework)
 _SERVERS = tuple(server.value for server in AgentServer)
 
@@ -535,13 +596,7 @@ def _read_manifest(document: Mapping[str, Any]) -> tuple[_ManifestFields, list[M
         problems.append(ManifestProblem(field_name, message))
 
     def checked(field_name: str, read: Callable[[], Any], fallback: Any = None) -> Any:
-        try:
-            return read()
-        except AgentCliError as exc:
-            problem(field_name, _problem_text(exc))
-        except (tool_manifest.ToolManifestError, ValueError) as exc:
-            problem(field_name, str(exc))
-        return fallback
+        return _checked(problems, field_name, read, fallback)
 
     schema_version = document.get("schema_version")
     if schema_version is None:
@@ -589,7 +644,9 @@ def _read_manifest(document: Mapping[str, Any]) -> tuple[_ManifestFields, list[M
         elif raw_name is not None:
             deployment_name = str(raw_name)
 
-    user_auth = checked("auth", lambda: tool_manifest.parse_user_auth(document))
+    user_auth, auth_problems = tool_manifest.user_auth_problems(document)
+    for field_name, message in auth_problems:
+        problem(field_name, message)
     allowed_origins: tuple[str, ...] = checked(
         "cors", lambda: allowed_origins_from_manifest(document), ()
     )
@@ -637,14 +694,8 @@ def _read_manifest(document: Mapping[str, Any]) -> tuple[_ManifestFields, list[M
         problem(EXPERIMENTAL_TABLE, "must be a table")
         experimental = None
     experimental = cast(Mapping[str, Any], experimental or {})
-    model_services = checked(
-        MODEL_SERVICES_PATH,
-        lambda: _model_services_from_manifest(experimental.get(MODEL_SERVICES_TABLE)),
-        {},
-    )
-    prompts = checked(
-        PROMPTS_PATH, lambda: _prompts_from_manifest(experimental.get(PROMPTS_TABLE)), {}
-    )
+    model_services = _model_services_from_manifest(experimental.get(MODEL_SERVICES_TABLE), problems)
+    prompts = _prompts_from_manifest(experimental.get(PROMPTS_TABLE), problems)
 
     fields = _ManifestFields(
         framework=framework,

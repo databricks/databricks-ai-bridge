@@ -135,60 +135,79 @@ def project_root() -> pathlib.Path:
 
 def parse_user_auth(document: Mapping[str, Any]) -> UserAuthConfig:
     """Parse the shared ``[auth.user]`` contract from a manifest document."""
+    config, problems = user_auth_problems(document)
+    if problems:
+        raise ToolManifestError(problems[0][1])
+    return config
+
+
+def user_auth_problems(
+    document: Mapping[str, Any],
+) -> tuple[UserAuthConfig, list[tuple[str, str]]]:
+    """Read ``[auth.user]``, reporting each invalid field as ``(field, message)`` in manifest order.
+
+    ``parse_user_auth`` raises the first of these. The config is meaningful only without any.
+    """
     raw_auth = document.get("auth")
     if raw_auth is None:
-        return UserAuthConfig()
+        return UserAuthConfig(), []
     if not isinstance(raw_auth, Mapping):
-        raise ToolManifestError("agent.toml auth must be a table.")
+        return UserAuthConfig(), [("auth", "agent.toml auth must be a table.")]
     raw_user = raw_auth.get("user")
     if raw_user is None:
-        return UserAuthConfig()
+        return UserAuthConfig(), []
     if not isinstance(raw_user, Mapping):
-        raise ToolManifestError("agent.toml auth.user must be a table.")
+        return UserAuthConfig(), [("auth.user", "agent.toml auth.user must be a table.")]
 
+    problems: list[tuple[str, str]] = []
     unexpected = set(raw_user) - {"required", "additional_api_scopes"}
     if unexpected:
-        raise ToolManifestError(
-            "agent.toml auth.user has unsupported fields: "
-            f"{', '.join(sorted(str(field) for field in unexpected))}."
+        problems.append(
+            (
+                "auth.user",
+                "agent.toml auth.user has unsupported fields: "
+                f"{', '.join(sorted(str(field) for field in unexpected))}.",
+            )
         )
 
     required = raw_user.get("required", False)
-    if not isinstance(required, bool):
-        raise ToolManifestError("agent.toml auth.user.required must be a boolean.")
+    required_is_valid = isinstance(required, bool)
+    if not required_is_valid:
+        problems.append(("auth.user.required", "agent.toml auth.user.required must be a boolean."))
+
     raw_scopes = raw_user.get("additional_api_scopes", [])
-    if not isinstance(raw_scopes, list):
-        raise ToolManifestError("agent.toml auth.user.additional_api_scopes must be an array.")
+    if isinstance(raw_scopes, list):
+        scope_problem = next((p for p in map(_scope_problem, raw_scopes) if p is not None), None)
+    else:
+        scope_problem = "agent.toml auth.user.additional_api_scopes must be an array."
+    scopes: tuple[str, ...] = ()
+    if scope_problem is not None:
+        problems.append(("auth.user.additional_api_scopes", scope_problem))
+    elif isinstance(raw_scopes, list):
+        scopes = tuple(dict.fromkeys(str(scope) for scope in raw_scopes))
 
-    scopes: list[str] = []
-    for scope in raw_scopes:
-        if not isinstance(scope, str):
-            raise ToolManifestError(
-                "agent.toml auth.user.additional_api_scopes must contain strings."
+    # The pairing is only checkable once both fields are valid.
+    if required_is_valid and scope_problem is None and scopes and not required:
+        problems.append(
+            (
+                "auth.user.additional_api_scopes",
+                "agent.toml auth.user.additional_api_scopes requires auth.user.required = true.",
             )
-        if not scope:
-            raise ToolManifestError(
-                "agent.toml auth.user.additional_api_scopes must contain non-empty scope names."
-            )
-        if scope != scope.strip():
-            raise ToolManifestError(
-                "agent.toml auth.user.additional_api_scopes cannot contain surrounding whitespace."
-            )
-        if any(ord(character) < 32 or ord(character) == 127 for character in scope):
-            raise ToolManifestError(
-                "agent.toml auth.user.additional_api_scopes cannot contain control characters."
-            )
-        scopes.append(scope)
-
-    additional_api_scopes = tuple(dict.fromkeys(scopes))
-    if additional_api_scopes and not required:
-        raise ToolManifestError(
-            "agent.toml auth.user.additional_api_scopes requires auth.user.required = true."
         )
-    return UserAuthConfig(
-        required=required,
-        additional_api_scopes=additional_api_scopes,
-    )
+    return UserAuthConfig(required=required is True, additional_api_scopes=scopes), problems
+
+
+def _scope_problem(scope: object) -> str | None:
+    """Why one ``additional_api_scopes`` entry is invalid, or None if it is a usable scope name."""
+    if not isinstance(scope, str):
+        return "agent.toml auth.user.additional_api_scopes must contain strings."
+    if not scope:
+        return "agent.toml auth.user.additional_api_scopes must contain non-empty scope names."
+    if scope != scope.strip():
+        return "agent.toml auth.user.additional_api_scopes cannot contain surrounding whitespace."
+    if any(ord(character) < 32 or ord(character) == 127 for character in scope):
+        return "agent.toml auth.user.additional_api_scopes cannot contain control characters."
+    return None
 
 
 def load_user_auth() -> UserAuthConfig:

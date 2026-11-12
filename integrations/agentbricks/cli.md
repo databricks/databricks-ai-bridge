@@ -201,7 +201,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
-| `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment before running: `uv sync` for a pyproject project, otherwise `apps run-local --prepare-environment`. Default: build only if no .venv exists yet. Requires uv. |
+| `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment before running: `uv sync` for a pyproject with a `[project]` table (and no requirements.txt), otherwise `apps run-local --prepare-environment`. Default: build only if no .venv exists yet. Requires uv. |
 | `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
 
 ### `agentbricks memory`

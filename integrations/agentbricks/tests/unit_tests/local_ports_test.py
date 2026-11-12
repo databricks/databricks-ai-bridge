@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import pytest
 import uvicorn
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use, route_exists
@@ -96,3 +96,36 @@ def test_route_exists_is_none_when_nothing_answers():
     with _listener(socket.AF_INET, "127.0.0.1") as port:
         pass
     assert route_exists(port, "/api/invocations") is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 302, 500, 503])
+def test_route_exists_is_inconclusive_for_auth_redirect_and_server_errors(status: int):
+    async def answer(request):
+        return Response(status_code=status, headers={"location": "/elsewhere"})
+
+    app = Starlette(routes=[Route("/api/invocations", answer, methods=["GET"])])
+    with _serving(app) as port:
+        assert route_exists(port, "/api/invocations") is None
+
+
+class _AuthGate:
+    """Rejects unauthenticated requests before any routing, as an app's auth middleware does."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and b"authorization" not in dict(scope["headers"]):
+            await Response("unauthorized", status_code=401)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+def test_route_exists_does_not_mistake_an_auth_gate_for_a_route():
+    async def invoke(request):
+        return JSONResponse({})
+
+    app = _AuthGate(Starlette(routes=[Route("/invocations", invoke, methods=["POST"])]))
+    with _serving(app) as port:
+        assert route_exists(port, "/api/invocations") is None
+        assert route_exists(port, "/invocations") is None

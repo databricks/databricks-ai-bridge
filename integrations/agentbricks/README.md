@@ -368,8 +368,9 @@ agentbricks --profile <profile> deploy my-agent
 
 Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). Agents on different ports can run
 side by side. Requests can fail with HTTP 500 for a few seconds while the app starts. Before
-starting, `agentbricks dev` checks `agent.toml` and lists every problem it finds. A pyproject
-project's environment is built with `uv sync`, so only its declared dependencies are installed.
+starting, `agentbricks dev` checks `agent.toml` and lists every problem it finds. A project whose
+`pyproject.toml` declares a `[project]` table is built with `uv sync`, so only its declared
+dependencies are installed.
 
 A hand-written `DurableAgentServer` that uses no framework adapter sets `framework = "custom"` (or
 omits `framework`) with `server = "agentbricks"` in `agent.toml`.

@@ -809,6 +809,81 @@ def test_manifest_problems_name_allowed_values_from_the_enums():
         assert value in problems["agent.server"]
 
 
+def _manifest_with(**tables) -> dict:
+    return {
+        "schema_version": 1,
+        "agent": {"framework": "langgraph", "server": "agentbricks"},
+        **tables,
+    }
+
+
+def test_manifest_problems_report_every_invalid_model_service_field():
+    document = _manifest_with(
+        experimental={
+            "model_services": {
+                "router": {"name": "catalog.schema", "default": 3},
+                "writer": {"name": "main.agents.writer", "default": ""},
+                "critic": {"default": "system.ai.x"},
+            }
+        }
+    )
+
+    assert [p.field for p in manifest_problems(document)] == [
+        "experimental.model_services.router.name",
+        "experimental.model_services.router.default",
+        "experimental.model_services.writer.default",
+        "experimental.model_services.critic.name",
+    ]
+
+
+def test_manifest_problems_report_every_invalid_prompt():
+    document = _manifest_with(
+        experimental={"prompts": {"writer": "a.b", "judge": 1, "Bad-Key": "main.p.q"}}
+    )
+
+    assert [p.field for p in manifest_problems(document)] == [
+        "experimental.prompts.writer",
+        "experimental.prompts.judge",
+        "experimental.prompts.Bad-Key",
+    ]
+
+
+def test_manifest_problems_report_auth_user_fields_together():
+    document = _manifest_with(
+        auth={"user": {"required": "yes", "additional_api_scopes": ["sql", ""]}}
+    )
+
+    assert [p.field for p in manifest_problems(document)] == [
+        "auth.user.required",
+        "auth.user.additional_api_scopes",
+    ]
+
+
+def test_manifest_problems_check_scopes_need_required_only_when_both_are_valid():
+    document = _manifest_with(auth={"user": {"required": False, "additional_api_scopes": ["sql"]}})
+
+    assert [str(p) for p in manifest_problems(document)] == [
+        "auth.user.additional_api_scopes: agent.toml auth.user.additional_api_scopes "
+        "requires auth.user.required = true."
+    ]
+
+
+def test_load_lists_every_invalid_model_service_binding_in_one_error(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
+        '\n[experimental.model_services.router]\nname = "catalog.schema"\n'
+        '\n[experimental.model_services.writer]\nname = "bad"\n',
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert error.value.message.splitlines()[0] == "agent.toml has 2 problems:"
+    assert "experimental.model_services.router.name" in error.value.message
+    assert "experimental.model_services.writer.name" in error.value.message
+
+
 def test_manifest_problems_report_a_missing_agent_table():
     assert [str(p) for p in manifest_problems({"schema_version": 1})] == [
         "agent: missing; add an [agent] table with framework and server"

@@ -414,3 +414,28 @@ def test_project_without_pyproject_keeps_run_local_prepare(
         service_fixture.service.run(plan)
 
     service_fixture.uv_sync.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        "[tool.ruff]\nline-length = 100\n",  # tooling config only: no project to sync
+        '[project]\nname = "echo"\n',  # a project, but requirements.txt is what installs
+    ],
+    ids=["tooling-only", "project-with-requirements"],
+)
+def test_requirements_app_keeps_run_local_prepare_despite_a_pyproject(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path, pyproject: str
+):
+    (tmp_path / "pyproject.toml").write_text(pyproject)
+    (tmp_path / "requirements.txt").write_text("flask\n")
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+    ) as plan:
+        assert plan.install_dependencies is False
+        assert plan.prepare_environment is True
+        service_fixture.service.run(plan)
+
+    service_fixture.uv_sync.assert_not_called()
+    assert service_fixture.apps.run_local.call_args.kwargs["prepare_environment"] is True

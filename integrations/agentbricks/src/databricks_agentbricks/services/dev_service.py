@@ -14,6 +14,9 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+import tomlkit
+from tomlkit.exceptions import ParseError
+
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.errors import AgentCliError
@@ -79,11 +82,11 @@ class DevPlan:
 
     preview: DevPreview
     entry_point: pathlib.Path
-    # Build the environment through `apps run-local --prepare-environment` (no pyproject.toml).
+    # Build the environment through `apps run-local --prepare-environment`.
     prepare_environment: bool
     app_port: int
-    # Build it with `uv sync` first instead, so only the project's declared dependencies are
-    # installed (run-local's prepare also installs the Apps runtime's preinstalled packages).
+    # Build it with `uv sync` instead, so only the project's declared dependencies are installed
+    # (run-local's prepare also installs the Apps runtime's preinstalled packages).
     install_dependencies: bool = False
 
 
@@ -157,7 +160,7 @@ class DevService:
             build = request.prepare_environment
             if build is None:
                 build = not (source_dir / ".venv").exists()
-            uses_pyproject = (source_dir / "pyproject.toml").is_file()
+            sync_with_uv = _builds_with_uv_sync(source_dir)
 
             local_env = dict(tracing_env)
             if memory_store:
@@ -185,11 +188,11 @@ class DevService:
             yield DevPlan(
                 preview=preview,
                 entry_point=entry_point,
-                prepare_environment=build and not uses_pyproject,
+                prepare_environment=build and not sync_with_uv,
                 # The user-facing port is run-local's proxy; the app gets a free port behind it so
                 # concurrent runs don't collide on run-local's default app or proxy port.
                 app_port=self._free_port(),
-                install_dependencies=build and uses_pyproject,
+                install_dependencies=build and sync_with_uv,
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
@@ -223,6 +226,22 @@ class DevService:
             on_ready=on_ready,
             quiet_status=quiet_status,
         )
+
+
+def _builds_with_uv_sync(source_dir: pathlib.Path) -> bool:
+    """Whether ``uv sync`` builds the environment: only for a pyproject with a ``[project]`` table.
+
+    ``uv sync`` installs nothing from requirements.txt, and a tooling-only pyproject has no project
+    to sync, so either keeps run-local's prepare, which installs requirements.txt.
+    """
+    pyproject = source_dir / "pyproject.toml"
+    if not pyproject.is_file() or (source_dir / "requirements.txt").exists():
+        return False
+    try:
+        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+    except (OSError, ParseError):
+        return False
+    return "project" in document
 
 
 def _dev_entry_point(
