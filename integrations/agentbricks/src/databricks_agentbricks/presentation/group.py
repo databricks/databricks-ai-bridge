@@ -23,7 +23,9 @@ import time
 from typing import Iterable, Optional
 
 import click
+from click.core import ParameterSource
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.agent_hint import workflow_hint
 from databricks_agentbricks.errors import AgentCliError
 
@@ -80,6 +82,10 @@ class AgentBricksGroup(_FlushEpilog, click.Group):
                     click.echo(message, err=True)
                 except Exception:
                     pass
+            # Usage errors can fire before any command callback runs, so record the raw line's
+            # `-o/--output` choice (if any) up front: the last value on the line decides how errors
+            # render, even when the bad option or unknown command comes before it.
+            errors.set_usage_output_mode(_scan_output(args))
         return super().make_context(info_name, args, parent=parent, **extra)
 
     def resolve_command(self, ctx: click.Context, args: list[str]):
@@ -191,12 +197,18 @@ def _apply_output(ctx: click.Context, _param: click.Parameter, value: Optional[s
     """Let a leaf's `-o/--output` override the root group's choice."""
     if value is None:
         return
-    from databricks_agentbricks import errors
-
     errors.set_output_mode(value)
     # Duck-typed: commands read the mode from the root's `CliContext` on `ctx.obj`.
     if ctx.obj is not None and hasattr(ctx.obj, "output"):
         ctx.obj.output = value
+    # Telemetry records each context's parsed params, and this option is `expose_value=False`, so
+    # mirror the effective choice onto the root's `--output` for the invocation record.
+    root = ctx
+    while root.parent is not None:
+        root = root.parent
+    if "output" in root.params:
+        root.params["output"] = value
+        root.set_parameter_source("output", ParameterSource.COMMANDLINE)
 
 
 def _output_option() -> click.Option:
@@ -214,15 +226,6 @@ def _output_option() -> click.Option:
 
 class AgentBricksCommand(_FlushEpilog, click.Command):
     """A leaf command whose help and invocation telemetry use Agent Bricks conventions."""
-
-    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        # Click reports a bad option before any callback runs, so pick up `-o json` first: usage
-        # errors then render as JSON even when the bad option precedes it.
-        if (output := _scan_output(args)) is not None:
-            from databricks_agentbricks import errors
-
-            errors.set_output_mode(output)
-        return super().parse_args(ctx, args)
 
     def invoke(self, ctx: click.Context):
         """Run one leaf and record its outcome without changing Click's exception behavior."""
@@ -313,7 +316,7 @@ def _usage_error_show(self: click.exceptions.UsageError, file=None) -> None:
     invocation = self.ctx.command_path if self.ctx is not None else "agentbricks"
     message = self.format_message()
     hint = f"run `{invocation} --help` to see the available options and arguments"
-    if errors._OUTPUT_MODE == "json":
+    if errors.error_output_mode() == "json":
         import json
 
         click.echo(json.dumps({"error": {"message": message, "hint": hint}}, indent=2), err=True)

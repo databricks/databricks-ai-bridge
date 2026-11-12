@@ -266,6 +266,41 @@ def test_usage_errors_render_json_with_output_after_command(root, args):
     assert error["message"] and error["hint"]
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "frobnicate", "-o", "json"],
+        ["frobnicate", "-o", "json"],
+        ["--bogus", "sessions", "stores", "list", "-o", "json"],
+    ],
+)
+def test_failures_before_the_command_still_render_json_with_trailing_output(root, args):
+    """An unknown command or bad root option fires before any callback, so rendering follows the
+    raw line's trailing `-o json` too."""
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code != 0
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_telemetry_records_output_after_command_like_before_it(root, monkeypatch):
+    from databricks_agentbricks.cli import telemetry
+
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kwargs: records.append(telemetry._build_log(ctx, **kwargs).to_dict()),
+    )
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    assert result.exit_code == 0, result.output
+    parameters = {entry["name"]: entry for entry in records[0]["parameters"]}
+    assert parameters["agentbricks.output"] == {
+        "name": "agentbricks.output",
+        "choice_value": "AGENTBRICKS_CLI_JSON",
+    }
+
+
 def test_every_leaf_accepts_output_and_lists_it_in_help(root):
     leaves = list(_leaf_paths(root))
     assert len(leaves) > 50
