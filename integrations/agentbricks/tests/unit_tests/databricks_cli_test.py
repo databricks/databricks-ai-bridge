@@ -226,9 +226,27 @@ def test_merged_output_preserves_child_write_order(tmp_path, destination):
     assert observed == expected
     returncode, stdout, stderr = json.loads(result_path.read_text())
     assert returncode == 3
-    assert stdout.endswith("out 511\nerr 511\n")
+    if destination == "file":
+        assert stdout == ""
+    else:
+        assert stdout.endswith("out 511\nerr 511\n")
     assert len(stdout.encode()) <= 3072
     assert stderr == ""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX descriptor identity")
+def test_independent_opens_of_the_same_file_keep_their_offsets(tmp_path):
+    output_path = tmp_path / "independent.log"
+    child = "import os; os.write(1, b'OUT'); os.write(2, b'ERR')"
+    runner = (
+        "import sys; "
+        "from databricks_agentbricks.clients.databricks_cli import _run_until_ready; "
+        f"_run_until_ready([sys.executable, '-c', {child!r}], "
+        "cwd=None, env=None, probe=lambda: False, on_ready=None)"
+    )
+    with output_path.open("wb") as stdout, output_path.open("wb") as stderr:
+        subprocess.run(_python(runner), stdout=stdout, stderr=stderr, timeout=5, check=True)
+    assert output_path.read_bytes() == b"ERR"
 
 
 def test_descendant_holding_pipe_open_does_not_delay_completion():
