@@ -20,6 +20,8 @@ from databricks_agentbricks.services.deployment.model_binding_provisioner import
 from databricks_agentbricks.services.deployment.names import DeploymentName
 from databricks_agentbricks.services.deployment.provisioners import ProjectContext, ResourceContext
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 SERVICE = "main.my_agent.llm"
 
 

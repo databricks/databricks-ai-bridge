@@ -25,6 +25,8 @@ _PREVIEW = "agent_memory_sessions"
 _APP = "agent-bricks-demo"
 _DETAILS_URL = f"https://workspace.example/ml/agents/details/{_APP}?o=123"
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 class _UiApi:
     def __init__(self, response):
