@@ -147,6 +147,28 @@ def test_yaml_credential_blocks_are_omitted_conservatively(marker, name):
     )
 
 
+@pytest.mark.parametrize("name", ["credentials", "Authorization", "client_secret"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\n  client_secret: synthetic-opaque-value",
+        " \n  - synthetic-opaque-value\n  - another-opaque-value",
+        "\n  nested:\n    value: synthetic-opaque-value",
+    ],
+)
+def test_multiline_credential_containers_are_omitted_conservatively(name, value):
+    assert scrub_failure_text(f"Request failed: {name}:{value}") == "Request failed: [REDACTED]"
+
+
+@pytest.mark.parametrize("separator", [": ", "="])
+@pytest.mark.parametrize("name", ["token", "client_secret"])
+@pytest.mark.parametrize("prefix", ["Bearer ", "Basic ", "multiple words "])
+def test_unquoted_credentials_are_removed_through_the_end_of_the_line(name, separator, prefix):
+    assert scrub_failure_text(
+        f"{name}{separator}{prefix}synthetic-opaque-value\nConnection failed"
+    ) == ("[REDACTED]\nConnection failed")
+
+
 @pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])
 def test_dense_delimiters_do_not_delay_failure_reporting(pattern):
     start = time.monotonic()
