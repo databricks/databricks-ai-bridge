@@ -18,7 +18,7 @@ CommandPath = tuple[str, ...]
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
-    ("SHIP", ("deploy", "deployments")),
+    ("SHIP", ("deploy", "deployments", "environment", "invoke")),
     ("EXPERIMENTAL", ("experimental",)),
 )
 
@@ -500,6 +500,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tracing", "get"): (("agentbricks tracing get <trace-id>", "show one trace"),),
     ("deploy",): (
+        (
+            "agentbricks deploy my-agent --sandbox",
+            "publish source and deploy its orchestrator; install on first invocation",
+        ),
         ("agentbricks deploy my-agent", "deploy the agent"),
         ("agentbricks deploy my-agent --instances 2", "deploy with two instances"),
         ("agentbricks deploy my-agent --no-wait", "start in the background, then wait"),
@@ -537,6 +541,50 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             '"session_id":"support-case-123",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
+        ),
+    ),
+    ("environment",): (
+        (
+            "agentbricks environment list --app <launcher>",
+            "list published environments",
+        ),
+        (
+            'agentbricks environment invoke my-agent --app <launcher> --session-id demo --json \'{"message":"Hello"}\'',
+            "invoke a session's pinned source in a sandbox",
+        ),
+    ),
+    ("environment", "list"): (
+        ("agentbricks environment list --app <launcher>", "list sandbox environments"),
+    ),
+    ("environment", "get"): (
+        ("agentbricks environment get my-agent", "inspect publication and runtime state"),
+    ),
+    ("environment", "prepare"): (
+        (
+            "agentbricks environment prepare my-agent",
+            "retry installation for a legacy prepared environment",
+        ),
+    ),
+    ("invoke",): (
+        (
+            'agentbricks invoke my-agent --session-id demo --json \'{"message":"Hello"}\' --stream',
+            "invoke the deployment; first use creates and installs its sandbox",
+        ),
+    ),
+    ("environment", "invoke"): (
+        (
+            'agentbricks environment invoke my-agent --app <launcher> --session-id demo --json \'{"message":"Hello"}\'',
+            "run the agent and wait for its result",
+        ),
+    ),
+    ("environment", "ssh"): (
+        (
+            "agentbricks environment ssh my-agent --app <launcher> --session-id demo",
+            "debug the session's installed agent environment",
+        ),
+        (
+            "agentbricks environment ssh my-agent --app <launcher> --session-id demo --command 'pwd'",
+            "run a command and return its exit code",
         ),
     ),
     ("endpoint", "invoke"): (
@@ -634,6 +682,7 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("dev",): "Run the agent locally with a chat UI",
     ("deploy",): "Deploy an agent to Databricks Apps",
     ("deployments",): "Manage deployed agents",
+    ("environment",): "Upload and run projects in sandboxes",
     ("memory",): "Manage an agent's long-term memory",
     ("sessions",): "Manage an agent's conversation sessions",
     ("tools",): "Discover integrations and manage tool bindings",

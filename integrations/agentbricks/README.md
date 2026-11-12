@@ -96,6 +96,10 @@ from source can scaffold projects that fail to start. To work on Agent Bricks it
 The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.
 
+The runtime and framework adapters use `mlflow-skinny` for tracking and tracing. The `upgrade` extra
+adds full MLflow for model optimization. An agent's own dependencies can also bring in full MLflow;
+installing Skinny alongside it does not remove those dependencies.
+
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
@@ -919,17 +923,128 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N] [--no-wait]
+  deploy       [<name>] [--source PATH | --environment NAME] [--instances N] [--no-wait]
                [--allowed-origin ORIGIN ... | --clear-allowed-origins]
   deployments
     wait       [<name>] [--timeout SECONDS] [--source PATH]
     list | get | logs | start | stop | delete
+  environment
+    get | prepare NAME
+    list        (--app APP | --url URL)
+    invoke      NAME --session-id ID --json JSON (--app APP | --url URL)
+                [--invocation-id ID] [--retry] [--no-wait] [--timeout SECONDS]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
     loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
                 [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
                 [--report-dir PATH] [--save-responses FILE]
+  invoke       APP --session-id ID --json JSON [--environment NAME] [--stream]
 ```
+
+## Sandbox deployments
+
+Use `deploy --sandbox` to upload the agent source and deploy the generic App orchestrator
+in one command. Source publication is part of deployment. The App creates a
+sandbox and installs the agent when the UI explicitly prepares a session, or on the first
+invocation for clients that skip preparation.
+
+Successful deployment prints the agent URL, next steps, and total duration. Use the global
+`--output json` option before `deploy` for the full publication/deployment metadata as JSON.
+
+```sh
+agentbricks -p my-workspace init support-agent --framework openai
+cd support-agent
+agentbricks -p my-workspace tools add mcp system.ai.web_search --auth app
+uv lock --python 3.12
+agentbricks -p my-workspace deploy support --sandbox --source . \
+  --sandbox-idle-timeout 1800
+agentbricks -p my-workspace invoke support --session-id demo --json '{"message":"Hello"}' --stream
+# Optional: publish committed source instead of working-tree files.
+agentbricks -p my-workspace deploy support --sandbox --source . \
+  --git-revision v1.0.0
+```
+
+This prototype requires an editable installation with the `sandbox` extra. Deploy creates
+or reuses the App-owned managed Runtime Store and injects its backend coordinates. The
+CLI publishes source using Workspace APIs; only the App opens SQL and initializes the
+`sessions` and `invocations` tables. The existing SDK invocation/event schema is not used
+in this prototype yet. No Lakebase configuration file is required.
+
+Sandbox deployment requires managed Runtime Store support in the target workspace;
+operator-supplied Lakebase configuration is not supported. NAME may be omitted when the selected
+source's `agent.toml` has `[agent].deployment_name`; this mode does not rewrite that file.
+Use `--sandbox` on each redeploy. Normal `deploy` still executes the agent in Apps.
+
+Deploy snapshots the local project (or the selected Git commit), uploads an immutable
+Workspace source folder, saves its archive and manifest in Workspace, and packages the App orchestrator.
+It builds no agent image, creates no builder/session sandbox, and runs no agent installation.
+The project must include `pyproject.toml`, `uv.lock`, and the template entrypoint
+`runtime.sandbox_entry:invoke` or an explicit `--entrypoint module:function`.
+
+Source revisions and internal metadata live under
+`/Users/<user>/agentbricks_deployments/<app>/revisions/<revision>/`; App files are under
+`<root>/app/rollouts/<id>` for managed deployments; published archives and revision manifests are under `<root>/catalog`.
+`--workspace-path` overrides this root. Repeating the same publication reuses
+it, including after a failed App rollout. New source creates a new revision; using the same
+App and Workspace root preserves the namespace and earlier revisions/session mappings.
+The new deployment defaults to the new revision. Select an older revision/environment in
+the Workbench to continue its pinned sessions. Do not reuse a root for unrelated Apps.
+
+Lakebase has only `sessions` and `invocations`: mapping/revision/owner/readiness on the
+session, and request identity/status/result/timing/stream snapshot on the invocation.
+`SessionSandboxClient.get_or_create` encapsulates allocation and lifecycle; sequential
+turn coordination is separate. Published Workspace archives are verified and cached for
+warm turns. Managed Runtime Store publication uses storage version 3 and a fresh namespace.
+Legacy databases, publications and sessions are retained without automatic migration;
+existing legacy App resources are retained. Current deployments use the managed store. Deleting the managed Runtime Store deletes its execution data;
+source publications remain in Workspace.
+
+Session preparation (or first invocation) creates compute under the App service principal, copies the frozen
+source, installs locked dependencies with `uv`, builds/installs the project wheel, and
+starts the persistent worker. Each session has its own sandbox and execution lock;
+later turns reuse the installation and worker. Stop/resume preserves installed files but
+restarts Python. Tool/tracing/session bindings follow the source. Declared Session Store
+and tracing resources are reconciled and granted to the App; the demo uses sandbox SQLite
+history and a default MLflow experiment without UC. Request-user forwarding, general
+custom-server integration and recovery after sandbox disk loss remain unsupported.
+
+The Workbench's New Chat action prepares a sandbox before invocation: allocation, source
+copy, install/build, and resident handler initialization. Send is enabled after preparation.
+An existing draft can use Prepare session; failed preparation can be retried with the same
+session ID. Read-only page loading does not allocate compute. First-party adapters import
+and configure the framework without a model call or tool execution; per-turn graph creation
+and MCP discovery still happen during invocation. Custom handlers may expose a
+`prepare_session(state_dir)` function attribute; otherwise preparation imports only their module.
+
+`--sandbox-idle-timeout SECONDS` defaults to 900 and accepts 60–86400. This is a Lakebox
+idle policy, separate from invocation deadlines; there is no independent worker idle timer.
+After redeploy, the new value applies when an existing sandbox is next prepared or invoked;
+new sandboxes receive it on creation. Merely polling status does not apply the policy.
+
+The Workbench has model selection, source links, Events and Sandbox panels, phase timings,
+worker reuse information and confirmed Stop status. Structured JSONL is followed through
+`ExecuteCommand(tail -F)` and projected into Lakebase snapshots by a 50 ms App-side
+flush timer. PostgreSQL notifications wake browser SSE readers; quiet connections
+resynchronize every 5 seconds and reconnects load the latest durable snapshot. CLI
+`--stream` polls those snapshots. See the [runtime notes](src/databricks_agentkit/sandbox/README.md),
+[compatibility and review guide](docs/sandbox-prototype-changes.md).
+
+For debugging, use the internal environment name returned by deploy:
+
+```sh
+agentbricks -p my-workspace environment ssh <revision-environment> \
+  --app agent-bricks-support --session-id demo
+```
+
+The developer needs OAuth and `CAN_MANAGE` on the App. The session must already have
+an installed agent. This App-mediated terminal resumes stopped compute without creating
+a sandbox or invocation. `--command` supports noninteractive inspection.
+
+The `environment` group supports inspection, invocation and debugging of published revisions.
+Use `deploy --sandbox` to publish new source; `environment create` has been removed.
+`environment prepare` and `deploy --environment` can still operate on historical manifests.
+The sandbox mode rejects `--environment`, CORS options, `--allow-user-scope-update` and
+`--no-wait` rather than silently ignoring them.
 
 ## Bring an existing agent
 

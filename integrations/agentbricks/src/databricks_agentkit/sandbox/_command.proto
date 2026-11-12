@@ -1,0 +1,52 @@
+// Wire-compatible subset of the sandbox preview ExecuteCommand API.
+// The distinct package avoids descriptor collisions with databricks-sandbox-sdk.
+// Regenerate from the package root with grpcio-tools>=1.60,<1.63:
+// python -m grpc_tools.protoc -I src --python_out=src --pyi_out=src
+//   src/databricks_agentkit/sandbox/_command.proto
+syntax = "proto2";
+package databricks.agentkit.sandbox.preview;
+message ExecuteCommandRequest {
+  optional string cmd = 1;
+  repeated string args = 2;
+  optional PtyConfig pty = 3;
+}
+message ExecuteCommandResponse {
+  optional ProcessEvent process_event = 1;
+  optional int64 sequence_number = 2;
+}
+message ProcessEvent {
+  oneof event {
+    StartEvent start = 1;
+    DataEvent data = 2;
+    EndEvent end = 3;
+  }
+}
+message StartEvent {
+  optional int64 pid = 1;
+  optional string command_id = 2;
+}
+message DataEvent {
+  oneof output {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    bytes pty = 3;
+  }
+}
+message EndEvent { optional int32 exit_code = 1; }
+message PtyConfig {
+  optional int32 cols = 1;
+  optional int32 rows = 2;
+}
+message StreamInputRequest {
+  oneof event {
+    StreamInputStart start = 1;
+    StreamInputData data = 2;
+    StreamInputClose close = 3;
+  }
+}
+message StreamInputStart { optional string command_id = 1; }
+message StreamInputData { optional bytes data = 1; }
+message StreamInputClose {}
+message StreamInputResponse {}
+message TerminateCommandRequest { optional string command_id = 1; }
+message TerminateCommandResponse {}

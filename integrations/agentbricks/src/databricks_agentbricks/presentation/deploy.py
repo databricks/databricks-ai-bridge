@@ -363,6 +363,56 @@ def present_deploy_result(
         render.console().print(f"Deployed in {render.format_duration(elapsed_s)}")
 
 
+def present_sandbox_deploy_result(
+    result: dict[str, Any],
+    *,
+    output: Optional[str],
+    profile: Optional[str] = None,
+    elapsed_s: Optional[float] = None,
+) -> None:
+    """Use the deploy success panel while retaining the sandbox JSON result contract."""
+    if output == "json":
+        render.emit_json(result)
+        return
+
+    name = result["deployment"]
+    url = result["url"]
+    fields = {
+        "URL": render.hyperlink(url, url),
+        "Agent installation": result["installation"],
+    }
+    if store := result.get("runtime_store"):
+        fields["Runtime Store"] = store
+    command = ["agentbricks", *(["-p", profile] if profile else [])]
+    steps: list[str | tuple[str, str]] = ["Open the deployed agent using the URL above."]
+    if result["installation"] != "prepared":
+        steps.append("Choose New Chat to prepare a sandbox, then send a message.")
+    steps.extend(
+        [
+            (
+                shlex.join(
+                    [
+                        *command,
+                        "invoke",
+                        name,
+                        "--session-id",
+                        "demo",
+                        "--json",
+                        '{"message":"Hello"}',
+                        "--stream",
+                    ]
+                ),
+                "Invoke with Agent Bricks (reuse the session ID for later turns)",
+            ),
+            (shlex.join([*command, "deployments", "get", name]), "Check its status and URL"),
+            (shlex.join([*command, "deployments", "logs", name]), "Tail its logs"),
+        ]
+    )
+    render.success(f"Deployed agent '{name}'", fields=fields, next_steps=steps)
+    if elapsed_s is not None:
+        render.console().print(f"Deployed in {render.format_duration(elapsed_s)}")
+
+
 def present_background_started(
     name: str, *, log: pathlib.Path, state_file: pathlib.Path, output: Optional[str]
 ) -> None:

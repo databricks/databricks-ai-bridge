@@ -37,6 +37,7 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     deploy_result_payload,
@@ -45,6 +46,7 @@ from databricks_agentbricks.presentation.deploy import (
     present_deploy_result,
     present_deployment_detail,
     present_deployments_list,
+    present_sandbox_deploy_result,
     present_started,
     present_stopped,
     present_wait_result,
@@ -197,11 +199,31 @@ def _ignore_hangup() -> None:
 @click.command()
 @click.argument("name", required=False)
 @click.option(
+    "--sandbox",
+    is_flag=True,
+    help="Upload source and deploy its orchestrator; install on session preparation or first invocation.",
+)
+@click.option(
+    "--sandbox-idle-timeout",
+    type=click.IntRange(60, 86400),
+    help="Sandbox idle timeout in seconds for --sandbox (default: 900).",
+)
+@click.option("--git-revision", help="Local Git commit, tag, or branch to publish with --sandbox.")
+@click.option(
+    "--entrypoint",
+    help="Installed module:function for --sandbox; defaults to the template adapter.",
+)
+@click.option(
+    "--environment",
+    "prepared_environment",
+    help="Published environment name or manifest path; deploy its orchestrator, install on first invocation.",
+)
+@click.option(
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory for the deployment (containing app.yaml). Defaults to the "
-    "current directory.",
+    help="Local project directory (app.yaml for App execution; pyproject.toml and uv.lock "
+    "for --sandbox). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",
@@ -212,7 +234,7 @@ def _ignore_hangup() -> None:
 @click.option(
     "--workspace-path",
     default=None,
-    help="Workspace destination for the synced source (defaults to a per-user path).",
+    help="Workspace destination; with --sandbox, the root for source revisions and orchestrator files.",
 )
 @click.option(
     "--instances",
@@ -251,6 +273,11 @@ def _ignore_hangup() -> None:
 def deploy(
     obj,
     name,
+    sandbox,
+    sandbox_idle_timeout,
+    git_revision,
+    entrypoint,
+    prepared_environment,
     source,
     pip_index_url,
     workspace_path,
@@ -293,7 +320,91 @@ def deploy(
     A first deploy takes a few minutes (mostly starting app compute). Deploy finishes once the
     agent answers requests. From a coding agent or script with a short command timeout, use
     --no-wait and then `agentbricks deployments wait`.
+
+    With --sandbox, deploy uploads a frozen source revision and publishes the generic App
+    orchestrator in one command. No environment create step or agent image build is required.
+    Deploy provisions an App-owned Runtime Store automatically; the workspace must
+    support managed Runtime Store provisioning.
+    The App installs one sandbox per session during explicit session preparation or first invocation.
+    --sandbox-idle-timeout sets Lakebox idle shutdown in seconds (default 900). Reuse --sandbox
+    on redeploy; --git-revision optionally selects committed source. This prototype mode
+    requires an editable installation with the sandbox extra and does not support --no-wait.
     """
+    if sandbox:
+        if prepared_environment:
+            raise click.UsageError(
+                "Use --sandbox with source, or --environment with an existing publication."
+            )
+        if (
+            allowed_origin
+            or clear_allowed_origins
+            or no_wait
+            or background_child
+            or allow_user_scope_update
+        ):
+            raise click.UsageError(
+                "--sandbox does not support CORS options, --no-wait, or --allow-user-scope-update."
+            )
+        from functools import partial
+
+        from databricks_agentbricks.cli.prepared_deploy import deploy_prepared
+        from databricks_agentbricks.services.sandbox_deploy import (
+            SandboxDeployRequest,
+            SandboxDeployService,
+        )
+        from databricks_agentkit._api_client import _workspace_client
+
+        started = time.monotonic()
+        result = SandboxDeployService(
+            _workspace_client(obj.profile), partial(deploy_prepared, obj)
+        ).deploy(
+            SandboxDeployRequest(
+                name=name,
+                source=pathlib.Path(source),
+                sandbox_idle_timeout=sandbox_idle_timeout
+                if sandbox_idle_timeout is not None
+                else 900,
+                git_revision=git_revision,
+                entrypoint=entrypoint,
+                workspace_path=workspace_path,
+                instances=instance_count,
+                index_url=pip_index_url,
+            )
+        )
+        present_sandbox_deploy_result(
+            result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
+        )
+        return
+    if any(value is not None for value in (git_revision, entrypoint, sandbox_idle_timeout)):
+        raise click.UsageError(
+            "--git-revision, --entrypoint and --sandbox-idle-timeout require --sandbox."
+        )
+    if prepared_environment:
+        if not name:
+            raise AgentCliError("Provide a deployment name with --environment.")
+        if source != "." or allow_user_scope_update:
+            raise AgentCliError(
+                "--environment cannot be combined with --source or --allow-user-scope-update."
+            )
+        if allowed_origin or clear_allowed_origins or no_wait or background_child:
+            raise click.UsageError(
+                "--environment does not support --allowed-origin, --clear-allowed-origins, or --no-wait."
+            )
+        from databricks_agentbricks.cli.prepared_deploy import deploy_prepared
+
+        started = time.monotonic()
+        result = deploy_prepared(
+            obj,
+            name,
+            prepared_environment,
+            workspace_path=workspace_path,
+            instances=instance_count,
+            index_url=pip_index_url,
+        )
+        present_sandbox_deploy_result(
+            result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
+        )
+        return
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
