@@ -1,5 +1,4 @@
-"""
-**Re-exported Unity Catalog Utilities**
+"""**Re-exported Unity Catalog Utilities**
 
 This module re-exports selected utilities from the Unity Catalog open source package.
 
@@ -11,29 +10,33 @@ Available aliases:
 - :func:`databricks_langchain.set_uc_function_client`
 
 Refer to the Unity Catalog `documentation <https://docs.unitycatalog.io/ai/integrations/langchain/#using-unity-catalog-ai-with-langchain>`_ for more information.
+
+Public exports load their implementation on first access.
 """
 
-from unitycatalog.ai.core.base import set_uc_function_client
-from unitycatalog.ai.core.databricks import DatabricksFunctionClient
-from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogTool
+from typing import TYPE_CHECKING
 
-from databricks_langchain.chat_models import ChatDatabricks
-from databricks_langchain.checkpoint import AsyncCheckpointSaver, CheckpointSaver
-from databricks_langchain.embeddings import DatabricksEmbeddings
-from databricks_langchain.genie import GenieAgent
-from databricks_langchain.multi_server_mcp_client import (
-    DatabricksMCPServer,
-    DatabricksMultiServerMCPClient,
-    MCPServer,
-)
-from databricks_langchain.sandbox import DatabricksSandbox
-from databricks_langchain.sandbox_session import DatabricksSandboxSession
-from databricks_langchain.sandbox_tool import DatabricksSandboxTool
-from databricks_langchain.store import AsyncDatabricksStore, DatabricksStore
-from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
-from databricks_langchain.vectorstores import DatabricksVectorSearch
+if TYPE_CHECKING:
+    from unitycatalog.ai.core.base import set_uc_function_client
+    from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+    from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogTool
 
-# Expose all integrations to users under databricks-langchain
+    from databricks_langchain.chat_models import ChatDatabricks
+    from databricks_langchain.checkpoint import AsyncCheckpointSaver, CheckpointSaver
+    from databricks_langchain.embeddings import DatabricksEmbeddings
+    from databricks_langchain.genie import GenieAgent
+    from databricks_langchain.multi_server_mcp_client import (
+        DatabricksMCPServer,
+        DatabricksMultiServerMCPClient,
+        MCPServer,
+    )
+    from databricks_langchain.sandbox import DatabricksSandbox
+    from databricks_langchain.sandbox_session import DatabricksSandboxSession
+    from databricks_langchain.sandbox_tool import DatabricksSandboxTool
+    from databricks_langchain.store import AsyncDatabricksStore, DatabricksStore
+    from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
+    from databricks_langchain.vectorstores import DatabricksVectorSearch
+
 __all__ = [
     "AsyncCheckpointSaver",
     "AsyncDatabricksStore",
@@ -55,3 +58,40 @@ __all__ = [
     "DatabricksMCPServer",
     "MCPServer",
 ]
+
+_MODULE_BY_NAME = {
+    "AsyncCheckpointSaver": "databricks_langchain.checkpoint",
+    "AsyncDatabricksStore": "databricks_langchain.store",
+    "ChatDatabricks": "databricks_langchain.chat_models",
+    "CheckpointSaver": "databricks_langchain.checkpoint",
+    "DatabricksEmbeddings": "databricks_langchain.embeddings",
+    "DatabricksSandbox": "databricks_langchain.sandbox",
+    "DatabricksSandboxSession": "databricks_langchain.sandbox_session",
+    "DatabricksSandboxTool": "databricks_langchain.sandbox_tool",
+    "DatabricksStore": "databricks_langchain.store",
+    "DatabricksVectorSearch": "databricks_langchain.vectorstores",
+    "GenieAgent": "databricks_langchain.genie",
+    "VectorSearchRetrieverTool": "databricks_langchain.vector_search_retriever_tool",
+    "UCFunctionToolkit": "unitycatalog.ai.langchain.toolkit",
+    "UnityCatalogTool": "unitycatalog.ai.langchain.toolkit",
+    "DatabricksFunctionClient": "unitycatalog.ai.core.databricks",
+    "set_uc_function_client": "unitycatalog.ai.core.base",
+    "DatabricksMultiServerMCPClient": "databricks_langchain.multi_server_mcp_client",
+    "DatabricksMCPServer": "databricks_langchain.multi_server_mcp_client",
+    "MCPServer": "databricks_langchain.multi_server_mcp_client",
+}
+
+
+def __getattr__(name: str) -> object:
+    module = _MODULE_BY_NAME.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    value = getattr(importlib.import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
