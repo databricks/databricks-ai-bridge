@@ -134,8 +134,10 @@ It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized log
 regionally only where customer logging and encryption policies permit. Error text is omitted for
 parser errors and interruptions. Collection requires Legal approval and schema deployment.
 For `dev`, failure text can include a bounded tail of child output. With one output stream redirected,
-the terminal stream is inherited unchanged and only the redirected stream is retained. Output tails
-containing a PEM header are omitted to avoid retaining a private key after its header is truncated.
+the terminal stream is inherited unchanged and only the redirected stream is retained. When both
+streams point to the same regular file, both are inherited without capture to preserve their original
+offsets and redirection behavior. Output tails containing a PEM header are omitted to avoid retaining
+a private key after its header is truncated.
 Truncated output with assignment delimiters, quoted/structured values, authentication prefixes, or
 terminal escape sequences is also omitted because credential values can span lines beyond their
 identifying context. Retention checks normalize control characters across reads, while displayed

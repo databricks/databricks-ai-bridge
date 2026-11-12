@@ -14,18 +14,17 @@ _PRIVATE_KEY = re.compile(
     re.DOTALL,
 )
 _HEADER = re.compile(
-    r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=]\s*"
+    r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=][^\S\n]*"
 )
 _ASSIGNMENT = re.compile(
     r"(?ix)(?<![\w-])(?=[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
-    r"credential|signature|sig))[\w-]+[\"']?\s*[:=]\s*"
+    r"credential|signature|sig))[\w-]+[\"']?\s*[:=][^\S\n]*"
 )
 _QUOTED_VALUE = re.compile(
     r"(?<!\w)(?i:br|rb|fr|rf|[rubf])?"
     r"""(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
 )
-_SCALAR_VALUE = re.compile(_QUOTED_VALUE.pattern + r"|[^\s,;&}\]]+")
-_VALUE_SEPARATOR = re.compile(r"\s*[:=]\s*")
+_VALUE_SEPARATOR = re.compile(r"\s*[:=][^\S\n]*")
 _AUTH_SCHEME = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_.=~-]+")
 _URL_USERINFO = re.compile(r"""(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#"'<>]+@""")
 _URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
@@ -73,26 +72,25 @@ def _container_end(value: str, start: int) -> int:
     return len(value)
 
 
-def _value_end(value: str, start: int, *, unquoted_line: bool = False) -> int:
-    if value[start : start + 1] in ("|", ">"):
+def _value_end(value: str, start: int) -> int:
+    if value[start : start + 1] in ("|", ">", "\n"):
         # Free-form error text cannot reliably establish the end of a YAML credential block.
         return len(value)
     if start < len(value) and value[start] in "{[":
         return _container_end(value, start)
-    if unquoted_line and value[start : start + 1] not in ('"', "'"):
-        newline = value.find("\n", start)
-        return len(value) if newline == -1 else newline
-    if scalar := _SCALAR_VALUE.match(value, start):
-        return scalar.end()
-    return start
+    if quoted := _QUOTED_VALUE.match(value, start):
+        return quoted.end()
+    # Unquoted credentials may contain spaces or auth schemes whose context must stay intact.
+    newline = value.find("\n", start)
+    return len(value) if newline == -1 else newline
 
 
-def _scrub_values(value: str, pattern: re.Pattern[str], *, unquoted_line: bool = False) -> str:
+def _scrub_values(value: str, pattern: re.Pattern[str]) -> str:
     parts: list[str] = []
     end = 0
     while match := pattern.search(value, end):
         parts.extend((value[end : match.start()], _REDACTED))
-        end = _value_end(value, match.end(), unquoted_line=unquoted_line)
+        end = _value_end(value, match.end())
     return "".join((*parts, value[end:]))
 
 
@@ -108,7 +106,7 @@ def _scrub_encoded_values(value: str) -> str:
         end = match.end()
         if separator := _VALUE_SEPARATOR.match(value, end):
             # An encoded field name must be removed together with its complete value.
-            end = _value_end(value, separator.end(), unquoted_line=True)
+            end = _value_end(value, separator.end())
         cursor = end
     return "".join((*parts, value[end:]))
 
@@ -144,7 +142,7 @@ def scrub_failure_text(value: str) -> str:
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
     value = _scrub_encoded_values(value)
     value = _PRIVATE_KEY.sub(_REDACTED, value)
-    value = _scrub_values(value, _HEADER, unquoted_line=True)
+    value = _scrub_values(value, _HEADER)
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     value = _URL.sub(_scrub_url_query, value)
     value = _scrub_values(value, _ASSIGNMENT)
