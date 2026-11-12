@@ -154,6 +154,7 @@ def _run_until_ready(
         # Preserve terminal buffering and prompts when only one stream is redirected.
         stdout = StreamRelay(proc.stdout, 1) if proc.stdout is not None else None
         stderr = StreamRelay(proc.stderr, 2) if proc.stderr is not None else None
+        drain_output = False
         try:
             while proc.poll() is None:
                 if probe():
@@ -162,6 +163,7 @@ def _run_until_ready(
                     proc.wait()
                     break
                 time.sleep(_READY_POLL_S)
+            drain_output = True
         except KeyboardInterrupt:
             # Ctrl-C reaches the child too; give it a moment to exit cleanly, as `subprocess.run`
             # does, then make sure it is gone.
@@ -174,11 +176,16 @@ def _run_until_ready(
             proc.kill()
             raise
         finally:
-            proc.wait()
-            if stdout is not None:
-                stdout.finish()
-            if stderr is not None:
-                stderr.finish()
+            try:
+                proc.wait()
+                if drain_output:
+                    for relay in (stdout, stderr):
+                        if relay is not None:
+                            relay.finish()
+            finally:
+                for relay in (stdout, stderr):
+                    if relay is not None:
+                        relay.cancel()
     return subprocess.CompletedProcess(
         cmd,
         proc.returncode,
