@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -131,8 +132,12 @@ def _run_until_ready(
         try:
             out, err = os.fstat(1), os.fstat(2)
             if out.st_ino and os.path.samestat(out, err):
-                # A single pipe preserves write ordering when both streams share a destination.
-                stderr_target = subprocess.STDOUT
+                if stat.S_ISREG(out.st_mode):
+                    # File identity cannot distinguish independent opens from a shared offset.
+                    stdout_target = stderr_target = None
+                else:
+                    # A single pipe preserves write ordering into a shared stream.
+                    stderr_target = subprocess.STDOUT
         except OSError:
             pass
     with subprocess.Popen(
