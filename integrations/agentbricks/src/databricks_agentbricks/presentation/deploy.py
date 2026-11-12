@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import shlex
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import click
 from rich.text import Text
@@ -42,30 +42,52 @@ def _deployment_status(a: dict) -> Optional[str]:
     return field(a, "state")
 
 
-def present_deployments_list(items: list[dict], *, output: Optional[str]) -> None:
-    """Show the agent deployments: the raw payloads for `--output json`, else a table."""
+def present_deployments_list(
+    items: list[dict], *, output: Optional[str], details_urls: dict[str, str] | None = None
+) -> None:
+    """Keep app URLs available alongside optional management links."""
+    details_urls = details_urls or {}
     if output == "json":
-        render.emit_json(items)
+        render.emit_json(
+            [
+                {**item, "details_url": details_urls[item["name"]]}
+                if item.get("name") in details_urls
+                else item
+                for item in items
+            ]
+        )
         return
     rows = [
         [
-            render.hyperlink(field(a, "name"), field(a, "url")),
+            render.hyperlink(
+                field(a, "name"), details_urls.get(a.get("name") or "") or field(a, "url")
+            ),
             render.status_pill(_deployment_status(a)),
             timefmt.relative(field(a, "update_time")),
         ]
+        + (
+            [render.hyperlink("Open app", field(a, "url")) if field(a, "url") else ""]
+            if details_urls
+            else []
+        )
         for a in items
     ]
-    render.resource_table(
-        "Agent Deployments",
-        [("Name", "left"), ("Status", "left"), ("Updated", "left")],
-        rows,
-    )
+    columns: list[tuple[str, Literal["left"]]] = [
+        ("Name", "left"),
+        ("Status", "left"),
+        ("Updated", "left"),
+    ]
+    if details_urls:
+        columns.append(("App", "left"))
+    render.resource_table("Agent Deployments", columns, rows)
 
 
-def present_deployment_detail(data: dict, name: str, *, output: Optional[str]) -> None:
-    """Show one deployment: the raw payload for `--output json`, else a detail view."""
+def present_deployment_detail(
+    data: dict, name: str, *, output: Optional[str], details_url: str | None = None
+) -> None:
+    """Show one deployment with an optional management link."""
     if output == "json":
-        render.emit_json(data)
+        render.emit_json({**data, "details_url": details_url} if details_url else data)
         return
     url = field(data, "url")
     render.detail(
@@ -75,6 +97,9 @@ def present_deployment_detail(data: dict, name: str, *, output: Optional[str]) -
         field(data, "name") or name,
         {
             "URL": render.hyperlink(url, url) if url else None,
+            **(
+                {"Agent details": render.hyperlink(details_url, details_url)} if details_url else {}
+            ),
             "Description": field(data, "description"),
             "Created": timefmt.absolute(field(data, "create_time")),
             "Updated": timefmt.absolute(field(data, "update_time")),

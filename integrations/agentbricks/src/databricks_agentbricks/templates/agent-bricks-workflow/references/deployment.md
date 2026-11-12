@@ -25,7 +25,10 @@ Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment
 Deploy output includes an Agent details management link when the workspace's Agent Memory
 Sessions beta and new Agents UI are both enabled. JSON exposes it as `details_url`; `url` remains
 the deployed agent's invocation address. `--no-wait` and `deployments wait` also include the gated
-link, which can be used to inspect an in-progress deployment.
+link, which can be used to inspect an in-progress deployment. `deployments get` shows it alongside
+the app URL. With both gates enabled, `deployments list` links each agent name to its details page
+and keeps an **Open app** link for invocation. Both commands preserve `url` and add `details_url`
+when available in JSON output.
 For a local deploy record, `deployments wait` only includes that link when the selected profile
 matches the recorded workspace host and ID. Use the deployment's original workspace profile;
 old records without workspace identity omit the link.
