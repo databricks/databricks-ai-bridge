@@ -609,11 +609,39 @@ def test_missing_project_relative_uv_fails_before_starting(
     which = Mock(return_value=None)
     _wire_real_preflight(monkeypatch, which=which)
 
-    with pytest.raises(AgentCliError, match="uv was not found on PATH"):
+    with pytest.raises(AgentCliError) as raised:
         with service_fixture.service.prepare(
             DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
         ):
             pytest.fail("a missing project uv must not yield a plan")
 
+    # Installing uv globally wouldn't fix this command, so the error names the configured path.
+    assert raised.value.message == "app.yaml runs uv from ./bin/uv, but no executable uv is there."
+    assert raised.value.hint == (
+        "Restore ./bin/uv, or change the app.yaml command to run `uv` from PATH, "
+        "then re-run `agentbricks dev`."
+    )
     which.assert_called_once_with(str(tmp_path / "./bin/uv"))
+    service_fixture.tracing.start_dev.assert_not_called()
+
+
+def test_environment_build_needs_path_uv_even_with_a_project_uv(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # run-local builds the environment with uv from PATH, so a project-local uv in the app command
+    # doesn't cover the build.
+    _uv_app(tmp_path, '["./bin/uv", "run", "start-server"]')
+    project_uv = str(tmp_path / "./bin/uv")
+    which = Mock(side_effect=lambda name: name if name == project_uv else None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with pytest.raises(AgentCliError, match="uv was not found on PATH"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=True, app_port=None)
+        ):
+            pytest.fail("an environment build without PATH uv must not yield a plan")
+
+    assert [call.args[0] for call in which.call_args_list] == [project_uv, "uv"]
     service_fixture.tracing.start_dev.assert_not_called()

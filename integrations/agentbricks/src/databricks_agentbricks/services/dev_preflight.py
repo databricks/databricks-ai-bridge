@@ -43,25 +43,52 @@ def run_dev_preflight(
     """
     if not (uses_uv(command_tokens) or prepare_environment):
         return
-    ensure_uv_available(source_dir, command_tokens, which=which, os_name=os_name)
+    ensure_uv_available(
+        source_dir,
+        command_tokens,
+        prepare_environment=prepare_environment,
+        which=which,
+        os_name=os_name,
+    )
 
 
 def ensure_uv_available(
     source_dir: pathlib.Path,
     command_tokens: list[str],
     *,
+    prepare_environment: bool = False,
     which: Callable[[str], str | None] = shutil.which,
     os_name: str = os.name,
 ) -> str:
-    """Return the uv this run needs, or fail with the install command for the OS.
+    """Return the uv the app command runs, or fail with the fix.
 
     run-local starts the command with ``source_dir`` as its working directory, so a relative
     path-form executable (``./bin/uv``) is resolved against the project, not the caller's cwd.
+    The environment build runs uv from PATH, so it also needs PATH uv when the command names
+    another one.
     """
-    target = command_tokens[0] if uses_uv(command_tokens) else "uv"
-    if os.path.dirname(target) and not os.path.isabs(target):
-        target = str(source_dir / target)
-    found = which(target)
+    command_uv = command_tokens[0] if uses_uv(command_tokens) else None
+    if command_uv is None or not os.path.dirname(command_uv):
+        return _require_path_uv(command_uv or "uv", which=which, os_name=os_name)
+
+    resolved = command_uv if os.path.isabs(command_uv) else str(source_dir / command_uv)
+    found = which(resolved)
+    if not found:
+        raise AgentCliError(
+            f"app.yaml runs uv from {command_uv}, but no executable uv is there.",
+            hint=(
+                f"Restore {command_uv}, or change the app.yaml command to run `uv` from PATH, "
+                "then re-run `agentbricks dev`."
+            ),
+        )
+    if prepare_environment:
+        _require_path_uv("uv", which=which, os_name=os_name)
+    return os.path.abspath(found)
+
+
+def _require_path_uv(name: str, *, which: Callable[[str], str | None], os_name: str) -> str:
+    """Return uv found on PATH as ``name``, or fail with the install command for the OS."""
+    found = which(name)
     if found:
         return os.path.abspath(found)
     install = (
