@@ -10,6 +10,7 @@ import json
 import pathlib
 import time
 
+import pytest
 from harness.agentbricks_cli import AgentbricksCli
 from harness.fake_workspace import TELEMETRY_PATH, TelemetryUpload
 from harness.target import TargetWorkspace, require_fake_workspace
@@ -46,11 +47,18 @@ def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> Telemetry
     return uploads[already_seen]
 
 
+@pytest.mark.parametrize(
+    "directory, retains_reason", [("private-project", True), ("token=synthetic-secret", False)]
+)
 def test_failure_telemetry(
-    agentbricks_cli: AgentbricksCli, target_workspace: TargetWorkspace, tmp_path: pathlib.Path
+    agentbricks_cli: AgentbricksCli,
+    target_workspace: TargetWorkspace,
+    tmp_path: pathlib.Path,
+    directory: str,
+    retains_reason: bool,
 ) -> None:
     workspace = require_fake_workspace(target_workspace, "a telemetry receiver")
-    destination = tmp_path / "token=synthetic-secret"
+    destination = tmp_path / directory
     destination.mkdir()
     uploaded = len(workspace.telemetry)
     result = agentbricks_cli.run(
@@ -63,5 +71,8 @@ def test_failure_telemetry(
     log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
     assert log["exit_code"] == 1
     assert "diagnostics" not in log
-    assert "already exists" in log["failure_message"]
+    assert log["failure_message"].startswith("Destination ")
+    assert ("already exists" in log["failure_message"]) is retains_reason
+    assert str(tmp_path) not in proto_log
+    assert directory not in proto_log
     assert "synthetic-secret" not in proto_log
