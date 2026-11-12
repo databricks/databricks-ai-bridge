@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
@@ -36,6 +36,12 @@ _MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
 _MAX_STATIC_NAME_LENGTH = 128
 _DEPLOYMENT_META_KEY = "agentbricks.deployment_telemetry"
+DeploymentOutcome = Literal[
+    "DEPLOYMENT_OUTCOME_UNSPECIFIED",
+    "DEPLOYMENT_OUTCOME_RUNNING",
+    "DEPLOYMENT_OUTCOME_SUCCEEDED",
+    "DEPLOYMENT_OUTCOME_FAILED",
+]
 
 
 @dataclass
@@ -45,7 +51,7 @@ class DeploymentTelemetry:
     invocation_id: str
     background_child: bool = False
     details_link_emitted: bool = False
-    deployment_outcome: str = "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+    deployment_outcome: DeploymentOutcome = "DEPLOYMENT_OUTCOME_UNSPECIFIED"
 
 
 def begin_deployment(*, background_child: bool = False) -> None:
@@ -55,13 +61,23 @@ def begin_deployment(*, background_child: bool = False) -> None:
     )
 
 
-def deployment_details_url(url: str | None, *, outcome: str) -> str | None:
+def set_deployment_outcome(outcome: DeploymentOutcome) -> None:
+    """Record observed state without replacing a deployment exception."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        attribution = _deployment_metadata(ctx)
+        if attribution is not None:
+            attribution.deployment_outcome = outcome
+    except BaseException:
+        return
+
+
+def deployment_details_url(url: str | None) -> str | None:
     """Join browser arrivals to command telemetry while preserving opt-out."""
     ctx = click.get_current_context()
     attribution = ctx.meta.get(_DEPLOYMENT_META_KEY)
     if not isinstance(attribution, DeploymentTelemetry):
         return url
-    attribution.deployment_outcome = outcome
     attribution.details_link_emitted = url is not None
     if url is None or attribution.background_child or _telemetry_disabled():
         return url

@@ -154,6 +154,8 @@ Deploy and `deployments wait` telemetry includes a random invocation UUID, wheth
 agent-details link was printed, the observed deployment state, and whether the process is an
 internal background child. Details links carry the invocation UUID so browser arrivals can be
 joined to the command that printed them. The UUID contains no agent name or authentication data.
+Rollout outcomes are recorded independently of link availability, including failed rollouts;
+preparation failures leave the deployment outcome unspecified.
 `AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
 A wait command has its own invocation ID; it is not another deploy. Exclude background children
 from user-invoked command counts. Link arrivals measure browser opens, including copied links,

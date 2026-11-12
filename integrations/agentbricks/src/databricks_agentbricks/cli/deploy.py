@@ -88,6 +88,12 @@ from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthentica
 # EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
 _WAIT_TIMEOUT_S = 100
 _EX_TEMPFAIL = 75
+_DEPLOYMENT_OUTCOMES: dict[str | None, telemetry.DeploymentOutcome] = {
+    None: "DEPLOYMENT_OUTCOME_UNSPECIFIED",
+    deploy_state.RUNNING: "DEPLOYMENT_OUTCOME_RUNNING",
+    deploy_state.SUCCEEDED: "DEPLOYMENT_OUTCOME_SUCCEEDED",
+    deploy_state.FAILED: "DEPLOYMENT_OUTCOME_FAILED",
+}
 
 
 def build_deploy_service(obj, *, background: bool = False) -> DeployService:
@@ -322,6 +328,7 @@ def deploy(
         state_file = deploy_state.record_background_start(
             source_dir, prepared.name, pid=pid, now=time.time(), workspace=workspace
         )
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_RUNNING")
         present_background_started(
             prepared.name,
             log=log,
@@ -329,19 +336,22 @@ def deploy(
             output=obj.output,
             details_url=telemetry.deployment_details_url(
                 AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
-                outcome="DEPLOYMENT_OUTCOME_RUNNING",
             ),
         )
         return
     started = time.monotonic()
-    result = service.deploy(request)
+    try:
+        result = service.deploy(request)
+    finally:
+        telemetry.set_deployment_outcome(
+            _DEPLOYMENT_OUTCOMES.get(service.rollout_outcome, "DEPLOYMENT_OUTCOME_UNSPECIFIED")
+        )
     present_deploy_result(
         result,
         output=obj.output,
         elapsed_s=time.monotonic() - started,
         details_url=telemetry.deployment_details_url(
             AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
-            outcome="DEPLOYMENT_OUTCOME_SUCCEEDED",
         ),
     )
 
@@ -400,6 +410,7 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     obj = ctx.obj
     telemetry.begin_deployment()
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
+    telemetry.set_deployment_outcome(_DEPLOYMENT_OUTCOMES[result.status])
     present_wait_result(
         result,
         output=obj.output,
@@ -410,11 +421,6 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
             if result.status != deploy_state.FAILED
             and (not result.from_local_state or result.workspace is not None)
             else None,
-            outcome={
-                deploy_state.RUNNING: "DEPLOYMENT_OUTCOME_RUNNING",
-                deploy_state.SUCCEEDED: "DEPLOYMENT_OUTCOME_SUCCEEDED",
-                deploy_state.FAILED: "DEPLOYMENT_OUTCOME_FAILED",
-            }[result.status],
         ),
     )
     if result.status == deploy_state.FAILED:

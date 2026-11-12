@@ -14,11 +14,15 @@ import click
 import pytest
 from click.core import ParameterSource
 from click.testing import CliRunner
+from deploy_test import _DeployApi, _DeployRunner
 
 import databricks_agentbricks.cli.app as cli
+from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.group import AgentBricksCommand
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services.deployment import deploy_state
 
 
 class _ApiClient:
@@ -820,8 +824,9 @@ def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
     context = _real_context("deploy")
     with context:
         telemetry.begin_deployment()
+        telemetry.set_deployment_outcome(outcome)
         url = telemetry.deployment_details_url(
-            "https://workspace.example/ml/agents/details/agent-bricks-demo?o=123", outcome=outcome
+            "https://workspace.example/ml/agents/details/agent-bricks-demo?o=123"
         )
         log = _log(context, exit_code=0)
     from urllib.parse import parse_qs, urlsplit
@@ -847,7 +852,8 @@ def test_details_link_is_untracked_for_background_or_opt_out(
     url = "https://workspace.example/ml/agents/details/agent-bricks-demo"
     with context:
         telemetry.begin_deployment(background_child=background_child)
-        assert telemetry.deployment_details_url(url, outcome="DEPLOYMENT_OUTCOME_RUNNING") == url
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_RUNNING")
+        assert telemetry.deployment_details_url(url) == url
         assert _log(context, exit_code=0)["background_child"] is background_child
 
 
@@ -855,9 +861,8 @@ def test_missing_details_link_keeps_a_conversion_denominator():
     context = _real_context("deploy")
     with context:
         telemetry.begin_deployment()
-        assert (
-            telemetry.deployment_details_url(None, outcome="DEPLOYMENT_OUTCOME_SUCCEEDED") is None
-        )
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_SUCCEEDED")
+        assert telemetry.deployment_details_url(None) is None
         log = _log(context, exit_code=0)
     assert log["details_link_emitted"] is False
     assert uuid.UUID(log["invocation_id"])
@@ -871,3 +876,110 @@ def test_repeated_waits_have_distinct_invocation_ids():
             telemetry.begin_deployment()
             ids.append(_log(context, exit_code=75)["invocation_id"])
     assert len(set(ids)) == 2
+
+
+@pytest.mark.parametrize("background_child", [False, True])
+@pytest.mark.parametrize("failure_state_write", [False, True])
+def test_failed_deploy_hook_records_known_outcome(
+    tmp_path, monkeypatch, background_child, failure_state_write
+):
+    """Run the command and service with fake workspace calls and an optional failing disk write."""
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events)
+    rollout_error = RuntimeError("rollout failed")
+    write_error = OSError("failure state write failed")
+    invocation_ids = []
+    logs = []
+
+    def fail_rollout(args, profile, **kwargs):
+        if list(args[:2]) == ["apps", "deploy"]:
+            metadata = telemetry._deployment_metadata(click.get_current_context())
+            assert metadata is not None
+            invocation_ids.append(metadata.invocation_id)
+            raise rollout_error
+        return runner(args, profile, **kwargs)
+
+    write_state = deploy_state.write_state
+
+    def write(path, state):
+        if failure_state_write and state["status"] == deploy_state.FAILED:
+            raise write_error
+        write_state(path, state)
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fail_rollout)
+    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(deploy_state, "write_state", write)
+    monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+    args = ["--profile", "fake", "deploy", "demo", "--source", str(tmp_path)]
+    if background_child:
+        args.append("--background-child")
+
+    result = CliRunner().invoke(cli.agentbricks, args)
+
+    assert result.exit_code == 1
+    assert result.exception is (write_error if failure_state_write else rollout_error)
+    (log,) = logs
+    assert log["command_path"] == "agentbricks deploy"
+    assert log["invocation_id"] == invocation_ids[0]
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["exit_code"] == result.exit_code
+    assert log["background_child"] is background_child
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_FAILED"
+
+
+@pytest.mark.parametrize("background_child", [False, True])
+def test_preparation_failure_hook_keeps_outcome_unspecified(
+    tmp_path, monkeypatch, background_child
+):
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    api = _DeployApi(events)
+    logs = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+    args = ["--profile", "fake", "deploy", "--source", str(tmp_path)]
+    if background_child:
+        args.append("--background-child")
+
+    result = CliRunner().invoke(cli.agentbricks, args)
+
+    assert result.exit_code == 1
+    assert "No deployment name given" in result.output
+    assert events == []
+    (log,) = logs
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["exit_code"] == result.exit_code
+    assert log["background_child"] is background_child
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def test_outcome_setter_failure_preserves_command_exception(monkeypatch):
+    error = RuntimeError("original command failure")
+
+    def unavailable_context(*args, **kwargs):
+        raise RuntimeError("telemetry context unavailable")
+
+    @click.command(cls=AgentBricksCommand)
+    def command():
+        telemetry.begin_deployment()
+        try:
+            raise error
+        finally:
+            with monkeypatch.context() as patch:
+                patch.setattr(click, "get_current_context", unavailable_context)
+                telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_FAILED")
+
+    result = CliRunner().invoke(command)
+    assert result.exit_code == 1
+    assert result.exception is error

@@ -171,6 +171,7 @@ class DeployResult:
 SourceFolderStatus = Literal[
     "deleted", "already_gone", "kept", "kept_app_not_confirmed", "failed", "not_recorded"
 ]
+RolloutOutcome = Literal["succeeded", "failed"]
 
 
 @dataclass(frozen=True)
@@ -384,6 +385,12 @@ class DeployService:
         self._app_probe = app_probe
         self._clock = clock
         self._sleep = sleep
+        self._rollout_outcome: RolloutOutcome | None = None
+
+    @property
+    def rollout_outcome(self) -> RolloutOutcome | None:
+        """Terminal outcome of the latest deploy; None when preparation did not complete."""
+        return self._rollout_outcome
 
     # --- lifecycle verbs ----------------------------------------------------
 
@@ -658,20 +665,24 @@ class DeployService:
         remove it. The service owns the intermediate state, manifest writes, and phase order;
         provisioners own individual resource operations and return typed results for later phases.
         """
+        self._rollout_outcome = None
         timer = _PhaseTimer()
         source_dir = pathlib.Path(request.source)
         with timer("preflight"):
             prepared = self.prepare(request)
         tracker = self._state_tracker
-        if tracker is None:
-            return self._roll_out(source_dir, request, prepared, timer)
-        tracker.start(source_dir, prepared.name)
+        if tracker is not None:
+            tracker.start(source_dir, prepared.name)
         try:
             result = self._roll_out(source_dir, request, prepared, timer)
         except BaseException as exc:
-            tracker.failed(_error_text(exc))
+            self._rollout_outcome = deploy_state.FAILED
+            if tracker is not None:
+                tracker.failed(_error_text(exc))
             raise
-        tracker.succeeded(result)
+        self._rollout_outcome = deploy_state.SUCCEEDED
+        if tracker is not None:
+            tracker.succeeded(result)
         return result
 
     def _roll_out(

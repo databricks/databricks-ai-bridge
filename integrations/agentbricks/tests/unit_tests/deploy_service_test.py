@@ -1676,6 +1676,30 @@ def _notes(fixture) -> list[str]:
     return [call.args[0] for call in fixture.reporter.note.call_args_list]
 
 
+@pytest.mark.parametrize("tracked", [False, True])
+@pytest.mark.parametrize("error_type", [AgentCliError, RuntimeError, KeyboardInterrupt])
+def test_rollout_outcome_resets_before_preparation(
+    deployment_fixture, tmp_path, tracked, error_type
+):
+    tracker = DeployStateTracker(result_payload=lambda result: {}) if tracked else None
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+    request = _request(tmp_path)
+    service.deploy(request)
+    assert service.rollout_outcome == deploy_state.SUCCEEDED
+
+    error = error_type("rollout failed")
+    deployment_fixture.app.roll_out.side_effect = error
+    with pytest.raises(error_type) as caught:
+        service.deploy(request)
+    assert caught.value is error
+    assert service.rollout_outcome == deploy_state.FAILED
+
+    deployment_fixture.app.prepare_app_auth.side_effect = AgentCliError("preparation failed")
+    with pytest.raises(AgentCliError, match="preparation failed"):
+        service.deploy(request)
+    assert service.rollout_outcome is None
+
+
 def test_deploy_records_success_through_the_state_tracker(
     deployment_fixture, tmp_path: pathlib.Path
 ):
