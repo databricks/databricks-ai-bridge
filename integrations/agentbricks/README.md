@@ -186,6 +186,18 @@ The app's compute starts first and boots while the other resources are provision
 deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
 it with `agentbricks deployments delete agent-bricks-my-agent`.
 
+When the workspace has both the Agent Memory Sessions beta and the new Agents UI enabled,
+deploy output also includes an **Agent details** link to the workspace management page. This
+applies to first deploys, redeploys, `--no-wait`, and `deployments wait`.
+`deployments get` shows the same link alongside the app URL; `deployments list` links agent
+names to their details pages and keeps a separate **Open app** link. JSON output adds
+`details_url` when available and retains `url` for the deployed agent. The optional flag lookup
+waits at most two seconds per command, including lists; unavailable or disabled flags omit the
+link without affecting the command.
+When following a local deploy record, `deployments wait` also requires its recorded workspace
+host and ID to match the selected profile. Older records or records without a workspace ID omit
+the management link; the recorded deployment status and invocation URL are still available.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run

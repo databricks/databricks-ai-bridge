@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import shlex
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import click
 from rich.text import Text
@@ -42,30 +42,52 @@ def _deployment_status(a: dict) -> Optional[str]:
     return field(a, "state")
 
 
-def present_deployments_list(items: list[dict], *, output: Optional[str]) -> None:
-    """Show the agent deployments: the raw payloads for `--output json`, else a table."""
+def present_deployments_list(
+    items: list[dict], *, output: Optional[str], details_urls: dict[str, str] | None = None
+) -> None:
+    """Keep app URLs available alongside optional management links."""
+    details_urls = details_urls or {}
     if output == "json":
-        render.emit_json(items)
+        render.emit_json(
+            [
+                {**item, "details_url": details_urls[item["name"]]}
+                if item.get("name") in details_urls
+                else item
+                for item in items
+            ]
+        )
         return
     rows = [
         [
-            render.hyperlink(field(a, "name"), field(a, "url")),
+            render.hyperlink(
+                field(a, "name"), details_urls.get(a.get("name") or "") or field(a, "url")
+            ),
             render.status_pill(_deployment_status(a)),
             timefmt.relative(field(a, "update_time")),
         ]
+        + (
+            [render.hyperlink("Open app", field(a, "url")) if field(a, "url") else ""]
+            if details_urls
+            else []
+        )
         for a in items
     ]
-    render.resource_table(
-        "Agent Deployments",
-        [("Name", "left"), ("Status", "left"), ("Updated", "left")],
-        rows,
-    )
+    columns: list[tuple[str, Literal["left"]]] = [
+        ("Name", "left"),
+        ("Status", "left"),
+        ("Updated", "left"),
+    ]
+    if details_urls:
+        columns.append(("App", "left"))
+    render.resource_table("Agent Deployments", columns, rows)
 
 
-def present_deployment_detail(data: dict, name: str, *, output: Optional[str]) -> None:
-    """Show one deployment: the raw payload for `--output json`, else a detail view."""
+def present_deployment_detail(
+    data: dict, name: str, *, output: Optional[str], details_url: str | None = None
+) -> None:
+    """Show one deployment with an optional management link."""
     if output == "json":
-        render.emit_json(data)
+        render.emit_json({**data, "details_url": details_url} if details_url else data)
         return
     url = field(data, "url")
     render.detail(
@@ -75,6 +97,9 @@ def present_deployment_detail(data: dict, name: str, *, output: Optional[str]) -
         field(data, "name") or name,
         {
             "URL": render.hyperlink(url, url) if url else None,
+            **(
+                {"Agent details": render.hyperlink(details_url, details_url)} if details_url else {}
+            ),
             "Description": field(data, "description"),
             "Created": timefmt.absolute(field(data, "create_time")),
             "Updated": timefmt.absolute(field(data, "update_time")),
@@ -206,15 +231,22 @@ def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
 
 
 def present_deploy_result(
-    result: DeployResult, *, output: Optional[str], elapsed_s: Optional[float] = None
+    result: DeployResult,
+    *,
+    output: Optional[str],
+    elapsed_s: Optional[float] = None,
+    details_url: str | None = None,
 ) -> None:
     """Report a finished deploy: the machine payload for `--output json`, else the success panel.
 
-    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the JSON payload is
-    unchanged so scripts keep their established contract.
+    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the optional
+    management link is separate from the deployed agent's URL in both output modes.
     """
     if output == "json":
-        render.emit_json(deploy_result_payload(result))
+        payload = deploy_result_payload(result)
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
 
     provisioned: dict[str, Any] = {}
@@ -343,7 +375,9 @@ def present_deploy_result(
         provisioned["Store access"] = "granted to app service principal"
     if result.trace_experiment_id and result.trace_grant_error is None:
         provisioned["Trace access"] = "granted to agent runtime service principal"
-    fields = {"URL": result.url} if result.url else {}
+    fields: dict[str, Any] = {"URL": result.url} if result.url else {}
+    if details_url:
+        fields["Agent details"] = render.hyperlink(details_url, details_url)
     fields.update({"Workspace path": result.workspace_path, **provisioned})
     render.success(
         f"Deployed agent '{result.deployment}'",
@@ -358,44 +392,60 @@ def present_deploy_result(
 
 
 def present_background_started(
-    name: str, *, log: pathlib.Path, state_file: pathlib.Path, output: Optional[str]
+    name: str,
+    *,
+    log: pathlib.Path,
+    state_file: pathlib.Path,
+    output: Optional[str],
+    details_url: str | None = None,
 ) -> None:
     """Confirm a `deploy --no-wait` handoff and point at `deployments wait`."""
     if output == "json":
-        render.emit_json(
-            {
-                "deployment": name,
-                "status": "started",
-                "log": str(log),
-                "state_file": str(state_file),
-            }
-        )
+        payload = {
+            "deployment": name,
+            "status": "started",
+            "log": str(log),
+            "state_file": str(state_file),
+        }
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
     click.echo(
         f"Deploy of {name} started in the background. Next: agentbricks deployments wait {name}"
     )
+    if details_url:
+        render.console().print(
+            Text("Agent details: ") + render.hyperlink(details_url, details_url), soft_wrap=True
+        )
 
 
-def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
+def present_wait_result(
+    result: WaitResult, *, output: Optional[str], details_url: str | None = None
+) -> None:
     """Report where a waited-on deploy stands; the command maps the status to its exit code."""
     if output == "json":
-        render.emit_json(
-            {
-                "deployment": result.deployment,
-                "status": result.status,
-                "phase": result.phase,
-                "elapsed_s": result.elapsed_s,
-                "url": result.url,
-                "error": result.error,
-                "log_tail": result.log_tail,
-                "ready": result.ready,
-            }
-        )
+        payload = {
+            "deployment": result.deployment,
+            "status": result.status,
+            "phase": result.phase,
+            "elapsed_s": result.elapsed_s,
+            "url": result.url,
+            "error": result.error,
+            "log_tail": result.log_tail,
+            "ready": result.ready,
+        }
+        if details_url:
+            payload["details_url"] = details_url
+        render.emit_json(payload)
         return
     if result.status == "succeeded":
+        fields: dict[str, Any] = {"URL": result.url} if result.url else {}
+        if details_url:
+            fields["Agent details"] = render.hyperlink(details_url, details_url)
         render.success(
             f"Deployed agent '{result.deployment}'",
-            fields={"URL": result.url} if result.url else None,
+            fields=fields or None,
             next_steps=[
                 (f"agentbricks deployments logs {result.deployment}", "Tail its logs"),
                 agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
@@ -421,3 +471,7 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
         f"still deploying: {result.phase}, {format_elapsed(result.elapsed_s)} elapsed — "
         "run the same command again"
     )
+    if details_url:
+        render.console().print(
+            Text("Agent details: ") + render.hyperlink(details_url, details_url), soft_wrap=True
+        )

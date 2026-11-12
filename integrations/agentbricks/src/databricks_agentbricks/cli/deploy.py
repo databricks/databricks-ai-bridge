@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 import click
 
+from databricks_agentbricks.clients.agent_details_client import AgentDetailsClient
 from databricks_agentbricks.clients.app_probe import AppProbe
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
@@ -311,17 +312,29 @@ def deploy(
         # Fail fast in the foreground on anything quick to check; the child repeats these checks.
         prepared = service.prepare(request)
         service.check_auth()
+        workspace = service.workspace_identity()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)
         pid = spawn_background_deploy(_background_argv(obj, request), log=log)
         state_file = deploy_state.record_background_start(
-            source_dir, prepared.name, pid=pid, now=time.time()
+            source_dir, prepared.name, pid=pid, now=time.time(), workspace=workspace
         )
-        present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
+        present_background_started(
+            prepared.name,
+            log=log,
+            state_file=state_file,
+            output=obj.output,
+            details_url=AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
+        )
         return
     started = time.monotonic()
     result = service.deploy(request)
-    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
+    present_deploy_result(
+        result,
+        output=obj.output,
+        elapsed_s=time.monotonic() - started,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
+    )
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
@@ -336,7 +349,10 @@ def deployments() -> None:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
-    present_deployments_list(build_deploy_service(obj).list_deployments(), output=obj.output)
+    items = build_deploy_service(obj).list_deployments()
+    names = [item["name"] for item in items if item.get("name")]
+    details_urls = AgentDetailsClient(obj.api_client_provider).get_urls(names)
+    present_deployments_list(items, output=obj.output, details_urls=details_urls)
 
 
 @deployments.command("get")
@@ -344,7 +360,13 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
-    present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
+    data = build_deploy_service(obj).get(name)
+    present_deployment_detail(
+        data,
+        name,
+        output=obj.output,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(name),
+    )
 
 
 @deployments.command("wait")
@@ -377,7 +399,16 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     """
     obj = ctx.obj
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
-    present_wait_result(result, output=obj.output)
+    present_wait_result(
+        result,
+        output=obj.output,
+        details_url=AgentDetailsClient(obj.api_client_provider).get_url(
+            result.deployment, expected_workspace=result.workspace
+        )
+        if result.status != deploy_state.FAILED
+        and (not result.from_local_state or result.workspace is not None)
+        else None,
+    )
     if result.status == deploy_state.FAILED:
         ctx.exit(1)
     if result.status == deploy_state.RUNNING:
