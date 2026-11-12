@@ -224,10 +224,14 @@ def _group_reasons(reasons: list[str]) -> tuple[dict[str, list[str]], list[str]]
     return groups, other
 
 
+def _risk_raised(risk: dict) -> bool:
+    return risk["model_level"] != risk["level"]
+
+
 def unblock_steps(decision: dict) -> list[str]:
     """What the author can do about each reason auto-approval was refused."""
     groups, other = _group_reasons(decision["reasons"])
-    in_risk, _ = _group_reasons(decision["risk"]["reasons"])
+    in_risk, _ = _group_reasons(decision["risk"]["reasons"]) if _risk_raised(decision["risk"]) else ({}, [])
     steps: list[str] = []
     open_sections = [match[1].lower() for r in other if (match := re.match(r'"(.+)" is not empty', r))]
     low_score = next((match for r in other if (match := re.match(r"review score \d+/100 is below (\d+)", r))), None)
@@ -247,8 +251,28 @@ def unblock_steps(decision: dict) -> list[str]:
     return steps
 
 
-def overview(review: str, decision: dict) -> str:
-    """The top of the PR comment: score and risk, findings, risk items, and how to unblock approval."""
+def _finding_lines(finding: dict) -> list[str]:
+    """One finding as a headline, with its details only when it isn't shown inline."""
+    where = f" · `{finding['location']}`" if finding.get("location") else ""
+    head = f"- **{finding.get('severity') or 'Finding'}**{where} — {finding.get('title') or 'see the full review'}"
+    if finding.get("inline"):
+        return [head + (f" ([inline comment]({finding['url']}))" if finding.get("url") else " (inline comment)")]
+    lines = [head]
+    if finding.get("problem"):
+        lines.append(f"  {finding['problem']}")
+    if finding.get("fix"):
+        lines.append(f"  **Fix:** {finding['fix']}")
+    if finding.get("evidence"):
+        lines.append(f"  <sub>{finding['evidence']}</sub>")
+    return lines
+
+
+def overview(review: str, decision: dict, findings: list[dict] | None = None) -> str:
+    """The top of the PR comment: score and risk, findings, risk, and how to unblock approval.
+
+    With findings from the inline step, each finding is one headline, linked to its
+    inline comment when it has one; without them, finding sections are shown as written.
+    """
     risk = decision["risk"]
     risk_name = RISK_NAMES.get(risk["level"], risk["level"].upper())
     score = REVIEW_SCORE.search(review)
@@ -256,13 +280,20 @@ def overview(review: str, decision: dict) -> str:
             if score else "**Review score:** unavailable")
     lines = [f"{head} · **Change risk:** {risk_name} · `{risk['label']}`", "", "### Summary", ""]
 
-    findings = [(title, body) for title in FINDING_SECTIONS
-                if (body := section_body(review, title)) and body.rstrip(".").strip().lower() != "none"]
-    if findings:
-        for title, body in findings:
-            lines += [f"**{title}**", body, ""]
+    if findings is not None:
+        for title in FINDING_SECTIONS:
+            in_section = [f for f in findings if f.get("section") == title]
+            if in_section:
+                lines += [f"**{title}**"] + [line for f in in_section for line in _finding_lines(f)] + [""]
+        if not findings:
+            lines += ["No findings.", ""]
     else:
-        lines += ["No findings.", ""]
+        sections = [(title, body) for title in FINDING_SECTIONS
+                    if (body := section_body(review, title)) and not section_is_empty(body)]
+        for title, body in sections:
+            lines += [f"**{title}**", body, ""]
+        if not sections:
+            lines += ["No findings.", ""]
     approach = section_body(review, "Approach")
     if approach:
         lines += ["**Approach:** " + approach.split("\n\n", 1)[0].strip(), ""]
@@ -270,13 +301,12 @@ def overview(review: str, decision: dict) -> str:
     lines += ["### Risk", ""]
     rationale = re.search(r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review, re.MULTILINE | re.DOTALL)
     lines.append(rationale[1].strip() if rationale else "The reviewer gave no risk rationale.")
-    groups, other = _group_reasons(risk["reasons"])
-    items = [f"{kind}: {_code_list(paths)}" for kind, paths in groups.items()] + other
-    if items:
-        if risk["model_level"] != risk["level"]:
-            model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
-            lines += ["", f"CI raised the reviewer's {model_name} to {risk_name}:"]
-        lines += [""] + ["- " + item for item in items]
+    # CI's risk factors matter to the reader only when they changed the reviewer's level.
+    if _risk_raised(risk):
+        groups, other = _group_reasons(risk["reasons"])
+        items = [f"{kind}: {_code_list(paths)}" for kind, paths in groups.items()] + other
+        model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
+        lines += ["", f"CI raised the reviewer's {model_name} to {risk_name}:", ""] + ["- " + item for item in items]
 
     lines += ["", "### AI approval", ""]
     label = "Review checks passed (`ai-approved`)" if decision["review_passed"] else "Review checks not passed"
@@ -289,6 +319,21 @@ def overview(review: str, decision: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+DIFF_SHARE_NOTE = re.compile(r"^Shares use additions \+ deletions.*?(?:\n\n|\Z)", re.MULTILINE | re.DOTALL)
+
+
+def details(review: str) -> str:
+    """What the overview leaves out: rules checked, diff size, changes, tests, and scope."""
+    parts = []
+    rules = re.search(r"^\*\*Review rules:\*\*.*$", review, re.MULTILINE)
+    if rules:
+        parts.append(rules[0])
+    summary = re.search(r"^## Summary\s*$", review, re.MULTILINE)
+    if summary:
+        parts.append(DIFF_SHARE_NOTE.sub("", review[summary.end() :]).strip())
+    return "\n\n".join(parts) + "\n" if parts else ""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--review", required=True, type=Path)
@@ -297,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-lines", type=int, default=500)
     parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
     parser.add_argument("--overview", type=Path, help="Write the top of the PR comment: summary, risk, and approval")
+    parser.add_argument("--findings", type=Path, help="Findings JSON from agentbricks_inline_comments.py, if it ran")
+    parser.add_argument("--details", type=Path, help="Write the collapsed details: rules checked, diff size, tests")
     args = parser.parse_args(argv)
     review = args.review.read_text(encoding="utf-8")
     result = decide(
@@ -306,8 +353,16 @@ def main(argv: list[str] | None = None) -> int:
         max_lines=args.max_lines,
         paths=json.loads(args.paths.read_text()) if args.paths else None,
     )
+    findings = None
+    if args.findings and args.findings.is_file():
+        try:
+            findings = json.loads(args.findings.read_text(encoding="utf-8"))
+        except ValueError as error:
+            print(f"::warning::Ignoring unreadable findings file: {error}", file=sys.stderr)
     if args.overview:
-        args.overview.write_text(overview(review, result))
+        args.overview.write_text(overview(review, result, findings))
+    if args.details:
+        args.details.write_text(details(review))
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0

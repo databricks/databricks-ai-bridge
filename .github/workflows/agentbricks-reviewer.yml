@@ -619,6 +619,19 @@ jobs:
             exit 1
           fi
 
+      - name: Post inline findings
+        if: steps.reviewer.outputs.review_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+        # Findings on diff lines become inline comments, and the findings file tells the
+        # summary which ones did. If this fails, the summary shows every finding in full.
+        run: |
+          python3 .github/scripts/agentbricks_inline_comments.py \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --findings /tmp/review_findings.json \
+            || { echo "::warning::Inline findings failed; the summary keeps every finding."; rm -f /tmp/review_findings.json; }
+
       - name: Assess change risk
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
@@ -629,20 +642,8 @@ jobs:
           python3 .github/scripts/agentbricks_auto_approve.py \
             --review /tmp/review.txt --diff /tmp/pr_diff.txt --paths /tmp/pr_changed_paths.json \
             --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
-            --overview /tmp/review_overview.md > /tmp/pr_review_decision.json
-
-      - name: Post inline findings
-        if: steps.reviewer.outputs.review_ready == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
-        # Findings on diff lines become inline comments; the rest stay in the summary.
-        # On any failure the summary keeps every finding, so this never blocks the review.
-        run: |
-          python3 .github/scripts/agentbricks_inline_comments.py \
-            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
-            --review /tmp/review.txt --diff /tmp/pr_diff.txt --out /tmp/review_summary.md \
-            || cp /tmp/review.txt /tmp/review_summary.md
+            --findings /tmp/review_findings.json \
+            --overview /tmp/review_overview.md --details /tmp/review_details.md > /tmp/pr_review_decision.json
 
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
@@ -661,13 +662,15 @@ jobs:
             echo ""
             cat /tmp/review_overview.md
             echo ""
-            # The overview carries the findings; the full review stays one click away.
-            echo "<details>"
-            echo "<summary>Full review</summary>"
-            echo ""
-            cat /tmp/review_summary.md
-            echo ""
-            echo "</details>"
+            # Only what the overview leaves out: rules checked, diff size, changes, tests.
+            if [ -s /tmp/review_details.md ]; then
+              echo "<details>"
+              echo "<summary>Details</summary>"
+              echo ""
+              cat /tmp/review_details.md
+              echo ""
+              echo "</details>"
+            fi
             echo ""
             echo "---"
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"

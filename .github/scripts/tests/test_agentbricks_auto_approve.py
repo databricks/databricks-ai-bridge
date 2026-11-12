@@ -406,5 +406,55 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertIn("`src/pkg/m4.py`, and 3 more", section)
 
 
+
+class FindingsOverviewTest(unittest.TestCase):
+    FINDINGS = [
+        {"section": "Blocking issues", "severity": "HIGH", "location": "a.py:3", "title": "Crash on empty input",
+         "problem": "p", "fix": "f", "evidence": "e", "inline": True, "url": "https://x/1"},
+        {"section": "Non-blocking notes", "severity": "LOW", "location": "docs/b.md:9", "title": "Stale example",
+         "problem": "The example uses the old flag.", "fix": "Use `--new`.", "evidence": "Read docs/b.md:1-20.",
+         "inline": False, "url": None},
+    ]
+
+    def test_inline_findings_are_one_linked_headline(self):
+        text = review(blocking="- [HIGH] [HIGH CONFIDENCE] `a.py:3` — x")
+        section = gate.overview(text, gate.decide(text, diff(CODE)), self.FINDINGS)
+        self.assertIn("**Blocking issues**\n- **HIGH** · `a.py:3` — Crash on empty input ([inline comment](https://x/1))",
+                      section)
+        self.assertNotIn("\n  p\n", section)
+
+    def test_findings_not_shown_inline_keep_their_details(self):
+        section = gate.overview(review(), gate.decide(review(), diff(CODE)), self.FINDINGS)
+        self.assertIn("- **LOW** · `docs/b.md:9` — Stale example\n  The example uses the old flag.\n"
+                      "  **Fix:** Use `--new`.\n  <sub>Read docs/b.md:1-20.</sub>", section)
+
+    def test_no_findings_says_so(self):
+        section = gate.overview(review(), gate.decide(review(), diff(CODE)), [])
+        self.assertIn("### Summary\n\nNo findings.", section)
+
+    def test_risk_factors_are_hidden_unless_ci_raised_the_level(self):
+        text = review(change_risk="HIGH")
+        section = gate.overview(text, gate.decide(text, diff(".github/workflows/a.yml")), [])
+        self.assertNotIn("CI raised", section)
+        self.assertIn("move them to a separate PR (`.github/workflows/a.yml`)", section)
+
+
+class DetailsTest(unittest.TestCase):
+    def test_details_hold_rules_and_summary_without_repeating_the_overview(self):
+        text = review().replace("## Summary\n", "**Review rules:** `REVIEW.md` · checked: BRIDGE-001\n\n## Summary\n\n"
+                                "**Diff size (computed):** 1 file\n\nShares use additions + deletions, blah.\n"
+                                "Tests include fixtures.\n\n")
+        text_details = gate.details(text)
+        self.assertTrue(text_details.startswith("**Review rules:** `REVIEW.md`"))
+        self.assertIn("**Diff size (computed):** 1 file", text_details)
+        self.assertIn("### Changes\nA change.", text_details)
+        self.assertNotIn("Shares use additions", text_details)
+        for repeated in ("Review score", "Change risk", "Risk rationale", "Sound.", "Blocking issues"):
+            self.assertNotIn(repeated, text_details)
+
+    def test_details_are_empty_without_rules_or_summary(self):
+        self.assertEqual(gate.details("**Review score:** 100/100 · reviewers: 2/2\n"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
