@@ -21,6 +21,7 @@ _ASSIGNMENT = re.compile(
     r"credential|signature|sig))[\w-]+[\"']?\s*[:=]\s*"
 )
 _QUOTED_VALUE = re.compile(
+    r"(?<!\w)(?i:br|rb|fr|rf|[rubf])?"
     r"""(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
 )
 _SCALAR_VALUE = re.compile(_QUOTED_VALUE.pattern + r"|[^\s,;&}\]]+")
