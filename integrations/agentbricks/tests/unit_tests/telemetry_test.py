@@ -9,6 +9,7 @@ import uuid
 from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 import click
 import pytest
@@ -983,3 +984,104 @@ def test_outcome_setter_failure_preserves_command_exception(monkeypatch):
     result = CliRunner().invoke(command)
     assert result.exit_code == 1
     assert result.exception is error
+
+
+@pytest.mark.parametrize("command", ["get", "list"])
+@pytest.mark.parametrize("enabled,opt_out", [(True, False), (False, False), (True, True)])
+def test_read_command_links_join_one_command_event(monkeypatch, command, enabled, opt_out):
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
+    items = [
+        {"name": "agent-bricks-one", "url": "https://one.example"},
+        {"name": "agent-bricks-two", "url": "https://two.example"},
+    ]
+    uploads = []
+    flag_requests = []
+
+    class WorkspaceTransport:
+        def do(self, method, path, *, query=None, body=None):
+            if method == "GET":
+                flag_requests.append(path)
+                return {
+                    "flags": {
+                        "databricks.fe.customagents.agentCentricView.enable": enabled,
+                        "agent_memory_sessions": True,
+                    }
+                }
+            assert (method, path) == ("POST", "/telemetry-ext")
+            uploads.append(body)
+            return {}
+
+    client = SimpleNamespace(
+        host="https://workspace.example",
+        workspace_client=SimpleNamespace(
+            config=SimpleNamespace(workspace_id="123"), api_client=WorkspaceTransport()
+        ),
+    )
+    # Fake only external Apps reads and workspace transport; the command hook, attribution,
+    # event construction, and emitter all execute together.
+    monkeypatch.setattr(
+        cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: client, _client=client)
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, *a, **kw: SimpleNamespace(
+            returncode=0, stdout=json.dumps(items if command == "list" else items[0]), stderr=""
+        ),
+    )
+    args = ["--profile", "fake", "--output", "json", "deployments", command]
+    if command == "get":
+        args.append("agent-bricks-one")
+    result = CliRunner().invoke(cli.agentbricks, args)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    rows = payload if command == "list" else [payload]
+    assert flag_requests == ["/api/2.0/ui-flags"]
+    assert len(uploads) == (0 if opt_out else 1)
+    if not opt_out:
+        log = json.loads(uploads[0]["protoLogs"][0])["entry"]["agentbricks_cli_log"]
+        assert log["command_path"] == f"agentbricks deployments {command}"
+        assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+        assert log["background_child"] is False
+        assert log["details_link_emitted"] is enabled
+        assert uuid.UUID(log["invocation_id"]).version == 4
+        assert "agent-bricks-one" not in json.dumps(log)
+    for row in rows:
+        assert row["url"] == next(item["url"] for item in items if item["name"] == row["name"])
+        if not enabled:
+            assert "details_url" not in row
+            continue
+        parts = urlsplit(row["details_url"])
+        assert parts.path == f"/ml/agents/details/{row['name']}"
+        query = parse_qs(parts.query)
+        if opt_out:
+            assert query == {"o": ["123"]}
+        else:
+            assert query == {
+                "o": ["123"],
+                "source": ["agentbricks-cli"],
+                "cli_invocation_id": [log["invocation_id"]],
+            }
+
+
+@pytest.mark.parametrize("command", ["get", "list"])
+def test_read_command_failure_keeps_outcome_unspecified(monkeypatch, command):
+    logs = []
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+
+    def unavailable(*args, **kwargs):
+        raise AgentCliError("unavailable", error_code="UNAVAILABLE")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", unavailable)
+    args = ["--profile", "fake", "deployments", command]
+    if command == "get":
+        args.append("agent-bricks-one")
+    result = CliRunner().invoke(cli.agentbricks, args)
+    assert result.exit_code == 1
+    (log,) = logs
+    assert log["command_path"] == f"agentbricks deployments {command}"
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"

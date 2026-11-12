@@ -157,6 +157,11 @@ joined to the command that printed them. The UUID contains no agent name or auth
 Rollout outcomes are recorded independently of link availability, including failed rollouts;
 preparation failures leave the deployment outcome unspecified.
 `AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
+`deployments get` and `deployments list` also attach a per-command UUID to details links.
+All rows from one list share one UUID and one command event; their deployment outcome stays
+unspecified because these commands only read state. Group arrivals by the joined event's
+`command_path` to distinguish deploy, wait, get, and list. Count distinct invocation IDs, rather
+than list rows or repeated page loads, for command conversion percentages.
 A wait command has its own invocation ID; it is not another deploy. Exclude background children
 from user-invoked command counts. Link arrivals measure browser opens, including copied links,
 not terminal mouse clicks or proof that the deployer and viewer are the same person.
