@@ -35,7 +35,6 @@ from databricks_agentbricks.clients.apps_user_auth_client import (
 from databricks_agentbricks.clients.tracing_client import TraceTable, TraceTableKind
 from databricks_agentbricks.diagnostics import (
     CommandDiagnostics,
-    FailureReason,
     FailureStage,
     Readiness,
 )
@@ -1977,9 +1976,8 @@ def test_readiness_timeout_retains_observation_without_misreporting_network_fail
         deployment_fixture, clock, diagnostics=diagnostics, app_probe=_ScriptedProbe(outcome)
     )
     if outcome == "booting":
-        with pytest.raises(AgentCliError) as raised:
+        with pytest.raises(AgentCliError, match="didn't answer within"):
             service.deploy(_request(tmp_path))
-        assert raised.value.failure_reason == FailureReason.APP_READINESS_TIMEOUT
         assert diagnostics.failure_stage == FailureStage.READY
         assert diagnostics.readiness == Readiness.BOOTING
         assert diagnostics.probe_http_status == 502

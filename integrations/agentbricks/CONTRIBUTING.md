@@ -186,11 +186,12 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
-Internal workflow diagnostics use the enums in `diagnostics.py`. Services receive a `CommandDiagnostics`
-instance explicitly; `phase()` retains the innermost failed stage. `AgentCliError.failure_reason`
-and `subprocess_exit_code` preserve known facts without changing the displayed message or process
-exit code. The emitter follows bounded explicit exception causes and allowlists service codes for the
-centralized `error_category`. Workflow stages, readiness, child exit codes, and operation IDs
+The emitter follows bounded explicit exception causes and maps exception types and allowlisted
+service codes directly to the existing centralized `error_category`. `AgentCliError.failure_detail`
+and `subprocess_exit_code` preserve child output and status without changing the displayed message
+or process exit code. The CLI-independent scrubber lives in `telemetry/scrub.py`; Click context
+handling and upload orchestration remain in `cli/telemetry.py`.
+Workflow stages, readiness, child exit codes, and operation IDs
 are not part of the log schema. The only new wire field is top-level `failure_message`, which carries
 up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
 credential, path, and email scrubbing; this remains sensitive, labeled
