@@ -35,9 +35,11 @@ def test_credentials_are_scrubbed(value):
 
 
 @pytest.mark.parametrize("scheme", ["postgres", "jdbc:postgresql", "ssh", "redis+tls"])
-def test_url_credentials_are_scrubbed_for_any_scheme(scheme):
-    result = scrub_failure_text(f"Connection failed: {scheme}://name:synthetic-secret@host/db")
+@pytest.mark.parametrize("password", ["synthetic-secret", "synthetic-secret@synthetic-tail"])
+def test_url_credentials_are_scrubbed_for_any_scheme(scheme, password):
+    result = scrub_failure_text(f"Connection failed: {scheme}://name:{password}@host/db")
     assert "synthetic-secret" not in result
+    assert "synthetic-tail" not in result
     assert "Connection failed" in result
     assert "[REDACTED]" in result
 
@@ -117,6 +119,17 @@ def test_credential_containers_are_scrubbed_without_losing_following_error(name,
 )
 def test_incomplete_or_malformed_credential_container_is_omitted(name, value):
     assert scrub_failure_text(f"Request failed: {name}={value}") == ("Request failed: [REDACTED]")
+
+
+@pytest.mark.parametrize("marker", ["|", "|-", "|2", ">", ">+", ">-"])
+@pytest.mark.parametrize("name", ["client_secret", "Authorization"])
+def test_yaml_credential_blocks_are_omitted_conservatively(marker, name):
+    assert (
+        scrub_failure_text(
+            f"Request failed: {name}: {marker}\n  synthetic-opaque-value\n  continued-value"
+        )
+        == "Request failed: [REDACTED]"
+    )
 
 
 @pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])
