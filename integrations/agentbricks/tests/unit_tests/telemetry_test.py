@@ -746,6 +746,12 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         "token: Bearer synthetic-opaque-value",
         "token=Basic synthetic-opaque-value",
         "password=multiple words synthetic-opaque-value",
+        "credentials: # configured\n  - synthetic-opaque-value",
+        "client_secret: first line\n  synthetic-opaque-value",
+        "client_secret: &anchor\n  synthetic-opaque-value",
+        "client_secret: !!str\n  synthetic-opaque-value",
+        'password="""first line\n"}synthetic-opaque-value"""',
+        'credentials={nested: """first line\n"}synthetic-opaque-value"""}',
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
