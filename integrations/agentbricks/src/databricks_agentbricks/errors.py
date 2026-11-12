@@ -12,8 +12,6 @@ from typing import Optional
 import click
 from rich.console import Console
 
-from databricks_agentbricks.diagnostics import FailureReason
-
 # Error codes indicating that a preview API is not deployed to the workspace's region or shard.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED"})
 
@@ -65,14 +63,12 @@ class AgentCliError(click.ClickException):
         *,
         error_code: Optional[str] = None,
         hint: Optional[str] = None,
-        failure_reason: FailureReason | None = None,
         subprocess_exit_code: int | None = None,
         failure_detail: str | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
-        self.failure_reason = failure_reason
         self.subprocess_exit_code = subprocess_exit_code
         self.failure_detail = failure_detail
 

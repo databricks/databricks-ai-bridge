@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from databricks_agentbricks.cli.failure_text import MAX_FAILURE_BYTES, scrub_failure_text
+from databricks_agentbricks.telemetry.scrub import MAX_FAILURE_BYTES, scrub_failure_text
 
 
 @pytest.mark.parametrize(

@@ -19,7 +19,6 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import telemetry
-from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureReason, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.group import AgentBricksCommand
 
@@ -254,12 +253,8 @@ def test_keyboard_interrupt_uses_click_abort_exit_code():
 
 def test_wrapped_failure_preserves_text_in_sensitive_field():
     context = _Context()
-    context.obj.diagnostics = CommandDiagnostics()
     error = AgentCliError("private message", hint="private hint")
     error.__cause__ = AgentCliError("private service detail", error_code="PERMISSION_DENIED")
-    with pytest.raises(AgentCliError), context.obj.diagnostics.phase(FailureStage.RUN_LOCAL):
-        raise error
-
     log = _log(context, exit_code=1, exception=error)
     assert log["failure_message"] == "private message\nCaused by: private service detail"
     assert log == _log(_Context(), exit_code=1, exception=error)
@@ -269,26 +264,42 @@ def test_wrapped_failure_preserves_text_in_sensitive_field():
 
 
 @pytest.mark.parametrize(
-    ("cause", "reason", "category"),
+    ("cause", "category"),
     [
-        (ConnectionError("private host"), "NETWORK_ERROR", "NETWORK"),
-        (URLError("private host"), "NETWORK_ERROR", "NETWORK"),
-        (requests.ConnectionError("private host"), "NETWORK_ERROR", "NETWORK"),
-        (requests.Timeout("private host"), "NETWORK_ERROR", "NETWORK"),
-        (FileNotFoundError("private path"), "FILESYSTEM_ERROR", "CONFIGURATION"),
-        (ImportError("private module"), "DEPENDENCY_MISSING", "DEPENDENCY"),
-        (
-            AgentCliError("private", failure_reason=FailureReason.UV_MISSING),
-            "UV_MISSING",
-            "DEPENDENCY",
-        ),
+        (ConnectionError("private host"), "NETWORK"),
+        (URLError("private host"), "NETWORK"),
+        (requests.ConnectionError("private host"), "NETWORK"),
+        (requests.Timeout("private host"), "NETWORK"),
+        (FileNotFoundError("private path"), "CONFIGURATION"),
+        (ImportError("private module"), "DEPENDENCY"),
+        (ModuleNotFoundError("private module"), "DEPENDENCY"),
     ],
 )
-def test_failure_classification_follows_explicit_causes(cause, reason, category):
+def test_failure_classification_follows_explicit_causes(cause, category):
     error = AgentCliError("Could not start")
     error.__cause__ = cause
     assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
-    assert telemetry._failure_reason(error) == FailureReason(reason)
+
+
+@pytest.mark.parametrize(
+    ("code", "category"),
+    [
+        ("INVALID_TOKEN", "AUTHENTICATION"),
+        ("TOKEN_EXPIRED", "AUTHENTICATION"),
+        ("forbidden", "AUTHORIZATION"),
+        ("NOT_AUTHORIZED", "AUTHORIZATION"),
+        ("TIMED_OUT", "NETWORK"),
+        ("CANCELLED", "NETWORK"),
+        ("CONFIGURATION_ERROR", "CONFIGURATION"),
+        ("INVALID_ARGUMENT", "CONFIGURATION"),
+        ("NOT_IMPLEMENTED", "RUNTIME"),
+        ("ALREADY_EXISTS", "RUNTIME"),
+    ],
+)
+def test_service_code_classification_takes_precedence_over_wrapped_transport_error(code, category):
+    error = AgentCliError("service rejected request", error_code=code)
+    error.__cause__ = ConnectionError("private host")
+    assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
 
 
 def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
@@ -310,7 +321,6 @@ def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch)
     def run():
         raise AgentCliError(
             "private child output",
-            failure_reason=FailureReason.SUBPROCESS_FAILED,
             subprocess_exit_code=17,
         )
 
@@ -321,14 +331,6 @@ def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch)
     assert "diagnostics" not in records[0]
     assert "subprocess_exit_code" not in records[0]
     assert "failure_reason" not in records[0]
-
-
-def test_outer_phase_preserves_the_inner_failure_stage():
-    diagnostics = CommandDiagnostics()
-    with pytest.raises(ValueError), diagnostics.phase(FailureStage.PREFLIGHT):
-        with diagnostics.phase(FailureStage.PROJECT):
-            raise ValueError("invalid project")
-    assert diagnostics.failure_stage == FailureStage.PROJECT
 
 
 def test_existing_workspace_client_receives_exact_transport_request(monkeypatch):
