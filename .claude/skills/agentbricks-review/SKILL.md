@@ -280,7 +280,9 @@ headings to decide auto-approval.
    would confirm it.
 5. **Approach**: is there a materially simpler or more consistent way to reach
    the goal using existing patterns in this repo? Name the alternative, or say
-   the approach is sound. Never blocking.
+   the approach is sound. Never blocking. Make the first sentence the verdict,
+   including the main concern if there is one: CI shows only that sentence in
+   the summary comment and moves the rest to its Details section.
 6. **Summary**: exactly one `## Summary` heading containing the three
    subsections below. The workflow inserts computed diff statistics after it
    and rejects the review if a subsection is missing or empty.

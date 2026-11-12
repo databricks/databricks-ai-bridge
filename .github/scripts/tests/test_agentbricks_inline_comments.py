@@ -297,6 +297,8 @@ class MainTest(unittest.TestCase):
         self.assertEqual(records[0]["url"], "https://github.com/o/r/pull/7#discussion_r900")
         self.assertEqual(records[2]["url"], "https://github.test/posted/0")
         self.assertIsNone(records[1]["url"])
+        self.assertEqual(records[1]["file_url"], f"https://github.com/o/r/blob/{HEAD}/docs/index.md#L4")
+        self.assertEqual(records[2]["file_url"], f"https://github.com/o/r/blob/{HEAD}/{CODE}#L161-L164")
 
     def test_findings_file_marks_failed_posts_as_not_inline(self):
         records = self.run_findings([{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}],

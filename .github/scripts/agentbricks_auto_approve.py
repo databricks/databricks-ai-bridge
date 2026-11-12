@@ -251,12 +251,40 @@ def unblock_steps(decision: dict) -> list[str]:
     return steps
 
 
-def _finding_lines(finding: dict) -> list[str]:
-    """One finding as a headline, with its details only when it isn't shown inline."""
-    where = f" · `{finding['location']}`" if finding.get("location") else ""
+def short_locations(locations: list[str]) -> dict[str, str]:
+    """Each `path:line` shortened to the fewest trailing path parts that tell the files apart."""
+    paths = {location.rsplit(":", 1)[0] for location in locations if ":" in location}
+
+    def suffix(path: str, depth: int) -> str:
+        return "/".join(path.split("/")[-depth:])
+
+    short = {}
+    for path in paths:
+        depth = 1
+        while depth < path.count("/") + 1 and any(
+            other != path and suffix(other, depth) == suffix(path, depth) for other in paths
+        ):
+            depth += 1
+        short[path] = suffix(path, depth)
+    return {location: short[location.rsplit(":", 1)[0]] + ":" + location.rsplit(":", 1)[1]
+            for location in locations if ":" in location}
+
+
+def _finding_lines(finding: dict, short: dict[str, str]) -> list[str]:
+    """One finding as a headline, with its details only when it isn't shown inline.
+
+    The location links to the inline comment when there is one, else to the lines
+    at the reviewed commit, so the full path stays one click away.
+    """
+    location = finding.get("location") or ""
+    where = ""
+    if location:
+        label = f"`{short.get(location, location)}`"
+        link = finding.get("url") if finding.get("inline") else finding.get("file_url")
+        where = f" · [{label}]({link})" if link else f" · {label}"
     head = f"- **{finding.get('severity') or 'Finding'}**{where} — {finding.get('title') or 'see the full review'}"
     if finding.get("inline"):
-        return [head + (f" ([inline comment]({finding['url']}))" if finding.get("url") else " (inline comment)")]
+        return [head]
     lines = [head]
     if finding.get("problem"):
         lines.append(f"  {finding['problem']}")
@@ -265,6 +293,18 @@ def _finding_lines(finding: dict) -> list[str]:
     if finding.get("evidence"):
         lines.append(f"  <sub>{finding['evidence']}</sub>")
     return lines
+
+
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(])")
+
+
+def approach_parts(review: str) -> tuple[str, str]:
+    """The Approach section's first sentence, and the rest of it."""
+    approach = (section_body(review, "Approach") or "").strip()
+    # A following "**Review rules:** …" line isn't a heading, so stop at it explicitly.
+    approach = re.split(r"^\*\*[^*\n]+:\*\*", approach, maxsplit=1, flags=re.MULTILINE)[0].strip()
+    first = SENTENCE_END.split(approach, 1)[0]
+    return first.strip(), approach[len(first) :].strip()
 
 
 def overview(review: str, decision: dict, findings: list[dict] | None = None) -> str:
@@ -281,10 +321,11 @@ def overview(review: str, decision: dict, findings: list[dict] | None = None) ->
     lines = [f"{head} · **Change risk:** {risk_name} · `{risk['label']}`", "", "### Summary", ""]
 
     if findings is not None:
+        short = short_locations([f.get("location") or "" for f in findings])
         for title in FINDING_SECTIONS:
             in_section = [f for f in findings if f.get("section") == title]
             if in_section:
-                lines += [f"**{title}**"] + [line for f in in_section for line in _finding_lines(f)] + [""]
+                lines += [f"**{title}**"] + [line for f in in_section for line in _finding_lines(f, short)] + [""]
         if not findings:
             lines += ["No findings.", ""]
     else:
@@ -294,9 +335,9 @@ def overview(review: str, decision: dict, findings: list[dict] | None = None) ->
             lines += [f"**{title}**", body, ""]
         if not sections:
             lines += ["No findings.", ""]
-    approach = section_body(review, "Approach")
+    approach, more = approach_parts(review)
     if approach:
-        lines += ["**Approach:** " + approach.split("\n\n", 1)[0].strip(), ""]
+        lines += ["**Approach:** " + approach + (" More in **Details**." if more else ""), ""]
 
     lines += ["### Risk", ""]
     rationale = re.search(r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review, re.MULTILINE | re.DOTALL)
@@ -323,8 +364,11 @@ DIFF_SHARE_NOTE = re.compile(r"^Shares use additions \+ deletions.*?(?:\n\n|\Z)"
 
 
 def details(review: str) -> str:
-    """What the overview leaves out: rules checked, diff size, changes, tests, and scope."""
+    """What the overview leaves out: the rest of the approach, rules checked, diff size, changes, tests, and scope."""
     parts = []
+    first, more = approach_parts(review)
+    if more:
+        parts.append(f"**Approach:** {first} {more}")
     rules = re.search(r"^\*\*Review rules:\*\*.*$", review, re.MULTILINE)
     if rules:
         parts.append(rules[0])

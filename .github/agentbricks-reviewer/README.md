@@ -29,13 +29,14 @@ change risk carries a risk classification; the review score does not.
 
 Each comment starts with one line giving the review score, reviewer coverage,
 and change risk, then three short sections: **Summary** (one headline per
-finding, linked to its inline comment, or "No findings.", and the reviewer's
-take on the approach), **Risk** (the rationale, plus CI's risk factors when they
+finding, its location linked to the inline comment or to the lines at the
+reviewed commit, or "No findings.", and the first sentence of the reviewer's take
+on the approach), **Risk** (the rationale, plus CI's risk factors when they
 raised the reviewer's level), and **AI approval** (whether the PR is eligible
 and, if not, what would unblock it). Each finding's problem, fix, and evidence
 are in its inline comment; findings that can't be placed on a changed line show
-them in the summary instead. A collapsed **Details** section has the rules
-checked, diff size, and the changes, tests, and scope assessment. Eligibility is separate from final
+them in the summary instead. A collapsed **Details** section has the rest of the
+approach, the rules checked, diff size, and the changes, tests, and scope assessment. Eligibility is separate from final
 authorization: automation must be enabled, the author eligible, the PR
 non-draft, and the reviewed head current.
 

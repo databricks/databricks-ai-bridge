@@ -413,19 +413,18 @@ class FindingsOverviewTest(unittest.TestCase):
          "problem": "p", "fix": "f", "evidence": "e", "inline": True, "url": "https://x/1"},
         {"section": "Non-blocking notes", "severity": "LOW", "location": "docs/b.md:9", "title": "Stale example",
          "problem": "The example uses the old flag.", "fix": "Use `--new`.", "evidence": "Read docs/b.md:1-20.",
-         "inline": False, "url": None},
+         "inline": False, "url": None, "file_url": "https://x/blob/b.md#L9"},
     ]
 
     def test_inline_findings_are_one_linked_headline(self):
         text = review(blocking="- [HIGH] [HIGH CONFIDENCE] `a.py:3` — x")
         section = gate.overview(text, gate.decide(text, diff(CODE)), self.FINDINGS)
-        self.assertIn("**Blocking issues**\n- **HIGH** · `a.py:3` — Crash on empty input ([inline comment](https://x/1))",
-                      section)
+        self.assertIn("**Blocking issues**\n- **HIGH** · [`a.py:3`](https://x/1) — Crash on empty input\n", section)
         self.assertNotIn("\n  p\n", section)
 
     def test_findings_not_shown_inline_keep_their_details(self):
         section = gate.overview(review(), gate.decide(review(), diff(CODE)), self.FINDINGS)
-        self.assertIn("- **LOW** · `docs/b.md:9` — Stale example\n  The example uses the old flag.\n"
+        self.assertIn("- **LOW** · [`b.md:9`](https://x/blob/b.md#L9) — Stale example\n  The example uses the old flag.\n"
                       "  **Fix:** Use `--new`.\n  <sub>Read docs/b.md:1-20.</sub>", section)
 
     def test_no_findings_says_so(self):
@@ -437,6 +436,35 @@ class FindingsOverviewTest(unittest.TestCase):
         section = gate.overview(text, gate.decide(text, diff(".github/workflows/a.yml")), [])
         self.assertNotIn("CI raised", section)
         self.assertIn("move them to a separate PR (`.github/workflows/a.yml`)", section)
+
+
+class ShortLocationTest(unittest.TestCase):
+    def test_paths_shrink_to_the_shortest_unique_suffix(self):
+        short = gate.short_locations([
+            "integrations/agentbricks/src/pkg/presentation/group.py:203",
+            "integrations/agentbricks/src/pkg/cli/__init__.py:4",
+            "integrations/agentbricks/src/pkg/runtime/__init__.py:9-12",
+            "",
+        ])
+        self.assertEqual(short, {
+            "integrations/agentbricks/src/pkg/presentation/group.py:203": "group.py:203",
+            "integrations/agentbricks/src/pkg/cli/__init__.py:4": "cli/__init__.py:4",
+            "integrations/agentbricks/src/pkg/runtime/__init__.py:9-12": "runtime/__init__.py:9-12",
+        })
+
+
+class ApproachTest(unittest.TestCase):
+    def test_summary_keeps_the_first_sentence_and_details_the_rest(self):
+        text = review().replace("## Approach\n\nSound.\n", "## Approach\n\nSound overall. `parse()` could reuse `split()`.\n\n"
+                                "**Review rules:** `REVIEW.md`\n")
+        section = gate.overview(text, gate.decide(text, diff(CODE)), [])
+        self.assertIn("**Approach:** Sound overall. More in **Details**.", section)
+        self.assertNotIn("reuse", section)
+        self.assertTrue(gate.details(text).startswith("**Approach:** Sound overall. `parse()` could reuse `split()`.\n\n"
+                                                      "**Review rules:** `REVIEW.md`"))
+
+    def test_one_sentence_approach_is_not_repeated_in_details(self):
+        self.assertNotIn("Approach", gate.details(review()))
 
 
 class DetailsTest(unittest.TestCase):

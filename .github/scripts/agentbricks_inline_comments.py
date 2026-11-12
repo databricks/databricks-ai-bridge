@@ -172,6 +172,15 @@ def split_finding(finding: dict) -> dict:
     }
 
 
+def file_url(repo: str, head_sha: str, location: str) -> str | None:
+    """A link to the finding's lines at the reviewed commit."""
+    match = re.fullmatch(r"(?P<path>.+):(?P<start>\d+)(?:-(?P<end>\d+))?", location or "")
+    if not match:
+        return None
+    lines = f"L{match['start']}" + (f"-L{match['end']}" if match["end"] else "")
+    return f"https://github.com/{repo}/blob/{head_sha}/{match['path']}#{lines}"
+
+
 def render(parts: dict, head_sha: str) -> str:
     """An inline comment: title, severity line, problem, fix, and collapsed evidence."""
     meta = " · ".join(filter(None, (parts["severity"], parts["confidence"].lower(), parts["section"])))
@@ -379,7 +388,9 @@ def main(argv: list[str] | None = None) -> int:
         for finding in parse_findings(review):
             match = next((a for a in anchored if a["start"] == finding["start"]), None)
             shown = match is not None and id(match) in inline_ids
-            records.append({**split_finding(finding), "inline": shown, "url": inline_ids.get(id(match)) if shown else None})
+            parts = split_finding(finding)
+            records.append({**parts, "inline": shown, "url": inline_ids.get(id(match)) if shown else None,
+                            "file_url": file_url(args.repo, args.head, parts["location"])})
         args.findings.write_text(json.dumps(records, indent=2), encoding="utf-8")
     return 0
 
