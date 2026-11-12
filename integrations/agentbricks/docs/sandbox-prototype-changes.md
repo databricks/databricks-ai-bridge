@@ -83,7 +83,8 @@ worker, streaming, readiness and debugging contracts.
   command protocol and both framework entrypoints.
 - The broader unit suite was interrupted after 3,012 passes. It reported three
   model-upgrade failures with missing optional `gepa`/`litellm` dependencies and
-  one terminal-table wrapping failure. The sandbox App fixture's duplicate
+  one terminal-table wrapping failure; all four reproduce without the sandbox changes.
+  The sandbox App fixture's duplicate
   monkeypatch teardown error was fixed and its tests passed in the focused rerun.
 - These runs use the existing local test environment, not a fresh minimum-version
   dependency matrix. Live Databricks integration and scale tests were not rerun

@@ -23,7 +23,9 @@ def client(monkeypatch):
         monkeypatch.setattr(app.state, name, MagicMock(), raising=False)
     from databricks_agentkit.sandbox.preparation import SessionPreparation
 
-    monkeypatch.setattr(app.state, "preparations", MagicMock(spec=SessionPreparation), raising=False)
+    monkeypatch.setattr(
+        app.state, "preparations", MagicMock(spec=SessionPreparation), raising=False
+    )
     app.state.orchestrator.prepared_session_id = None
     app.state.orchestrator.environment_session_id = None
     app.state.orchestrator.sandbox_scope = "session"
