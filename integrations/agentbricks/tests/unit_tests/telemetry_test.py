@@ -821,7 +821,7 @@ def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
     with context:
         telemetry.begin_deployment()
         url = telemetry.deployment_details_url(
-            "https://workspace.example/ml/agents/apps/agent-bricks-demo?o=123", outcome=outcome
+            "https://workspace.example/ml/agents/details/agent-bricks-demo?o=123", outcome=outcome
         )
         log = _log(context, exit_code=0)
     from urllib.parse import parse_qs, urlsplit
@@ -844,7 +844,7 @@ def test_details_link_is_untracked_for_background_or_opt_out(
 ):
     monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
     context = _real_context("deploy")
-    url = "https://workspace.example/ml/agents/apps/agent-bricks-demo"
+    url = "https://workspace.example/ml/agents/details/agent-bricks-demo"
     with context:
         telemetry.begin_deployment(background_child=background_child)
         assert telemetry.deployment_details_url(url, outcome="DEPLOYMENT_OUTCOME_RUNNING") == url
