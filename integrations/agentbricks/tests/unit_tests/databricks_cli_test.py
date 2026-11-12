@@ -177,6 +177,44 @@ def test_streamed_failure_keeps_bounded_output_and_stream_destinations(
     assert result.returncode == 3
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX descriptor identity")
+@pytest.mark.parametrize("destination", ["file", "pipe"])
+def test_merged_output_preserves_child_write_order(tmp_path, destination):
+    child = (
+        "import os, sys\n"
+        "for i in range(512):\n"
+        "    os.write(1, f'out {i}\\n'.encode())\n"
+        "    os.write(2, f'err {i}\\n'.encode())\n"
+        "sys.exit(3)"
+    )
+    result_path = tmp_path / "result.json"
+    runner = (
+        "import json, pathlib, sys; "
+        "from databricks_agentbricks.clients.databricks_cli import _run_until_ready; "
+        f"result = _run_until_ready([sys.executable, '-c', {child!r}], "
+        "cwd=None, env=None, probe=lambda: False, on_ready=None); "
+        f"pathlib.Path({str(result_path)!r}).write_text("
+        "json.dumps([result.returncode, result.stdout, result.stderr]))"
+    )
+    output_path = tmp_path / "combined.log"
+    with output_path.open("wb") as output:
+        completed = subprocess.run(
+            _python(runner),
+            stdout=output if destination == "file" else subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=5,
+            check=True,
+        )
+    observed = output_path.read_bytes() if destination == "file" else completed.stdout
+    expected = "".join(f"out {i}\nerr {i}\n" for i in range(512)).encode()
+    assert observed == expected
+    returncode, stdout, stderr = json.loads(result_path.read_text())
+    assert returncode == 3
+    assert stdout.endswith("out 511\nerr 511\n")
+    assert len(stdout.encode()) <= 3072
+    assert stderr == ""
+
+
 def test_descendant_holding_pipe_open_does_not_delay_completion():
     import time
 
