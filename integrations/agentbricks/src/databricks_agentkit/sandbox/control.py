@@ -1,69 +1,87 @@
-"""Invocation state and UI snapshots; source publications are Workspace files."""
+"""Workbench projections over the shared AgentKit Runtime Store."""
 
+import asyncio
 import hashlib
 import json
-import logging
+import os
 import threading
 import time
-from contextlib import closing, contextmanager, nullcontext
-from uuid import uuid4
 
-from psycopg import sql
-from psycopg.types.json import Jsonb
-
+from databricks_agentkit.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA, RUNTIME_STORE_SCHEMA_ENV
+from databricks_agentkit.runtime.types import InvocationStatus
 from databricks_agentkit.sandbox.bundle import Bundle
 from databricks_agentkit.sandbox.catalog import WorkspaceCatalog
 
-RUN_SELECT = "SELECT * FROM invocations "
 STREAM_FLUSH_SECONDS = 0.05
-STREAM_RESYNC_SECONDS = 5
-LOG = logging.getLogger(__name__)
-
-
-def run_channel(namespace, run_id):
-    # PostgreSQL identifiers are at most 63 bytes. Do not expose session text.
-    return "ab_run_" + hashlib.sha256(f"{namespace}\0{run_id}".encode()).hexdigest()[:48]
-
-
-def publish_update(db, namespace, run_id, statement, params):
-    """Commit a fenced update and its wakeup in one statement/transaction.
-
-    Notifications carry no text. Readers always load the committed snapshot,
-    making coalesced notifications and reconnects safe.
-    """
-    return db.execute(
-        "WITH changed AS (" + statement + " RETURNING 1) SELECT pg_notify(%s, '') FROM changed",
-        (*params, run_channel(namespace, run_id)),
-    )
-
-
-def notify_run(db, namespace, run_id):
-    db.execute("SELECT pg_notify(%s, '')", (run_channel(namespace, run_id),))
+STREAM_RESYNC_SECONDS = 0.05
 
 
 class ControlStore:
-    def __init__(self, registry, catalog=None):
+    """Adapt synchronous App/Workspace APIs to one shared async Runtime Store loop."""
+
+    def __init__(self, registry, catalog=None, *, runtime_store=None):
         self.registry = registry
         self.namespace = registry.namespace
         self.catalog = catalog or WorkspaceCatalog(
             registry.workspace, f"/Shared/agentbricks-runtime/{self.namespace}"
         )
+        self.runtime_store = runtime_store
+        self.loop = None
+        self.thread = None
 
     def initialize(self):
-        with self.registry.connect() as db:
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS invocations (
-                    namespace TEXT NOT NULL, id TEXT NOT NULL, agent_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL, invocation_id TEXT NOT NULL,
-                    request_hash TEXT NOT NULL, input JSONB NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'queued', stage TEXT NOT NULL DEFAULT 'Queued',
-                    result JSONB, error TEXT, lifecycle JSONB, attempt_id TEXT, stream JSONB,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (namespace, id),
-                    UNIQUE(namespace, agent_id, session_id, invocation_id)
-                )
-            """)
+        if self.loop is not None:
+            return
+        if self.runtime_store is None:
+            from databricks_agentkit.runtime.durability.lakebase_runtime_store import (
+                LakebaseDurableRuntimeStore,
+            )
+
+            self.runtime_store = LakebaseDurableRuntimeStore.from_app_resource(
+                endpoint=self.registry.endpoint,
+                host=self.registry.host,
+                port=5432,
+                database=self.registry.database,
+                username=self.registry.username,
+                workspace_client=self.registry.workspace,
+                schema=os.getenv(RUNTIME_STORE_SCHEMA_ENV) or DEFAULT_RUNTIME_STORE_SCHEMA,
+                recovery_affinity=f"sandbox:{self.namespace}",
+            )
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(
+            target=self.loop.run_forever, name="sandbox-runtime", daemon=True
+        )
+        ready = threading.Event()
+        self.loop.call_soon(ready.set)
+        self.thread.start()
+        ready.wait()
+        try:
+            self.call(self.runtime_store.initialize())
+        except BaseException:
+            self.close()
+            raise
+
+    def call(self, coroutine, *, timeout=None):
+        if self.loop is None or not self.loop.is_running():
+            coroutine.close()
+            raise RuntimeError("Sandbox runtime is not running")
+        future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+    def close(self):
+        if self.loop is None:
+            return
+        try:
+            self.call(self.runtime_store.close())
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join()
+            self.loop.close()
+            self.loop = None
 
     def create_agent(
         self,
@@ -92,291 +110,190 @@ class ControlStore:
     def agent(self, agent_id, *, with_bundle=False):
         return self.catalog.agent(agent_id, with_bundle=with_bundle)
 
-    def create_run(
-        self, agent_id, session_id, invocation_id, value, *, retry=False, connection=None
-    ):
-        digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-        # The immutable revision is part of the invocation identity; no alias join.
-        with nullcontext(connection) if connection is not None else self.registry.connect() as db:
-            assert db is not None
-            if (
-                retry
-                and not db.execute(
-                    "SELECT 1 FROM invocations WHERE namespace=%s AND agent_id=%s "
-                    "AND session_id=%s AND invocation_id=%s",
-                    (self.namespace, agent_id, session_id, invocation_id),
-                ).fetchone()
-            ):
+    def _session_id(self, agent_id, session_id):
+        return (
+            "sandbox:"
+            + hashlib.sha256(
+                json.dumps([self.namespace, agent_id, session_id], ensure_ascii=True).encode()
+            ).hexdigest()
+        )
+
+    def create_run(self, agent_id, session_id, invocation_id, value, *, retry=False):
+        run_id = (
+            "sandbox:"
+            + hashlib.sha256(
+                json.dumps(
+                    [self.namespace, agent_id, session_id, invocation_id], ensure_ascii=True
+                ).encode()
+            ).hexdigest()
+        )
+        request = {
+            "namespace": self.namespace,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "invocation_id": invocation_id,
+            "input": value,
+        }
+        if retry:
+            state = self.call(self.runtime_store.get(run_id))
+            if state is None:
                 raise KeyError("Original invocation not found; submit without retry")
-            db.execute(
-                "INSERT INTO invocations "
-                "(namespace,id,agent_id,session_id,invocation_id,request_hash,input) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT "
-                "(namespace,agent_id,session_id,invocation_id) DO NOTHING",
-                (
-                    self.namespace,
-                    uuid4().hex,
-                    agent_id,
-                    session_id,
-                    invocation_id,
-                    digest,
-                    Jsonb(value),
-                ),
+            if state.status == InvocationStatus.FAILED:
+                raise ValueError("Failed invocations are terminal; retry with a new invocation ID")
+        state = self.call(
+            self.runtime_store.accept(
+                run_id, request, session_id=self._session_id(agent_id, session_id)
             )
-            row = db.execute(
-                "SELECT * FROM invocations WHERE "
-                "namespace=%s AND agent_id=%s AND session_id=%s AND invocation_id=%s",
-                (self.namespace, agent_id, session_id, invocation_id),
-            ).fetchone()
-            if row["request_hash"] != digest:
-                raise ValueError("Invocation ID already used with different input")
-            if retry and row["status"] in {"failed", "interrupted"}:
-                row = (
-                    db.execute(
-                        "UPDATE invocations SET status='queued', stage='Queued', "
-                        "error=NULL, result=NULL, lifecycle=NULL, attempt_id=NULL, stream=NULL, "
-                        "updated_at=now() WHERE namespace=%s AND id=%s "
-                        "AND status IN ('failed','interrupted') RETURNING *",
-                        (self.namespace, row["id"]),
-                    ).fetchone()
-                    or row
-                )
-                notify_run(db, self.namespace, row["id"])
-            return row
+        )
+        return self._snapshot(state)
 
-    def run(self, run_id, *, connection=None):
-        with nullcontext(connection) if connection is not None else self.registry.connect() as db:
-            assert db is not None
-            row = db.execute(
-                RUN_SELECT + "WHERE namespace=%s AND id=%s",
-                (self.namespace, run_id),
-            ).fetchone()
-        if row is None:
+    def _state(self, run_id):
+        state = self.call(self.runtime_store.get(run_id))
+        if (
+            state is None
+            or not isinstance(state.request, dict)
+            or state.request.get("namespace") != self.namespace
+        ):
             raise KeyError("Invocation not found")
-        return row
+        return state
 
-    def claim(self, run_id):
-        with self.registry.connect() as db, db.transaction():
-            row = db.execute(
-                "UPDATE invocations SET status='running', stage='Starting', "
-                "lifecycle=NULL, stream=NULL, attempt_id=%s, "
-                "updated_at=now() WHERE namespace=%s AND id=%s AND status='queued' RETURNING *",
-                (uuid4().hex, self.namespace, run_id),
-            ).fetchone()
-            if row is not None:
-                notify_run(db, self.namespace, run_id)
-            return row
+    def run(self, run_id):
+        return self._snapshot(self._state(run_id))
 
-    @contextmanager
-    def stream(self, run_id, *, attempt_id=None):
-        with self.registry.connect() as db:
-            # Dedicated preview connection; bound SQL work before joining its writer.
-            db.execute("SET statement_timeout = '5s'")
-            attempt = uuid4().hex
-            publish_update(
-                db,
-                self.namespace,
-                run_id,
-                "UPDATE invocations SET stream=%s WHERE namespace=%s AND id=%s AND status='running'"
-                + (" AND attempt_id=%s" if attempt_id is not None else ""),
-                (
-                    Jsonb({"attempt": attempt, "sequence": 0, "text": "", "first_token_ms": None}),
-                    self.namespace,
-                    run_id,
-                )
-                + ((attempt_id,) if attempt_id is not None else ()),
-            )
-            with PartialText(db, self.namespace, run_id, attempt) as stream:
-                yield stream.emit
+    def _snapshot(self, state, *, events=None):
+        if events is None:
+            events = self.call(self.runtime_store.events(state.invocation_id))
+        return snapshot(state, events)
 
     def watch(self, run_id):
-        # LISTEN must commit before the first read: a write between subscribing
-        # and reading is either in that snapshot or queued as a notification.
-        with self.registry.connect() as db:
-            db.execute(
-                sql.SQL("LISTEN {}").format(sql.Identifier(run_channel(self.namespace, run_id)))
-            )
-            while True:
-                row = self.run(run_id, connection=db)
-                yield row
-                if row["status"] not in {"queued", "running"}:
-                    return
-                # A quiet-stream resync/heartbeat recovers missed wakeups. Normal
-                # delivery is notification-driven, including across App processes.
-                # Exhaust/close before querying: notifies holds the connection lock.
-                with closing(db.notifies(timeout=STREAM_RESYNC_SECONDS, stop_after=1)) as notices:
-                    for _ in notices:
-                        pass
-
-    def progress(self, run_id, stage, *, attempt_id=None):
-        with self.registry.connect() as db:
-            publish_update(
-                db,
-                self.namespace,
-                run_id,
-                "UPDATE invocations SET stage=%s, updated_at=now() "
-                "WHERE namespace=%s AND id=%s AND status='running'"
-                + (" AND attempt_id=%s" if attempt_id is not None else ""),
-                (stage, self.namespace, run_id) + ((attempt_id,) if attempt_id is not None else ()),
-            )
-
-    @contextmanager
-    def track(self, run_id, attempt_id):
-        # Keep one connection for phase updates; only transitions write to Lakebase.
-        # The token fences delayed updates from a previous attempt of the same run.
-        with self.registry.connect() as db:
-
-            def publish(snapshot):
-                publish_update(
-                    db,
-                    self.namespace,
-                    run_id,
-                    "UPDATE invocations SET lifecycle=%s, updated_at=now() "
-                    "WHERE namespace=%s AND id=%s AND attempt_id=%s AND status='running'",
-                    (Jsonb(snapshot), self.namespace, run_id, attempt_id),
-                )
-
-            yield publish
-
-    def finish(self, run_id, *, result=None, error=None, attempt_id=None):
-        status = "failed" if error else "succeeded"
-        with self.registry.connect() as db:
-            publish_update(
-                db,
-                self.namespace,
-                run_id,
-                "UPDATE invocations SET status=%s, stage=%s, result=%s, "
-                "error=%s, updated_at=now() WHERE namespace=%s AND id=%s AND status='running'"
-                + (" AND attempt_id=%s" if attempt_id is not None else ""),
-                (
-                    status,
-                    "Failed" if error else "Complete",
-                    Jsonb(result),
-                    error,
-                    self.namespace,
-                    run_id,
-                )
-                + ((attempt_id,) if attempt_id is not None else ()),
-            )
-
-    def recover(self):
-        # One App process owns this namespace. Don't automatically replay interrupted
-        # side effects; explicit retry keeps the original invocation ID.
-        with self.registry.connect() as db, db.transaction():
-            interrupted = db.execute(
-                "UPDATE invocations SET status='interrupted', stage='Interrupted', "
-                "error='App restarted during execution; retry explicitly with the same invocation ID', "
-                "updated_at=now() WHERE namespace=%s AND status='running' RETURNING id",
-                (self.namespace,),
-            ).fetchall()
-            for row in interrupted:
-                notify_run(db, self.namespace, row["id"])
-            return db.execute(
-                "SELECT id FROM invocations WHERE namespace=%s AND status='queued' ORDER BY created_at",
-                (self.namespace,),
-            ).fetchall()
-
-    def sessions(self, agent_id):
-        with self.registry.connect() as db:
-            return db.execute(
-                "SELECT * FROM (SELECT DISTINCT ON (session_id) session_id, id AS run_id, status, stage, "
-                "created_at, updated_at, result->>'sandbox_id' AS sandbox_id "
-                "FROM invocations WHERE namespace=%s AND agent_id=%s "
-                "ORDER BY session_id, updated_at DESC) latest ORDER BY updated_at DESC LIMIT 100",
-                (self.namespace, agent_id),
-            ).fetchall()
+        cursor = None
+        row = None
+        while True:
+            state = self._state(run_id)
+            new = self.call(self.runtime_store.events(run_id, after_sequence=cursor))
+            # A claim can commit between the state and event reads; consume it next time.
+            new = [event for event in new if event.attempt <= state.attempt]
+            if new:
+                cursor = new[-1].sequence_number
+            row = snapshot(state, new, previous=row)
+            yield row
+            if state.is_terminal:
+                return
+            time.sleep(STREAM_RESYNC_SECONDS)
 
     def history(self, agent_id, session_id):
-        with self.registry.connect() as db:
-            return db.execute(
-                "SELECT * FROM ("
-                + RUN_SELECT
-                + "WHERE namespace=%s AND agent_id=%s AND session_id=%s "
-                "ORDER BY created_at DESC LIMIT 100) history ORDER BY created_at",
-                (self.namespace, agent_id, session_id),
-            ).fetchall()
+        states = self.call(
+            self.runtime_store.list_invocations(
+                session_id=self._session_id(agent_id, session_id),
+                limit=100,
+                request_filter={"namespace": self.namespace, "agent_id": agent_id},
+            )
+        )
+        events = self.call(
+            self.runtime_store.events(session_id=self._session_id(agent_id, session_id))
+        )
+        by_run = {}
+        for event in events:
+            by_run.setdefault(event.invocation_id, []).append(event)
+        return [
+            self._snapshot(state, events=by_run.get(state.invocation_id, []))
+            for state in reversed(states)
+        ]
+
+    def sessions(self, agent_id):
+        states = self.call(
+            self.runtime_store.list_invocations(
+                request_filter={"namespace": self.namespace, "agent_id": agent_id},
+                limit=1000,
+            )
+        )
+        sessions = {}
+        for state in states:
+            row = self._snapshot(state, events=[])
+            current = sessions.get(row["session_id"])
+            if (
+                current is None
+                or row["session_sequence_number"] > current["session_sequence_number"]
+            ):
+                sessions[row["session_id"]] = {
+                    "session_id": row["session_id"],
+                    "run_id": row["id"],
+                    "status": row["status"],
+                    "stage": row["stage"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "session_sequence_number": row["session_sequence_number"],
+                    "sandbox_id": (row["result"] or {}).get("sandbox_id"),
+                }
+        return list(sessions.values())[:100]
 
 
 def scoped_session(agent_id: str, session_id: str) -> str:
     return f"agent:{agent_id}\0{session_id}"
 
 
-class PartialText:
-    """One bounded buffer and timer-driven writer per active invocation.
-
-    The tail-reader callback never waits on database I/O. A quiet final fragment
-    is flushed on the same deadline as active output, independently of handler
-    completion. Slow writes coalesce text rather than building an unbounded queue.
-    """
-
-    def __init__(self, db, namespace, run_id, attempt, *, interval=STREAM_FLUSH_SECONDS):
-        self.db, self.namespace, self.run_id, self.attempt = db, namespace, run_id, attempt
-        self.interval = interval
-        self.started = time.monotonic()
-        self.text, self.first_token_ms, self.dirty = "", None, False
-        self.condition = threading.Condition()
-        self.closed = False
-        self.error = None
-        self.thread = threading.Thread(target=self._write, name="sandbox-text-writer", daemon=True)
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def emit(self, delta):
-        with self.condition:
-            if self.closed or self.error or not delta or len(self.text) >= 256 * 1024:
-                return
-            if self.first_token_ms is None:
-                self.first_token_ms = round((time.monotonic() - self.started) * 1000, 2)
-            self.text += delta[: 256 * 1024 - len(self.text)]
-            self.dirty = True
-            self.condition.notify()
-
-    def _write(self):
-        flushed = None
-        try:
-            while True:
-                with self.condition:
-                    while not self.dirty and not self.closed:
-                        self.condition.wait()
-                    if not self.dirty:
-                        return
-                    if not self.closed and flushed is not None:
-                        remaining = flushed + self.interval - time.monotonic()
-                        if remaining > 0:
-                            self.condition.wait(remaining)
-                            continue
-                    text, first_token_ms = self.text, self.first_token_ms
-                    self.dirty = False
-                publish_update(
-                    self.db,
-                    self.namespace,
-                    self.run_id,
-                    "UPDATE invocations SET stream=stream || jsonb_build_object("
-                    "'text',%s::text,'sequence',(stream->>'sequence')::integer+1,"
-                    "'first_token_ms',%s::double precision) "
-                    "WHERE namespace=%s AND id=%s AND stream->>'attempt'=%s AND status='running'",
-                    (text, first_token_ms, self.namespace, self.run_id, self.attempt),
-                )
-                flushed = time.monotonic()
-        except Exception as exc:
-            with self.condition:
-                self.error = exc
-            # Preview failure cannot turn completed agent side effects into a
-            # retryable invocation failure. The final result remains authoritative.
-            LOG.warning(
-                "Live text publication failed; final result will carry the answer", exc_info=True
+def snapshot(state, events, *, previous=None):
+    """Project persisted events into the existing chat API without a second state table."""
+    status = {
+        InvocationStatus.QUEUED: "queued",
+        InvocationStatus.ACTIVE: "running",
+        InvocationStatus.COMPLETED: "succeeded",
+        InvocationStatus.FAILED: "failed",
+    }[state.status]
+    row = {
+        **state.request,
+        "id": state.invocation_id,
+        "status": status,
+        "attempt_id": state.attempt,
+        "session_sequence_number": state.session_sequence_number,
+        "stage": {
+            "queued": "Queued",
+            "running": "Starting",
+            "succeeded": "Complete",
+            "failed": "Failed",
+        }[status],
+        "result": state.response if status == "succeeded" else None,
+        "error": None,
+        "lifecycle": None,
+        "stream": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    if previous and previous["attempt_id"] == state.attempt:
+        for key in ("created_at", "updated_at", "lifecycle", "stream"):
+            row[key] = previous[key]
+        if not state.is_terminal:
+            row["stage"] = previous["stage"]
+    for record in events:
+        event = record.event
+        at = event.get("at")
+        if at:
+            row["created_at"] = row["created_at"] or at
+            row["updated_at"] = at
+        if record.attempt != state.attempt:
+            continue
+        kind = event.get("type")
+        if kind == "sandbox.stage" and not state.is_terminal:
+            row["stage"] = event["stage"]
+        elif kind == "sandbox.lifecycle":
+            row["lifecycle"] = event["lifecycle"]
+        elif kind == "sandbox.text.delta":
+            stream = (
+                dict(row["stream"])
+                if row["stream"]
+                else {
+                    "attempt": state.attempt,
+                    "text": "",
+                    "sequence": 0,
+                    "first_token_ms": event.get("first_token_ms"),
+                }
             )
-
-    def __exit__(self, *exc):
-        with self.condition:
-            self.closed = True
-            self.condition.notify()
-        self.thread.join(timeout=6)
-        if self.thread.is_alive():
-            # SQL timeout bounds server work; close also interrupts a broken socket.
-            # This connection belongs exclusively to this preview writer.
-            self.db.close()
-            self.thread.join(timeout=1)
-            LOG.warning("Live text publication timed out during shutdown")
+            stream["text"] += event["delta"]
+            stream["sequence"] = record.sequence_number
+            row["stream"] = stream
+    if status == "failed":
+        error = (state.response or {}).get("error")
+        row["error"] = (
+            error.get("message") if isinstance(error, dict) else error or "Invocation failed"
+        )
+    return row

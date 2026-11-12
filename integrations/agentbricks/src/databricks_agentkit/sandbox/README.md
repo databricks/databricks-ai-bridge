@@ -17,21 +17,39 @@ OAuth profile.
 The App delegates sandbox lifecycle to `SessionSandboxClient.get_or_create(session)`;
 that client owns the mapping, creation coordination, owner validation, resume, status and
 stop. The orchestrator owns source installation and worker invocation. Allocation locks
-cover allocation only; the separate invocation guard implements the prototype's sequential
-turn policy. Two racing allocations return the same sandbox, while overlapping invocations
-are rejected as busy. An ambiguous create is reconciled by its stable label before retry.
+cover allocation only. The shared Runtime serializes invocations within each session;
+the sandbox invocation guard also prevents execution from overlapping preparation or stop.
+An ambiguous sandbox create is reconciled by its stable label before retry.
 
-Lakebase creates only two tables: `sessions` (sandbox ID, source revision/hash, execution
-principal, status and bootstrap timings) and `invocations` (request identity/input,
-status/result/error, attempt, timing and current text snapshot). Named environment APIs
-resolve immutable Workspace manifests, without environment, alias or owner tables.
-Source archives and revision manifests live in the Workspace catalog; the App verifies
-archive digests and keeps a bounded cache so warm turns avoid source downloads.
+The App uses `Runtime`, `DurableInvocationExecutor` and `LakebaseDurableRuntimeStore`
+for invocation acceptance, claims, heartbeat ownership, completion and event replay.
+`RunManager` supplies the sandbox execution callback; `ControlStore` projects standard
+records into the workbench API. It owns no invocation SQL or separate lifecycle.
+The shared store's optional `list_invocations` read API supports workbench history.
 
-The new publication format records `storage_version=2` and `catalog_path`. Republish with
-`deploy --sandbox` to adopt it. New deployments use a separate namespace from the prior
-eight-table prototype. Existing state is preserved; migration is not automatic, and older
-Lakebase-backed publications require their previous runtime or an explicit migration.
+**Schema impact:** no columns, constraints, indexes or status values change in the
+existing Runtime Store `invocations` or `invocation_events` tables. The default schema
+is `databricks_agentkit_runtime`. Agent revision, client session/invocation IDs and input
+use the existing request JSON. Progress, lifecycle timing and text deltas use the existing
+event JSON, with types `sandbox.stage`, `sandbox.lifecycle` and `sandbox.text.delta`.
+Runtime IDs hash deployment/revision/client IDs; the Runtime Store session ID scopes FIFO
+to that deployment and revision. Recovery uses the existing `recovery_affinity` column.
+
+Sandbox mapping, source revision/hash, execution principal and preparation timings stay
+in the unchanged `sessions` table under the deployment's `SANDBOX_SCHEMA`. Source archives
+and revision manifests stay in Workspace. The App verifies archive digests and caches them.
+
+On redeploy, the shared runtime initializes its normal tables if absent. The former
+`<SANDBOX_SCHEMA>.invocations` table is left untouched and is no longer read or written;
+historical runs are not imported into the new chat history. Existing sandbox/session mappings
+remain usable. No automatic migration or destructive cleanup runs.
+
+Failed invocations remain terminal. Retrying a failed message submits a new invocation ID;
+a transport reconnect resubmits the same ID and input without repeating execution.
+The shared executor detects stale workers and claims a fenced recovery attempt, but the
+sandbox callback fails it with an explicit diagnostic instead of replaying arbitrary agent
+code. The previous remote operation may still be running; inspect it before retrying.
+Automatic sandbox/harness recovery remains future work.
 
 Both managed-server templates (`agentbricks init --framework openai` and
 `--framework langgraph`) include `runtime.sandbox_entry:invoke`. These shims call
@@ -135,10 +153,10 @@ sequenceDiagram
     participant A as App hosting AgentKit
     participant B as SessionSandboxClient
     participant W as Workspace publication
-    participant D as Lakebase (sessions, invocations)
+    participant D as Lakebase (sessions, invocations, invocation_events)
     participant S as Sandbox / framework adapter
     C->>A: Submit invocation (session + invocation ID)
-    A->>D: Persist and claim invocation for pinned revision
+    A->>D: Shared Runtime accepts and claims invocation
     A->>B: get_or_create(session)
     B->>D: Read mapping; coordinate allocation
     opt Missing or stopped sandbox
@@ -155,8 +173,9 @@ sequenceDiagram
     loop Model text deltas
         S->>S: Append + flush JSONL delta
         S-->>A: gRPC stdout bytes from tail
-        A->>D: Flush text snapshot (50 ms timer) + NOTIFY
-        D-->>A: Wake SSE reader; load committed snapshot
+        A->>D: Append batched text delta to invocation_events
+        A->>D: Read events after cursor (50 ms poll)
+        D-->>A: Ordered events; project chat snapshot
         A-->>C: SSE snapshot / CLI status response
     end
     S->>S: Flush end record
@@ -205,38 +224,27 @@ App. Buffered exec-sync still performs uploads, installation and the foreground
 agent command, with its existing 240-second ceiling. SSH execution also uses
 gRPC for following the attempt file.
 
-An App-side writer coalesces text into a bounded 256 Ki-character snapshot and
-flushes pending output on a 50 ms timer, even when no further token arrives.
-Database writes do not block the tail reader. Each committed update sends a
-PostgreSQL notification with no text payload; SSE subscribers use `LISTEN` to
-wake and read the durable snapshot. Subscribing before the initial read avoids
-a race with new writes. Reconnects read the latest snapshot; a quiet connection
-resynchronizes every 5 seconds. Preview publication failures are logged and the
-final invocation result remains authoritative. The browser distributes received text batches
-across animation frames with an 80 ms maximum display buffer; final snapshots flush immediately.
-Reduced-motion preferences bypass animation. Upstream model/tool pauses remain visible.
+An App-side writer coalesces text into attempt-fenced delta events on a 50 ms timer,
+even when no further token arrives. The tail reader does not wait for database writes.
+Preview output is bounded to 256 Ki characters per attempt. SSE readers poll shared state
+and events after a cursor every 50 ms and project the existing chat snapshot response;
+reconnects replay persisted events. No separate snapshot column or LISTEN/NOTIFY path remains.
+The browser retains its 80 ms display buffer and immediately flushes final responses.
+Preview publication failures retain the final invocation result as authoritative.
 
-This adopts MAR's **file + ExecuteCommand(tail -F)** transport. Remaining
-differences: Lakebase still stores bounded partial-text snapshots; browser SSE
-uses notification-driven snapshot reads, and CLI `--stream` polls status.
-Each SSE subscriber holds a database connection and a blocking read thread;
-each streaming invocation writes at most about 20 snapshots/second. Connection
-budgets, shared subscription fanout and write amplification need load testing
-before scaling. There is no session-level
-StreamItems cursor, Conversation Store message/commit/discard protocol, or
-automatic harness recovery. Each session in a new v3 publication has its own
-sandbox, installed environment, state directory, and execution lock. Different
-sessions can run concurrently; overlapping turns in the same session fail busy. SQLite
+This adopts MAR's **file + ExecuteCommand(tail -F)** transport. Ordered durable events
+now replace the prototype text snapshot table, but the wire API still uses chat snapshots,
+not MAR StreamItems/Conversation Store commit/discard. CLI `--stream` polls status.
+Polling, per-subscriber replay and event retention need load testing before scaling;
+this change does not claim a latency improvement. Shared invocation session ordering
+queues overlapping turns; preparation/stop conflicts can still return busy. SQLite
 history/checkpoints survive worker processes, not loss of sandbox disk.
 
-`deploy --sandbox` publishes immutable source and metadata internally before deploying the App.
-It creates/reuses the App-owned managed Runtime Store through the existing
-Runtime Store API. The immutable manifest names the store and owning App; deployment
-configuration receives the returned branch/database/username. The App discovers the
-writable endpoint, authenticates as its service principal and initializes exactly two
-tables, `sessions` and `invocations`. The publisher opens no SQL connection. This reuses
-managed provisioning, not the SDK's invocation/event schema. The 50 ms snapshot writer
-and LISTEN/NOTIFY path are unchanged.
+`deploy --sandbox` creates/reuses the App-owned managed Runtime Store through the existing
+API. The immutable manifest names the store and owning App; deployment receives the
+returned branch/database/username. The App discovers the writable endpoint and authenticates
+as its service principal. The publisher opens no SQL connection. The Runtime Store's
+existing tables and lifecycle are shared with ordinary durable agent deployments.
 
 Managed publications use a distinct namespace; old data and source files are retained
 without copying historical sessions. Existing App resource attachments are preserved.

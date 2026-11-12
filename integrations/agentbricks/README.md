@@ -970,8 +970,8 @@ agentbricks -p my-workspace deploy support --sandbox --source . \
 This prototype requires an editable installation with the `sandbox` extra. Deploy creates
 or reuses the App-owned managed Runtime Store and injects its backend coordinates. The
 CLI publishes source using Workspace APIs; only the App opens SQL and initializes the
-`sessions` and `invocations` tables. The existing SDK invocation/event schema is not used
-in this prototype yet. No Lakebase configuration file is required.
+sandbox `sessions` table and the existing SDK `invocations`/`invocation_events` tables.
+No columns or indexes are added to the existing Runtime Store schema. No Lakebase configuration file is required.
 
 Sandbox deployment requires managed Runtime Store support in the target workspace;
 operator-supplied Lakebase configuration is not supported. NAME may be omitted when the selected
@@ -993,8 +993,10 @@ App and Workspace root preserves the namespace and earlier revisions/session map
 The new deployment defaults to the new revision. Select an older revision/environment in
 the Workbench to continue its pinned sessions. Do not reuse a root for unrelated Apps.
 
-Lakebase has only `sessions` and `invocations`: mapping/revision/owner/readiness on the
-session, and request identity/status/result/timing/stream snapshot on the invocation.
+Lakebase keeps sandbox mapping/revision/owner/readiness in `sessions`. The shared durable
+runtime stores invocation state in `invocations` and progress/text in `invocation_events`.
+The former prototype invocation table is retained but no longer used; historical runs
+are not automatically imported. The shared runtime queues turns within a session.
 `SessionSandboxClient.get_or_create` encapsulates allocation and lifecycle; sequential
 turn coordination is separate. Published Workspace archives are verified and cached for
 warm turns. Managed Runtime Store publication uses storage version 3 and a fresh namespace.
@@ -1026,10 +1028,11 @@ new sandboxes receive it on creation. Merely polling status does not apply the p
 
 The Workbench has model selection, source links, Events and Sandbox panels, phase timings,
 worker reuse information and confirmed Stop status. Structured JSONL is followed through
-`ExecuteCommand(tail -F)` and projected into Lakebase snapshots by a 50 ms App-side
-flush timer. PostgreSQL notifications wake browser SSE readers; quiet connections
-resynchronize every 5 seconds and reconnects load the latest durable snapshot. CLI
-`--stream` polls those snapshots. See the [runtime notes](src/databricks_agentkit/sandbox/README.md),
+`ExecuteCommand(tail -F)` and batched into shared Runtime Store events every 50 ms.
+SSE reads ordered events after a cursor every 50 ms and projects chat snapshots; reconnects
+replay persisted events. CLI `--stream` polls status. Failed-message retries use a new
+invocation ID; transport retries preserve the same ID. Stale-worker recovery records a
+failure without automatically replaying arbitrary agent code. See the [runtime notes](src/databricks_agentkit/sandbox/README.md),
 [compatibility and review guide](docs/sandbox-prototype-changes.md).
 
 For debugging, use the internal environment name returned by deploy:

@@ -259,6 +259,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         cls,
         *,
         endpoint: str,
+        recovery_affinity: str | None = None,
         host: str | None = None,
         port: int | None = None,
         database: str | None = None,
@@ -307,7 +308,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             workspace_client=workspace_client,
             schema=schema,
         )
-        return cls(schema=schema, lakebase=lakebase)
+        return cls(schema=schema, lakebase=lakebase, recovery_affinity=recovery_affinity)
 
     @classmethod
     def from_managed_runtime_store(
@@ -531,6 +532,50 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 .one_or_none()
             )
         return self._to_invocation(row) if row is not None else None
+
+    async def list_invocations(
+        self,
+        *,
+        session_id: str | None = None,
+        request_filter: JsonObject | None = None,
+        limit: int = 100,
+    ) -> list[Invocation]:
+        """List up to 1000 records; request filters compare top-level JSON values exactly.
+
+        Session-scoped results are in reverse acceptance order. This optional
+        history API is separate from the RuntimeStore execution protocol.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        predicates = []
+        parameters: dict[str, Any] = {"limit": limit}
+        if session_id is not None:
+            predicates.append("session_id=:session_id")
+            parameters["session_id"] = session_id
+        for index, (key, value) in enumerate((request_filter or {}).items()):
+            predicates.append(f"request -> :key{index} = CAST(:value{index} AS JSONB)")
+            parameters[f"key{index}"] = key
+            parameters[f"value{index}"] = _serialize_json_value(value)
+        predicate = " AND ".join(predicates) or "TRUE"
+        order = "session_sequence_number DESC" if session_id is not None else "heartbeat_at DESC"
+        async with self._engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(f"""
+                SELECT invocation_id, session_id, session_sequence_number, status, attempt,
+                       worker_id, recovery_affinity, request::TEXT AS request_json,
+                       response::TEXT AS response_json
+                FROM {self._table} WHERE {predicate}
+                ORDER BY {order}, invocation_id LIMIT :limit
+            """),
+                        parameters,
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [self._to_invocation(row) for row in rows]
 
     async def queued_invocation_ids(self) -> list[str]:
         async with self._engine.connect() as connection:

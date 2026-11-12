@@ -84,6 +84,12 @@ Use `--sandbox-idle-timeout SECONDS` to configure Lakebox idle shutdown (default
 range 60–86400). Existing sandboxes adopt the policy on their next prepare/invoke after
 redeploy; the resident worker has no separate idle timer.
 
+Sandbox invocations use the existing durable runtime's invocation and event tables;
+there are no changes to those table schemas. Failed invocations stay terminal: inspect
+the session before submitting a new invocation ID to retry. Transport reconnects keep
+the same ID and input. Old prototype invocation history is retained but not imported
+into the shared runtime; session-to-sandbox mappings remain usable.
+
 ## Experimental sandbox debugging
 
 The sandbox Workbench keeps invocation/tool/trace events in its Events tab and runtime

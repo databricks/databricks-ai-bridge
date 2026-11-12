@@ -316,10 +316,10 @@ def test_model_choice_survives_uncertain_submission_reload_and_original_retry(ui
     playwright.expect(select).to_be_enabled()
     select.select_option("system.ai.claude-sonnet-5-5")
     page.locator("#retry-run").click()
-    page.wait_for_function("state.runs[0].status === 'queued'")
+    page.wait_for_function("state.runs.length === 2 && state.runs[1].status === 'queued'")
     assert runtime.posts[1]["input"] == runtime.posts[0]["input"]
     assert runtime.posts[1]["input"]["model"] == "system.ai.gpt-5-mini"
-    assert runtime.posts[1]["invocation_id"] == runtime.posts[0]["invocation_id"]
+    assert runtime.posts[1]["invocation_id"] != runtime.posts[0]["invocation_id"]
 
 
 def test_model_discovery_failure_keeps_chat_available_and_can_reload_models(ui):
@@ -926,7 +926,7 @@ def test_new_chat_is_lazy_source_links_and_mobile(ui):
     assert page.locator("#new-session").is_visible()
 
 
-def test_progress_partial_error_and_explicit_retry_preserve_identity(ui):
+def test_failed_run_retry_creates_new_identity_and_retains_failed_history(ui):
     runtime, page, open_page = ui
     open_page()
     send(page)
@@ -956,15 +956,15 @@ def test_progress_partial_error_and_explicit_retry_preserve_identity(ui):
     playwright.expect(page.locator("#chat-log .message.error")).to_contain_text("Model unavailable")
     playwright.expect(page.locator("#retry-run")).to_have_text("Retry this invocation")
     page.locator("#retry-run").click()
-    page.wait_for_function("state.runs[0].status === 'queued'")
-    assert runtime.posts[0]["invocation_id"] == runtime.posts[1]["invocation_id"]
-    assert runtime.posts[1]["retry"] is True
+    page.wait_for_function("state.runs.length === 2 && state.runs[1].status === 'queued'")
+    assert runtime.posts[0]["invocation_id"] != runtime.posts[1]["invocation_id"]
+    assert runtime.posts[1]["retry"] is False
     assert runtime.posts[0]["input"] == runtime.posts[1]["input"]
-    runtime.complete(row, "Final reply")
-    playwright.expect(page.locator("#chat-log .message.assistant .message-content")).to_have_text(
-        "Final reply", timeout=6000
-    )
-    playwright.expect(page.locator("#chat-log .message.user")).to_have_count(1)
+    runtime.complete(runtime.runs[-1], "Final reply")
+    playwright.expect(
+        page.locator("#chat-log .message.assistant .message-content").last
+    ).to_have_text("Final reply", timeout=6000)
+    playwright.expect(page.locator("#chat-log .message.user")).to_have_count(2)
     playwright.expect(page.locator("#startup-duration")).to_have_text("2.3 s")
     playwright.expect(page.locator("#sandbox-id")).to_have_text(f"sandbox-{row['session_id']}")
 
@@ -1213,11 +1213,11 @@ def test_uncertain_failed_retry_reconnect_cannot_requeue_again(ui):
     page.locator("#retry-run").click()
     playwright.expect(page.locator("#retry-run")).to_have_text("Reconnect this invocation")
     # The explicit retry reached the server, failed again, and its response was lost.
-    row.update(status="failed", stage="Failed", error="Failed again")
+    runtime.runs[-1].update(status="failed", stage="Failed", error="Failed again")
     page.locator("#retry-run").click()
     playwright.expect(page.locator("#retry-run")).to_have_text("Retry this invocation")
-    assert len(runtime.runs) == 1
-    assert [post["retry"] for post in runtime.posts] == [True, False]
+    assert len(runtime.runs) == 2
+    assert [post["retry"] for post in runtime.posts] == [False, False]
     assert len({post["invocation_id"] for post in runtime.posts}) == 1
 
 

@@ -123,7 +123,7 @@ def test_no_wait_returns_run_id_without_polling(setup_cli):
     assert json.loads(result.output)["status"] == "queued"
 
 
-def test_failed_job_is_a_nonzero_cli_error_with_retry_id(setup_cli):
+def test_failed_job_is_a_nonzero_cli_error_with_new_invocation_guidance(setup_cli):
     _, _, _, replies = setup_cli
     replies["GET", "/api/runs/run"] = (
         200,
@@ -143,7 +143,7 @@ def test_failed_job_is_a_nonzero_cli_error_with_retry_id(setup_cli):
     )
     assert result.exit_code != 0
     assert "uv install failed" in result.output
-    assert "--retry --invocation-id i" in result.output
+    assert "new --invocation-id" in result.output
 
 
 @pytest.mark.parametrize("value", ["[]", "null", "{"])

@@ -1,7 +1,8 @@
 """Publish source before an App exists; retain legacy preparation support.
 
 Workspace files hold the publication record and immutable source archive. Lakebase
-holds only sessions and invocations. Only non-secret connection coordinates are published.
+holds sandbox sessions and shared runtime invocations/events. Only non-secret
+connection coordinates are published.
 """
 
 from __future__ import annotations

@@ -53,7 +53,7 @@ prototype does not rewrite existing agent source or silently upgrade its lock.
 Tools configured with request-user authentication are rejected by sandbox deploy;
 credentials are currently App-owned. The sandbox UI includes readiness phases,
 source links, model selection and stop/resume. Lakebase holds session mappings and
-invocation snapshots; the source catalog stays in Workspace.
+shared durable invocation state/events; the source catalog stays in Workspace.
 
 ## Review boundaries and remaining gaps
 
@@ -62,7 +62,7 @@ invocation snapshots; the source catalog stays in Workspace.
 - App APIs, UI and orchestration: `databricks_agentkit/sandbox/app.py`,
   `orchestrator.py`, `session_client.py`, `preparation.py` and `store.py`.
 - Sandbox execution: `bootstrap.py`, `persistent.py`, `runner.py`, `adapters/`;
-  file streaming uses ExecuteCommand and timed snapshot publication.
+  file streaming uses ExecuteCommand and timed delta publication into shared runtime events.
 - The separate import/MLflow dependency experiment is not required by this runtime.
   Earlier standalone examples and internal measurements are archived separately.
 
@@ -76,18 +76,30 @@ this draft does not claim improved cold-start latency or production readiness.
 See [runtime notes](../src/databricks_agentkit/sandbox/README.md) for the detailed
 worker, streaming, readiness and debugging contracts.
 
+## Runtime Store deduplication
+
+Sandbox invocations now use the existing `Runtime`, durable executor and
+`LakebaseDurableRuntimeStore`. Sandbox dispatch is an execution callback;
+`SessionSandboxClient` still owns compute. Chat status/history are read projections.
+
+There are **no changes to existing Runtime Store table columns, indexes, constraints,
+or status values**. Sandbox request metadata uses `request` JSON; progress/timing/text
+use `invocation_events.event` JSON. Additive code APIs provide history listing and
+allow the Apps connection factory to receive the existing recovery affinity option.
+
+The old deployment-schema `invocations` table remains untouched and unused. Its
+historical runs are not migrated; `sessions` mappings and preparation state are retained.
+Deploy initializes the standard runtime schema when absent. Failed runs stay terminal;
+explicit retry creates a new invocation, while reconnect preserves identity. Recovery
+claims stale work but does not automatically replay sandbox code or side effects.
+
+The SSE adapter now polls ordered events at 50 ms intervals instead of using the old
+snapshot/NOTIFY implementation. The runner's file transport and browser smoothing remain.
+This needs load testing and is not a claim of improved latency.
+
 ## Validation for this draft
 
-- 621 focused tests pass: sandbox APIs, source publication, allocation/reuse,
-  resident worker processes, preparation/stop, streaming, offline browser UI,
-  CLI output/help, framework scaffolding and workflow guidance.
-- Ruff checks/format pass. A wheel was built and checked for the App, static UI,
-  command protocol and both framework entrypoints.
-- The broader unit suite was interrupted after 3,012 passes. It reported three
-  model-upgrade failures with missing optional `gepa`/`litellm` dependencies and
-  one terminal-table wrapping failure; all four reproduce without the sandbox changes.
-  The sandbox App fixture's duplicate
-  monkeypatch teardown error was fixed and its tests passed in the focused rerun.
-- These runs use the existing local test environment, not a fresh minimum-version
-  dependency matrix. Live Databricks integration and scale tests were not rerun
-  for the review branch. The running App was not redeployed by PR publication.
+The initial draft passed 621 focused checks and a wheel build. The deduplication
+follow-up is checked with runtime, sandbox, browser and real local PostgreSQL tests;
+see the PR for the executed results. These are local checks, without a fresh live
+Databricks deployment or a minimum-version dependency matrix.

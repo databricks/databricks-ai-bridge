@@ -234,14 +234,20 @@ def test_v4_cannot_fall_back_to_source_when_artifact_binding_is_missing():
 
 
 def test_job_uses_its_own_revisions_artifact():
-    from jobs_test import setup_job
+    from jobs_test import setup_job, submit, terminal
 
-    manager, control, orchestrator, row, _ = setup_job()
-    artifact = descriptor()
-    control.agent.return_value["execution_artifact"] = artifact
-    orchestrator.invoke.return_value = {"result": {}}
-    manager.execute(row)
-    assert orchestrator.invoke.call_args.kwargs["execution_artifact"] == artifact
+    job = setup_job()
+    manager, control, orchestrator, _, _ = job
+    try:
+        artifact = descriptor()
+        control.catalog.agent.return_value["execution_artifact"] = artifact
+        orchestrator.invoke.return_value = {"result": {}}
+        row = submit(job)
+        assert terminal(control, row["id"])["status"] == "succeeded"
+        assert orchestrator.invoke.call_args.kwargs["execution_artifact"] == artifact
+    finally:
+        manager.stop()
+        control.close()
 
 
 def test_source_archive_lost_upload_reply_is_reconciled_by_checksum():

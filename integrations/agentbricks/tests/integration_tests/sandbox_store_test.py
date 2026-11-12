@@ -46,11 +46,36 @@ def registry():
             db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
+def runtime_store(registry):
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from databricks_agentkit.runtime.durability.lakebase_runtime_store import (
+        LakebaseDurableRuntimeStore,
+    )
+
+    url = os.environ["AGENTKIT_TEST_POSTGRES_URL"].replace("postgresql://", "postgresql+psycopg://")
+
+    class LocalLakebase:
+        engine = create_async_engine(url)
+
+        async def create_schema(self):
+            async with self.engine.begin() as connection:
+                await connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {registry.schema}"))
+
+    return LakebaseDurableRuntimeStore(
+        lakebase=LocalLakebase(), schema=registry.schema, recovery_affinity="sandbox-test"
+    )
+
+
 @pytest.fixture
 def control(registry):
-    value = ControlStore(registry, MagicMock())
+    value = ControlStore(registry, MagicMock(), runtime_store=runtime_store(registry))
     value.initialize()
-    return value
+    try:
+        yield value
+    finally:
+        value.close()
 
 
 def client(registry):
@@ -62,15 +87,15 @@ def client(registry):
     return SessionSandboxClient(registry, lakebox, registry.namespace), lakebox
 
 
-def test_fresh_schema_has_only_sessions_and_invocations(registry, control):
+def test_fresh_schema_uses_standard_runtime_tables_and_separate_sandbox_sessions(registry, control):
     with registry.connect() as db:
         tables = db.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname=current_schema()"
         ).fetchall()
-    assert {row["tablename"] for row in tables} == {"sessions", "invocations"}
+    assert {row["tablename"] for row in tables} == {"sessions", "invocations", "invocation_events"}
 
 
-def test_app_role_can_initialize_and_invoke_after_publication(registry, control, monkeypatch):
+def test_app_role_can_initialize_and_allocate_after_publication(registry, monkeypatch):
     owner_connect = registry.connect
     principal = "sandbox_app_" + uuid4().hex
     with owner_connect() as db:
@@ -97,22 +122,8 @@ def test_app_role_can_initialize_and_invoke_after_publication(registry, control,
 
         monkeypatch.setattr(registry, "connect", app_connect)
         registry.initialize()
-        control.initialize()
         with registry.connect() as db:
             assert db.execute("SELECT current_user AS name").fetchone()["name"] == principal
-        run = control.create_run("revision", "session", "invoke", {"message": "hi"})
-        claimed = control.claim(run["id"])
-        assert claimed["status"] == "running"
-        with control.stream(run["id"], attempt_id=claimed["attempt_id"]) as emit:
-            watch = control.watch(run["id"])
-            try:
-                assert next(watch)["stream"]["text"] == ""
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    waiting = pool.submit(next, watch)
-                    emit("App can publish and subscribe")
-                    assert waiting.result(2)["stream"]["text"] == "App can publish and subscribe"
-            finally:
-                watch.close()
         sandboxes, _ = client(registry)
         assert sandboxes.get_or_create("session", source_hash="digest").id == "sandbox-1"
     finally:
@@ -195,47 +206,43 @@ def test_stop_resume_retains_mapping_and_pinned_revision(registry):
         sandboxes.get_or_create("session", source_hash="different")
 
 
-def test_invocation_identity_stream_history_and_fenced_retry(control):
+def test_invocations_use_shared_schema_identity_events_and_terminal_semantics(control):
     run = control.create_run("revision", "session", "invoke", {"message": "hi"})
+    store = control.runtime_store
     assert control.create_run("revision", "session", "invoke", {"message": "hi"})["id"] == run["id"]
-    with pytest.raises(ValueError, match="different input"):
+    with pytest.raises(ValueError):
         control.create_run("revision", "session", "invoke", {"message": "changed"})
-    with pytest.raises(KeyError):
-        control.create_run("revision", "session", "missing", {}, retry=True)
-    old = control.claim(run["id"])
-    assert control.claim(run["id"]) is None
-    with control.stream(run["id"], attempt_id=old["attempt_id"]) as emit:
-        emit("Hello")
-        deadline = time.monotonic() + 2
-        while control.run(run["id"])["stream"]["text"] != "Hello":
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        control.finish(run["id"], error="worker exited", attempt_id=old["attempt_id"])
-        retried = control.create_run("revision", "session", "invoke", {"message": "hi"}, retry=True)
-        assert retried["stream"] is None
-        current = control.claim(run["id"])
-        with control.stream(run["id"], attempt_id=current["attempt_id"]) as new_emit:
-            new_emit("New reply")
-        with control.stream(run["id"], attempt_id=old["attempt_id"]) as stale_emit:
-            stale_emit("late old attempt")
-        emit(" stale")
-    control.finish(run["id"], result={"wrong": True}, attempt_id=old["attempt_id"])
-    assert control.run(run["id"])["status"] == "running"
-    control.finish(
-        run["id"], result={"result": {"reply": "New reply"}}, attempt_id=current["attempt_id"]
+    claimed = control.call(store.claim(run["id"]))
+    assert control.call(store.claim(run["id"])) is None
+    control.call(
+        store.append_event(
+            run["id"],
+            claimed.attempt,
+            {"type": "sandbox.text.delta", "delta": "Hello", "first_token_ms": 1},
+        )
     )
-    history = control.history("revision", "session")
-    assert len(history) == 1 and history[0]["stream"]["text"] == "New reply"
+    control.call(store.complete(run["id"], claimed.attempt, {"result": {"reply": "Hello"}}))
+    assert control.run(run["id"])["stream"]["text"] == "Hello"
+    assert control.history("revision", "session")[0]["status"] == "succeeded"
     assert control.sessions("revision")[0]["session_id"] == "session"
-    assert list(control.watch(run["id"]))[0]["status"] == "succeeded"
-
-
-def test_restart_marks_inflight_interrupted_and_retains_queued_work(control):
-    queued = control.create_run("a", "s", "queued", {})
-    running = control.create_run("a", "s", "running", {})
-    control.claim(running["id"])
-    assert control.recover() == [{"id": queued["id"]}]
-    assert control.run(running["id"])["status"] == "interrupted"
+    assert (
+        control.call(
+            store.append_event(
+                run["id"], claimed.attempt, {"type": "sandbox.text.delta", "delta": "late"}
+            )
+        )
+        is None
+    )
+    with control.registry.connect() as db:
+        columns = {
+            row["column_name"]
+            for row in db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=current_schema() AND table_name='invocations'"
+            ).fetchall()
+        }
+    assert {"worker_id", "heartbeat_at", "request", "response", "attempt"} <= columns
+    assert {"namespace", "stream", "lifecycle", "stage", "attempt_id"}.isdisjoint(columns)
 
 
 @pytest.fixture
@@ -363,114 +370,89 @@ def test_failed_preparation_exposes_error_and_can_be_explicitly_retried(preparat
     assert service.create("revision", "failed", retry=True)["status"] == "queued"
 
 
-def test_notifications_deliver_quiet_text_and_terminal_state_across_store_instances(
-    control, monkeypatch
-):
-    from databricks_agentkit.sandbox import control as module
+def test_event_cursor_replay_and_fencing_across_process_stores(control, registry):
+    from databricks_agentkit.runtime.types import InvocationStatus
 
-    # A 2s assertion cannot pass by waiting for the 10s heartbeat.
-    monkeypatch.setattr(module, "STREAM_RESYNC_SECONDS", 10)
-    run = control.create_run("a", "s", "i", {})
-    claimed = control.claim(run["id"])
-    reader = ControlStore(control.registry, control.catalog)
-    with control.stream(run["id"], attempt_id=claimed["attempt_id"]) as emit:
-        one, two = reader.watch(run["id"]), reader.watch(run["id"])
-        try:
-            assert next(one)["stream"]["text"] == next(two)["stream"]["text"] == ""
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                waiting = [pool.submit(next, watcher) for watcher in (one, two)]
-                emit("Hello")
-                assert [future.result(2)["stream"]["text"] for future in waiting] == ["Hello"] * 2
-                one.close()  # Closing one SSE subscriber does not stop the other or the producer.
-                waiting = pool.submit(next, two)
-                emit(" world")
-                row = waiting.result(2)
-                assert row["stream"]["text"] == "Hello world"
-                assert row["status"] == "running"
-        finally:
-            one.close()
-            two.close()
-    final = reader.watch(run["id"])
+    reader = ControlStore(registry, control.catalog, runtime_store=runtime_store(registry))
+    reader.initialize()
     try:
-        assert next(final)["status"] == "running"
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            waiting = pool.submit(next, final)
-            control.finish(
-                run["id"], result={"reply": "Hello world"}, attempt_id=claimed["attempt_id"]
+        run = control.create_run("a", "s", "i", {})
+        old = control.call(control.runtime_store.claim(run["id"]))
+        control.call(
+            control.runtime_store.append_event(
+                run["id"], old.attempt, {"type": "sandbox.text.delta", "delta": "before"}
             )
-            assert waiting.result(2)["status"] == "succeeded"
-        with pytest.raises(StopIteration):
-            next(final)
-    finally:
-        final.close()
-
-
-def test_notification_between_initial_snapshot_and_wait_is_not_lost(control, monkeypatch):
-    from databricks_agentkit.sandbox import control as module
-
-    monkeypatch.setattr(module, "STREAM_RESYNC_SECONDS", 10)
-    run = control.create_run("a", "s", "i", {})
-    claimed = control.claim(run["id"])
-    reader = ControlStore(control.registry, control.catalog)
-    original = reader.run
-    first = True
-
-    def read(run_id, **kwargs):
-        nonlocal first
-        row = original(run_id, **kwargs)
-        if first:
-            first = False
-            # Update after the first read, before the generator yields it.
-            control.progress(run_id, "already changed", attempt_id=claimed["attempt_id"])
-        return row
-
-    monkeypatch.setattr(reader, "run", read)
-    watch = reader.watch(run["id"])
-    try:
-        assert next(watch)["stage"] == "Starting"
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            assert pool.submit(next, watch).result(2)["stage"] == "already changed"
-    finally:
-        watch.close()
-
-
-def test_heartbeat_resync_and_reconnect_load_durable_snapshot(control, monkeypatch):
-    from databricks_agentkit.sandbox import control as module
-
-    monkeypatch.setattr(module, "STREAM_RESYNC_SECONDS", 0.05)
-    run = control.create_run("a", "s", "i", {})
-    control.claim(run["id"])
-    watch = control.watch(run["id"])
-    try:
-        assert next(watch)["stage"] == "Starting"
-        # Simulate a write without a wakeup (e.g. a rolling upgrade from the old App).
-        with control.registry.connect() as db:
-            db.execute("UPDATE invocations SET stage='missed wakeup' WHERE id=%s", (run["id"],))
-        assert next(watch)["stage"] == "missed wakeup"
-    finally:
-        watch.close()
-    with control.stream(run["id"]) as emit:
-        emit("durable partial")
-    reconnected = control.watch(run["id"])
-    try:
-        assert next(reconnected)["stream"]["text"] == "durable partial"
-    finally:
-        reconnected.close()
-
-
-def test_stream_notifications_do_not_cross_namespace_or_run(control, registry, monkeypatch):
-    from databricks_agentkit.sandbox.control import run_channel
-
-    assert run_channel("one", "a") != run_channel("two", "a")
-    assert run_channel("one", "a") != run_channel("one", "b")
-    assert len(run_channel("x" * 1000, "y" * 1000)) <= 63
-    run = control.create_run("a", "s", "i", {})
-    old = control.claim(run["id"])
-    with registry.connect() as listener:
-        listener.execute(
-            sql.SQL("LISTEN {}").format(sql.Identifier(run_channel(registry.namespace, run["id"])))
         )
-        control.progress(run["id"], "wrong attempt", attempt_id="wrong")
-        assert list(listener.notifies(timeout=0.05)) == []
-        control.progress(run["id"], "correct attempt", attempt_id=old["attempt_id"])
-        assert len(list(listener.notifies(timeout=1, stop_after=1))) == 1
+        watch = reader.watch(run["id"])
+        assert next(watch)["stream"]["text"] == "before"
+        control.call(
+            control.runtime_store.append_event(
+                run["id"], old.attempt, {"type": "sandbox.text.delta", "delta": " after"}
+            )
+        )
+        assert next(watch)["stream"]["text"] == "before after"
+        watch.close()
+        with registry.connect() as db:
+            db.execute(
+                "UPDATE invocations SET heartbeat_at=now()-interval '1 hour' "
+                "WHERE invocation_id=%s",
+                (run["id"],),
+            )
+        current = reader.call(reader.runtime_store.claim_recoverable(run["id"], 10))
+        assert current.attempt == old.attempt + 1
+        assert (
+            control.call(
+                control.runtime_store.append_event(
+                    run["id"], old.attempt, {"type": "sandbox.text.delta", "delta": "stale"}
+                )
+            )
+            is None
+        )
+        assert control.call(control.runtime_store.complete(run["id"], old.attempt, {})) is False
+        reader.call(
+            reader.runtime_store.append_event(
+                run["id"], current.attempt, {"type": "sandbox.text.delta", "delta": "new attempt"}
+            )
+        )
+        reader.call(reader.runtime_store.complete(run["id"], current.attempt, {"reply": "done"}))
+        assert reader.call(reader.runtime_store.get(run["id"])).status == InvocationStatus.COMPLETED
+        final = list(control.watch(run["id"]))
+        assert final[0]["stream"]["text"] == "new attempt"
+        assert final[0]["status"] == "succeeded"
+    finally:
+        reader.close()
+
+
+def test_durable_executor_recovers_stale_work_without_replaying_the_sandbox(control, registry):
+    from databricks_agentkit.runtime.runtime import Runtime
+    from databricks_agentkit.sandbox.jobs import RunManager
+
+    run = control.create_run("a", "s", "i", {})
+    control.call(control.runtime_store.claim(run["id"]))
+    with registry.connect() as db:
+        db.execute(
+            "UPDATE invocations SET heartbeat_at=now()-interval '1 hour' WHERE invocation_id=%s",
+            (run["id"],),
+        )
+    replacement = ControlStore(registry, control.catalog, runtime_store=runtime_store(registry))
+    replacement.initialize()
+    orchestrator = MagicMock()
+    manager = RunManager(replacement, orchestrator)
+    manager.runtime = Runtime.from_store(
+        manager.execute,
+        runtime_store=replacement.runtime_store,
+        heartbeat_seconds=0.02,
+        stale_seconds=0.1,
+        scan_seconds=0.02,
+    )
+    manager.start()
+    try:
+        deadline = time.monotonic() + 3
+        while control.run(run["id"])["status"] != "failed":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        orchestrator.invoke.assert_not_called()
+        assert control.run(run["id"])["attempt_id"] == 2
+    finally:
+        manager.stop()
+        replacement.close()

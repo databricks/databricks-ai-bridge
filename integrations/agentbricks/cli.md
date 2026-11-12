@@ -1688,7 +1688,9 @@ sandboxes and existing ones on their next prepare/invoke after redeploy. It does
 change the source revision or impose a worker idle timer. `--git-revision` selects committed source. NAME falls back to
 `[agent].deployment_name` in that selected source and is not written back in sandbox mode.
 Deploy provisions the App-owned managed Runtime Store; the workspace must support managed
-Runtime Store provisioning. The App initializes its two runtime tables. No SQL connection
+Runtime Store provisioning. The App initializes its sandbox session mapping plus the shared Runtime Store invocation/event tables.
+Existing Runtime Store table schemas are unchanged; old prototype invocation history is retained
+but not imported. No SQL connection
 is opened by the source publisher, and no operator-supplied Lakebase configuration is accepted.
 
 `--workspace-path` is the root for immutable revision folders and separate orchestrator
@@ -2067,7 +2069,7 @@ local testing if you intend to deploy an App under a different identity.
 | `--session-id` | string | - | yes | Session whose sandbox should be reused. |
 | `--invocation-id` | string | generated UUID | no | Stable retry identifier; reuse with the same input to retrieve the original run. |
 | `--json` | JSON object | - | yes | Agent input as a JSON object. |
-| `--retry` | flag | off | no | Explicitly retry a failed or interrupted invocation; requires its original invocation ID. |
+| `--retry` | flag | off | no | Reattach to an existing invocation; requires its original ID. Failed runs require a new ID. |
 | `--stream` | flag | off | no | Print incremental text on stderr while waiting; stdout retains final run JSON. |
 | `--wait` / `--no-wait` | flag | wait | no | Poll until the invocation finishes, or immediately return the queued run record. |
 | `--timeout` | seconds, at least 0.1 | 300 | no | Maximum polling time; timing out does not cancel the run. Individual launcher HTTP requests have a 60-second timeout. |
@@ -2088,8 +2090,8 @@ the upgrade; historical invocation IDs continue to resolve their original revisi
 
 An invocation ID is scoped to the named environment and session, across source changes. Duplicate
 submissions return the original run, even if the source folder has since changed or disappeared.
-Different input with the same ID is rejected. Queued jobs recover after App restart; in-flight jobs
-become interrupted and require explicit retry. This does not make arbitrary agent side effects
+Different input with the same ID is rejected. The shared runtime detects stale workers and claims a fenced recovery attempt. The sandbox
+adapter marks that attempt failed without replaying arbitrary code. This does not make arbitrary agent side effects
 exactly once. Installation and execution retain the launcher's 240-second HTTPS command limit.
 
 ```sh
@@ -2100,8 +2102,9 @@ agentbricks environment invoke my-agent --app my-launcher --session-id demo \
   --invocation-id call-1 --json '{"message":"Hello"}' --no-wait
 ```
 
-Failed/interrupted runs exit nonzero in wait mode. Retry one by adding `--retry` with its original
-invocation ID and input; the retry executes its original source snapshot.
+Failed runs exit nonzero in wait mode and remain terminal. Inspect the session before retrying
+with a new invocation ID (omit `--invocation-id` to generate one) and the same input. Reusing
+an ID only retrieves the original run; `--retry` does not reopen a failed invocation.
 
 #### `environment ssh`
 
@@ -2164,7 +2167,7 @@ agentbricks invoke support --session-id demo --json '{"message":"Hello"}' --stre
 | `--session-id` | string | - | yes | Stable conversation ID. |
 | `--invocation-id` | string | generated UUID | no | Stable retry identity. |
 | `--json` | JSON object | - | yes | Agent input. The generated OpenAI sandbox adapter accepts message. |
-| `--retry` | flag | off | no | Explicit retry of a failed/interrupted invocation with its original ID. |
+| `--retry` | flag | off | no | Reattach using the original ID; failed runs require a new ID. |
 | `--stream` | flag | off | no | Print incremental text on stderr while waiting. |
 | `--timeout` | seconds, at least 0.1 | 300 | no | Maximum wait; timeout does not cancel the run. |
 

@@ -100,3 +100,11 @@ already allocated session sandbox.
 This demo supports the updated OpenAI/LangGraph callable adapters. Previously
 generated projects need migration; arbitrary HTTP servers are not automatically
 launched. See [compatibility notes](sandbox-prototype-changes.md).
+
+### Upgrading the earlier workbench
+
+Redeploy from this branch to use the shared durable invocation store. Existing Runtime
+Store table schemas are unchanged. The old sandbox-specific invocation table is kept
+for inspection; its historical runs do not appear in the new chat history. Sandbox
+mappings and installed session files are retained. Failed-message retries create a
+new invocation ID; reconnecting an uncertain submission retains its existing ID.

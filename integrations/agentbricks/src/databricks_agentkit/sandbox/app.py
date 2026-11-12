@@ -124,6 +124,7 @@ async def lifespan(app):
     finally:
         app.state.preparations.stop()
         app.state.runs.stop()
+        app.state.control.close()
 
 
 app = FastAPI(title="Agent Bricks sandbox launcher", lifespan=lifespan)

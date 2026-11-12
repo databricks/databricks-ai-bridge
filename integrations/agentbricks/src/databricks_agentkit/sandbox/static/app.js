@@ -830,7 +830,7 @@ async function submitPending(ctx) {
   try {
     const bound = state.config.default_environment;
     const path = bound ? `/api/environments/${encodeURIComponent(bound)}/runs` : "/api/runs";
-    // Transport reconnects use retry=false. Only an explicit failed-run retry sets it true.
+    // Transport reconnects use retry=false. A failed-run retry creates a new invocation ID.
     const retryFailed = Boolean(pending.retry);
     if (retryFailed) persistPending(ctx, { ...pending, retry: false });
     const row = await api(path, {
@@ -884,7 +884,7 @@ async function recover() {
     const row = latestRun();
     if (!row || !["failed", "interrupted"].includes(row.status)) return;
     try {
-      persistPending(ctx, { invocation_id: row.invocation_id, input: row.input, created_at: Date.now(), retry: true });
+      persistPending(ctx, { invocation_id: crypto.randomUUID(), input: row.input, created_at: Date.now(), retry: false });
       await submitPending(ctx);
     } catch (error) { notice(error.message, "failed"); }
     return;

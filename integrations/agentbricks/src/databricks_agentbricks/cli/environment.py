@@ -122,7 +122,11 @@ def ssh(ctx, name, session_id, command, app, url, auth):
 @click.option("--session-id", required=True, help="Session whose sandbox should be reused.")
 @click.option("--invocation-id", help="Stable retry identifier (default: generated UUID).")
 @click.option("--json", "json_value", required=True, help="Agent input as a JSON object.")
-@click.option("--retry", is_flag=True, help="Explicitly retry a failed or interrupted invocation.")
+@click.option(
+    "--retry",
+    is_flag=True,
+    help="Reattach to an existing invocation; failed runs require a new ID.",
+)
 @click.option("--stream", is_flag=True, help="Print incremental text while waiting for the run.")
 @click.option(
     "--wait/--no-wait", default=True, show_default=True, help="Poll until the invocation finishes."
@@ -160,16 +164,29 @@ def invoke(
         manifest = read_manifest(workspace, name)
         _, control, environments, orchestrator = services(workspace, manifest)
         bind_environment(orchestrator, manifest)
-        run = environments.invoke(name, session_id, invocation_id, value, retry=retry)
-        if run["status"] == "queued":
-            claimed = control.claim(run["id"])
-            if claimed:
-                RunManager(control, orchestrator).execute(claimed)
-        run = control.run(run["id"])
+        from databricks_agentkit.runtime.types import InvocationFailedError
+
+        manager = RunManager(control, orchestrator)
+        try:
+            manager.start()
+            run = environments.invoke(name, session_id, invocation_id, value, retry=retry)
+            manager.submit(run["id"])
+            try:
+                control.call(manager.runtime.wait(run["id"], timeout=timeout))
+            except InvocationFailedError:
+                pass
+            except TimeoutError as exc:
+                raise AgentCliError(
+                    "Timed out waiting for the invocation; inspect the session before retrying."
+                ) from exc
+            run = control.run(run["id"])
+        finally:
+            manager.stop()
+            control.close()
         if run["status"] in {"failed", "interrupted"}:
             raise AgentCliError(
                 f"Run {run['id']} {run['status']}: {run.get('error')}",
-                hint=f"Retry with --retry --invocation-id {invocation_id} and the same input.",
+                hint="Inspect the session, then retry with a new --invocation-id and the same input.",
             )
         click.echo(json.dumps(run, indent=2, default=str))
         return
@@ -213,7 +230,7 @@ def invoke(
     if wait and run["status"] in {"failed", "interrupted"}:
         raise AgentCliError(
             f"Run {run['id']} {run['status']}: {run.get('error') or 'no diagnostic'}",
-            hint=f"Retry explicitly with --retry --invocation-id {invocation_id} and the same input.",
+            hint="Inspect the session, then retry with a new --invocation-id and the same input.",
         )
     click.echo(json.dumps(run, indent=2, default=str))
 
@@ -226,7 +243,11 @@ def invoke(
 @click.option("--session-id", required=True)
 @click.option("--invocation-id")
 @click.option("--json", "json_value", required=True)
-@click.option("--retry", is_flag=True)
+@click.option(
+    "--retry",
+    is_flag=True,
+    help="Reattach to an existing invocation; failed runs require a new ID.",
+)
 @click.option("--stream", is_flag=True, help="Print incremental text while waiting.")
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.pass_context
