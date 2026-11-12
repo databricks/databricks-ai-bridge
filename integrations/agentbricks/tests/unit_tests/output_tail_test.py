@@ -66,6 +66,36 @@ def test_plain_unicode_output_keeps_the_final_error():
     assert "進行中" in tail.text()
 
 
+def test_reader_owns_its_pipe_after_the_original_is_closed():
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0) as source, open(os.devnull, "wb") as sink:
+        relay = StreamRelay(source, sink.fileno())
+        source.close()
+        try:
+            os.write(write_fd, b"final failure\n")
+        finally:
+            os.close(write_fd)
+        relay.finish()
+        assert not relay._thread.is_alive()
+        assert relay.tail.text() == "final failure\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses nonblocking POSIX pipes")
+def test_idle_reader_stops_while_a_descendant_keeps_the_pipe_open():
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd, "rb", buffering=0) as source, open(os.devnull, "wb") as sink:
+            relay = StreamRelay(source, sink.fileno())
+            source.close()
+            started = time.monotonic()
+            relay.finish()
+            relay._thread.join(timeout=1)
+            assert not relay._thread.is_alive()
+            assert time.monotonic() - started < 1.5
+    finally:
+        os.close(write_fd)
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="uses Linux pipe sizing")
 def test_slow_open_destination_preserves_every_byte_after_child_exit():
     import fcntl
