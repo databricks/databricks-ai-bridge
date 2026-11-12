@@ -20,7 +20,7 @@ Reviews report two independent assessments: a numerical review score for
 findings and reviewer coverage, and a Low/Moderate/High change-risk
 classification for the impact of the change itself. Change risk has a
 contextual rationale, not a numerical safety score. Missing or invalid
-assessments withhold approval and are Unrated. Reviewer coverage affects the
+assessments are Unrated; risk classification does not block approval. Reviewer coverage affects the
 review score and approval eligibility separately from change risk.
 
 For example, `Review score: 100/100 · reviewers: 2/2` can appear alongside
@@ -43,8 +43,8 @@ behavior, and binaries are high; public CLI/API/runtime/persistence paths and
 multiple production packages are at least moderate. More than 10 paths is at
 least moderate; more than 1000 lines or 30 paths is high. The configurable
 `AI_REVIEW_AUTO_APPROVE_MAX_LINES` separately limits approval eligibility without
-changing the risk classification. Low, moderate, and high risk are advisory and eligible for auto-approval when
-the other gates pass. Unrated assessments still withhold approval. The former
+changing the risk classification. All risk classifications, including Unrated, are advisory and eligible for
+auto-approval when the other gates pass. The former
 `AI_REVIEW_AUTO_APPROVE_MAX_RISK` setting is no longer used.
 CI raises the classification directly when a
 minimum risk level applies and shows the reasons in the review comment.
@@ -66,9 +66,9 @@ independently even if label maintenance fails.
 
 A current-head review that passes the configured review-score threshold,
 complete reviewer coverage, and empty blocking/security/uncertain findings
-receives `ai-approved`, even when incomplete assessments, path, size, or author restrictions
+receives `ai-approved`, even when path, size, or author restrictions
 prevent a GitHub approval. This label records the AI review verdict only.
-It does not satisfy a required GitHub approval. Unrated changes still
-need a complete assessment or human approval; eligible low-, moderate-, and high-risk changes can receive the
-bot's GitHub approval when auto-approval is enabled. The same reconciler
+It does not satisfy a required GitHub approval. Eligible changes can receive
+the bot's GitHub approval when auto-approval is enabled, regardless of risk
+classification. The same reconciler
 removes `ai-approved` on an unreviewed push or a failed subsequent review.

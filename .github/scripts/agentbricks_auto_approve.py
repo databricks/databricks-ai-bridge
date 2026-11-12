@@ -1,7 +1,7 @@
 """Decide whether AgentBricksReviewer may auto-approve a PR.
 
-The decision combines the review's findings/coverage score and independent
-change-risk classification with deterministic path, component, and size checks.
+Approval uses the review's findings/coverage score and deterministic path and
+size checks. Change-risk classification is reported independently as advisory.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N]
        [--max-lines N]
@@ -189,8 +189,6 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
     risk = assess_change_risk(review, files, lines, diff)
-    if risk["level"] == "unrated":
-        reasons.append("the review has no valid change-risk assessment")
 
     return {"review_passed": not review_reasons, "review_reasons": review_reasons,
             "approve": not reasons, "reasons": reasons, "risk": risk}

@@ -203,7 +203,7 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(name=name):
                 result = gate.decide(review(change_risk=name), diff(CODE))
                 self.assertEqual(result["risk"]["level"], level)
-                self.assertEqual(result["approve"], level in {"low", "medium", "high"})
+                self.assertTrue(result["approve"], result)
 
     def test_high_risk_does_not_override_other_approval_gates(self):
         for kwargs in (
@@ -220,7 +220,7 @@ class ChangeRiskTest(unittest.TestCase):
                 result = gate.decide(review(change_risk="HIGH"), content)
                 self.assertFalse(result["approve"], result)
 
-    def test_missing_or_invalid_assessment_withholds_approval(self):
+    def test_missing_or_invalid_assessment_is_advisory(self):
         for text in (
             review().replace("**Change risk:** LOW", ""),
             review(change_risk="Unrated"),
@@ -232,10 +232,10 @@ class ChangeRiskTest(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 result = gate.decide(text, diff(CODE))
-                self.assertFalse(result["approve"])
+                self.assertTrue(result["approve"], result)
                 self.assertEqual(result["risk"]["label"], "risk:unrated")
 
-    def test_risk_rationale_is_required(self):
+    def test_missing_or_duplicate_rationale_is_advisory(self):
         for text in (
             review().replace("**Risk rationale:** Small compatible change with focused tests and straightforward rollback.", ""),
             review().replace("Small compatible change with focused tests and straightforward rollback.", ""),
@@ -243,7 +243,7 @@ class ChangeRiskTest(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 result = gate.decide(text, diff(CODE))
-                self.assertFalse(result["approve"])
+                self.assertTrue(result["approve"], result)
                 self.assertEqual(result["risk"]["label"], "risk:unrated")
 
     def test_unrated_is_preserved_even_for_sensitive_paths(self):
@@ -336,7 +336,7 @@ class ChangeRiskTest(unittest.TestCase):
                 result = gate.decide(review(change_risk=risk), diff(path, added=added))
                 self.assertTrue(result["review_passed"], result)
                 self.assertEqual(result["review_reasons"], [])
-                self.assertEqual(result["approve"], path == CODE and risk in {"LOW", "MODERATE", "HIGH"} and added == 1)
+                self.assertEqual(result["approve"], path == CODE and added == 1)
 
     def test_review_failures_withhold_ai_label_verdict(self):
         for text in (review(score=94), review(score=101), review(reviewers="1/2"),
