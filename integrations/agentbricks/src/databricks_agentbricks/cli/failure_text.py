@@ -16,10 +16,12 @@ _PRIVATE_KEY = re.compile(
 _HEADER = re.compile(
     r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=][^\S\n]*"
 )
-_ASSIGNMENT = re.compile(
-    r"(?ix)(?<![\w-])(?=[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
-    r"credential|signature|sig))[\w-]+[\"']?\s*[:=][^\S\n]*"
+_CREDENTIAL_NAME = (
+    r"(?:(?=[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|credential|signature))[\w-]+|sig)"
 )
+_ASSIGNMENT = re.compile(rf"(?ix)(?<![\w-]){_CREDENTIAL_NAME}[\"']?\s*[:=][^\S\n]*")
+_OPTION = re.compile(rf"(?ix)(?<![\w-])--?{_CREDENTIAL_NAME}[\"']?(?:\s*,\s*|(?=\s)[^\S\n]*)")
 _QUOTED_VALUE = re.compile(
     r"(?<!\w)(?i:br|rb|fr|rf|[rubf])?"
     r"""(?:"{3}[\s\S]*|'{3}[\s\S]*|"(?:\\[\s\S]|[^"\\])*(?:"|\\?\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?\Z))"""
@@ -38,12 +40,12 @@ _WINDOWS_PATH = re.compile(r"[A-Za-z]:[\\/][^\s:,\"'/\\]+[\\/][^\s:,\"']+")
 _PATHS = tuple(
     re.compile(pattern)
     for pattern in (
-        r"(^|[\s:,\"'])(/Workspace/[^\s:,\"']+)",
-        r"(^|[\s:,\"'])(~?/[^\s:,\"'/]+/[^\s:,\"']+)",
-        r"(^|[\s:,\"'])((?:\.\.?|\.[a-zA-Z][^\s:,\"'/]*)/[^\s:,\"']+)",
+        r"(^|[\s:=,\"'])(/Workspace/[^\s:,\"']+)",
+        r"(^|[\s:=,\"'])(~?/[^\s:,\"'/]+/[^\s:,\"']+)",
+        r"(^|[\s:=,\"'])((?:\.\.?|\.[a-zA-Z][^\s:,\"'/]*)/[^\s:,\"']+)",
     )
 )
-_PATH_CANDIDATE = re.compile(r"(^|[\s:,\"'])([a-zA-Z0-9_][^\s:,\"']*)")
+_PATH_CANDIDATE = re.compile(r"(^|[\s:=,\"'])([a-zA-Z0-9_][^\s:,\"']*)")
 _EMAIL = re.compile(r"(?<![a-zA-Z0-9._%+\-])[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
@@ -144,6 +146,7 @@ def scrub_failure_text(value: str) -> str:
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     value = _URL.sub(_scrub_url_query, value)
     value = _scrub_values(value, _ASSIGNMENT)
+    value = _scrub_values(value, _OPTION)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)
     value = _JWT_CANDIDATE.sub(_scrub_jwt, value)

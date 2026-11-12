@@ -25,6 +25,14 @@ from databricks_agentbricks.cli.failure_text import MAX_FAILURE_BYTES, scrub_fai
         "-----BEGIN PRIVATE KEY-----\nsynthetic-secret",
         "Authorization: Be\x1b[31marer synthetic-secret",
         'Authorization: "synthetic-secret\ncontinued"',
+        "private_key = synthetic-secret",
+        "privateKey: synthetic-secret",
+        "sig: synthetic-secret",
+        "--password synthetic-secret",
+        "--private-key synthetic-secret",
+        "['tool', '--password', 'synthetic-secret']",
+        '["tool", "--private-key", "synthetic-secret"]',
+        "'--password' 'synthetic-secret'",
     ],
 )
 def test_credentials_are_scrubbed(value):
@@ -208,6 +216,11 @@ def test_customer_content_remains_sensitive_and_unknown_errors_need_no_enum():
     assert scrub_failure_text(value) == value
 
 
+def test_signal_diagnostics_are_not_signature_credentials():
+    value = "Child failed: signal: killed\nFinal error: quota exceeded"
+    assert scrub_failure_text(value) == value
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -228,6 +241,14 @@ def test_customer_content_remains_sensitive_and_unknown_errors_need_no_enum():
 def test_paths_are_scrubbed_without_losing_the_error(path):
     assert scrub_failure_text(f"Cannot load '{path}': missing dependency") == (
         "Cannot load '[REDACTED_PATH]': missing dependency"
+    )
+
+
+@pytest.mark.parametrize("option", ["--config=", "path="])
+@pytest.mark.parametrize("path", ["/home/example/private/app.py", "/home/example/private"])
+def test_assignment_paths_are_scrubbed_without_losing_the_error(option, path):
+    assert scrub_failure_text(f"Cannot load {option}{path}: missing dependency") == (
+        f"Cannot load {option}[REDACTED_PATH]: missing dependency"
     )
 
 
