@@ -315,11 +315,12 @@ def deploy(
         # Fail fast in the foreground on anything quick to check; the child repeats these checks.
         prepared = service.prepare(request)
         service.check_auth()
+        workspace = service.workspace_identity()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)
         pid = spawn_background_deploy(_background_argv(obj, request), log=log)
         state_file = deploy_state.record_background_start(
-            source_dir, prepared.name, pid=pid, now=time.time()
+            source_dir, prepared.name, pid=pid, now=time.time(), workspace=workspace
         )
         present_background_started(
             prepared.name,
@@ -403,8 +404,11 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
         result,
         output=obj.output,
         details_url=telemetry.deployment_details_url(
-            AgentDetailsClient(obj.api_client_provider).get_url(result.deployment)
+            AgentDetailsClient(obj.api_client_provider).get_url(
+                result.deployment, expected_workspace=result.workspace
+            )
             if result.status != deploy_state.FAILED
+            and (not result.from_local_state or result.workspace is not None)
             else None,
             outcome={
                 deploy_state.RUNNING: "DEPLOYMENT_OUTCOME_RUNNING",

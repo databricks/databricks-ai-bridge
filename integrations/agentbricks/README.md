@@ -199,6 +199,9 @@ deploy output also includes an **Agent details** link to the workspace managemen
 applies to first deploys, redeploys, `--no-wait`, and `deployments wait`. JSON output adds
 `details_url` when available and retains `url` for the deployed agent. The optional flag lookup
 waits at most two seconds; unavailable or disabled flags omit the link without affecting deploy.
+When following a local deploy record, `deployments wait` also requires its recorded workspace
+host and ID to match the selected profile. Older records or records without a workspace ID omit
+the management link; the recorded deployment status and invocation URL are still available.
 
 ### Deploying from a coding agent
 

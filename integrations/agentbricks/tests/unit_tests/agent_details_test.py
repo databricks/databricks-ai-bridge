@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import types
 
@@ -19,6 +20,7 @@ from databricks_agentbricks.clients.agent_details_client import AgentDetailsClie
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.group import AgentBricksCommand
 from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services.deployment import deploy_state
 
 _UI_FLAG = "databricks.fe.customagents.agentCentricView.enable"
 _PREVIEW = "agent_memory_sessions"
@@ -77,10 +79,10 @@ class _UiApi:
         return self.response
 
 
-def _provider(response, *, workspace_id="123"):
+def _provider(response, *, host="https://workspace.example/", workspace_id="123"):
     ui_api = _UiApi(response)
     client = types.SimpleNamespace(
-        host="https://workspace.example/",
+        host=host,
         workspace_client=types.SimpleNamespace(
             config=types.SimpleNamespace(workspace_id=workspace_id), api_client=ui_api
         ),
@@ -199,3 +201,113 @@ def test_background_handoff_includes_link(tmp_path, monkeypatch, output):
     else:
         assert "started in the background" in result.stdout
         assert _DETAILS_URL in result.stdout
+
+
+@pytest.mark.parametrize("status", [deploy_state.RUNNING, deploy_state.SUCCEEDED])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize(
+    "host,workspace_id,ui_enabled,preview_enabled,has_link",
+    [
+        ("https://workspace.example/", "123", True, True, True),
+        ("https://other.example/", "123", True, True, False),
+        ("https://workspace.example/", "456", True, True, False),
+        ("https://workspace.example/", None, True, True, False),
+        ("https://workspace.example/", "123", False, True, False),
+        ("https://workspace.example/", "123", True, False, False),
+    ],
+    ids=["same-workspace", "changed-host", "changed-id", "missing-id", "ui-off", "beta-off"],
+)
+def test_local_wait_verifies_workspace_and_live_gates(
+    tmp_path, monkeypatch, status, output, host, workspace_id, ui_enabled, preview_enabled, has_link
+):
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", output)
+    monkeypatch.setattr(render, "_stdout", Console(width=160))
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    # Keep the handoff record running without spawning a deployment process.
+    monkeypatch.setattr(deploy_mod, "spawn_background_deploy", lambda *a, **kw: os.getpid())
+    provider, _ = _provider({"flags": {_UI_FLAG: "true", _PREVIEW: "true"}})
+    api = _DeployApi(events)
+    api.workspace_client = provider.get().workspace_client
+    args = ["demo", "--source", str(tmp_path), "--pip-index-url", ""]
+    if status == deploy_state.RUNNING:
+        args.append("--no-wait")
+    deployed = CliRunner().invoke(
+        deploy_mod.deploy, args, obj=_real_deploy_context(api, output=output)
+    )
+    assert deployed.exit_code == 0, deployed.output
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, _APP))
+    assert state is not None
+    assert state["workspace"] == {"host": "https://workspace.example", "workspace_id": "123"}
+    assert state["status"] == status
+
+    wait_provider, ui_api = _provider(
+        {"flags": {_UI_FLAG: ui_enabled, _PREVIEW: preview_enabled}},
+        host=host,
+        workspace_id=workspace_id,
+    )
+    ctx = types.SimpleNamespace(
+        profile="different-profile", output=output, api_client_provider=wait_provider
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deployments_wait, [_APP, "--source", str(tmp_path), "--timeout", "0"], obj=ctx
+    )
+    assert result.exit_code == (75 if status == deploy_state.RUNNING else 0), result.output
+    if output == "json":
+        payload = json.loads(result.stdout)
+        assert payload["status"] == status
+        assert payload["url"] == (
+            None if status == deploy_state.RUNNING else "https://agent.example"
+        )
+        assert payload.get("details_url") == (_DETAILS_URL if has_link else None)
+    else:
+        assert (_DETAILS_URL in result.stdout) is has_link
+        if status == deploy_state.SUCCEEDED:
+            assert "https://agent.example" in result.stdout
+    matches = host.rstrip("/") == "https://workspace.example" and workspace_id == "123"
+    assert len(ui_api.requests) == (1 if matches else 0)
+
+
+@pytest.mark.parametrize("status", [deploy_state.RUNNING, deploy_state.SUCCEEDED])
+@pytest.mark.parametrize(
+    "workspace",
+    [
+        None,
+        {},
+        {"host": "https://workspace.example"},
+        {"host": "https://workspace.example", "workspace_id": None},
+    ],
+    ids=["old-record", "empty-identity", "host-only", "missing-id"],
+)
+def test_local_wait_omits_unprovable_links_without_authenticating(tmp_path, status, workspace):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.write()
+    state = {
+        "status": status,
+        "pid": os.getpid(),
+        "result": {"url": "https://agent.example", "ready": True},
+    }
+    if workspace is not None:
+        state["workspace"] = workspace
+    deploy_state.write_state(deploy_state.state_path(tmp_path, _APP), state)
+    auth_attempts = []
+
+    def unexpected_auth():
+        auth_attempts.append(True)
+        raise AssertionError("local wait authenticated")
+
+    ctx = types.SimpleNamespace(
+        profile="other-profile",
+        output="json",
+        api_client_provider=types.SimpleNamespace(get=unexpected_auth),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deployments_wait, [_APP, "--source", str(tmp_path), "--timeout", "0"], obj=ctx
+    )
+    assert result.exit_code == (75 if status == deploy_state.RUNNING else 0), result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == status
+    assert payload["url"] == "https://agent.example"
+    assert "details_url" not in payload
+    assert auth_attempts == []
