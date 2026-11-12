@@ -1,5 +1,6 @@
 """Credential examples are synthetic; scrubbing does not make error text non-sensitive."""
 
+import json
 import time
 
 import pytest
@@ -67,6 +68,25 @@ def test_quoted_credentials_respect_escapes_and_incomplete_values(value):
 
 def test_escaped_backslash_keeps_following_error_text():
     assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
+
+
+@pytest.mark.parametrize("depth", [0, 1, 3])
+@pytest.mark.parametrize(
+    "value",
+    [
+        json.dumps({"client_secret": "synthetic-opaque-value"}),
+        json.dumps({"credentials": [{"value": "synthetic-opaque-value"}]}),
+        json.dumps({"Authorization": ["synthetic-opaque-value"]}),
+        r'{"\u0063lient_secret": ["synthetic-opaque-value"]}',
+    ],
+)
+def test_encoded_values_are_omitted_with_their_credential_context(value, depth):
+    for _ in range(depth):
+        value = json.dumps({"message": value})
+    result = scrub_failure_text(f"Request failed: {value}\nConnection failed")
+    assert "synthetic-opaque-value" not in result
+    assert result.startswith("Request failed: ")
+    assert result.endswith("\nConnection failed")
 
 
 @pytest.mark.parametrize(
