@@ -65,8 +65,18 @@ class StreamRelay:
         self._forward_started: float | None = None
         self._forward_wait_seconds = 0.0
         self._drain_deadline: float | None = None
-        self._thread = threading.Thread(target=self._copy, args=(stream, destination), daemon=True)
-        self._thread.start()
+        # The reader owns its descriptor even after the subprocess owner closes the original.
+        reader = os.fdopen(os.dup(stream.fileno()), "rb", buffering=0)
+        try:
+            if os.name == "posix":
+                os.set_blocking(reader.fileno(), False)
+            self._thread = threading.Thread(
+                target=self._copy, args=(reader, destination), daemon=True
+            )
+            self._thread.start()
+        except Exception:
+            reader.close()
+            raise
 
     def _copy(self, stream: IO[bytes], destination: int) -> None:
         forward = True
@@ -78,7 +88,11 @@ class StreamRelay:
                         and time.monotonic() - self._forward_wait_seconds >= self._drain_deadline
                     ):
                         return
-                data = os.read(stream.fileno(), 65536)
+                try:
+                    data = os.read(stream.fileno(), 65536)
+                except BlockingIOError:
+                    self._stop.wait(0.01)
+                    continue
                 if not data:
                     return
                 with self._state_lock:
@@ -105,6 +119,8 @@ class StreamRelay:
                         self._forward_started = None
         except (OSError, ValueError):
             return
+        finally:
+            stream.close()
 
     def finish(self) -> None:
         # Bound processing while allowing blocked output forwarding to finish.
