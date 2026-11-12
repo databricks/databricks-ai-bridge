@@ -24,7 +24,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import manifest_problems
+from databricks_agentbricks.projects.agent_project import ManifestProblem, manifest_problems
 from databricks_agentbricks.projects.types import CUSTOM_FRAMEWORK
 from databricks_agentbricks.services.deployment.names import (
     _MAX_DEPLOYMENT_NAME_LEN,
@@ -195,6 +195,11 @@ def _framework(value: object) -> str | None:
     return value if isinstance(value, str) and value in _SUPPORTED_FRAMEWORKS else None
 
 
+def _invalid_manifest_detail(problems: list[ManifestProblem]) -> str:
+    """One line naming every problem, bulleted so each problem is easy to spot."""
+    return f"Invalid agent.toml: {' • '.join(map(str, problems))}."
+
+
 def _agent_manifest(
     root: pathlib.Path,
 ) -> tuple[DoctorCheck, DoctorCheck, str | None]:
@@ -221,9 +226,7 @@ def _agent_manifest(
     problems = manifest_problems(result.data)
     if any(problem.field in {"schema_version", "agent", "agent.server"} for problem in problems):
         return (
-            _check(
-                "agent_manifest", False, f"Invalid agent.toml: {'; '.join(map(str, problems))}."
-            ),
+            _check("agent_manifest", False, _invalid_manifest_detail(problems)),
             unverified_server,
             framework,
         )
@@ -239,9 +242,7 @@ def _agent_manifest(
     )
     if problems:
         return (
-            _check(
-                "agent_manifest", False, f"Invalid agent.toml: {'; '.join(map(str, problems))}."
-            ),
+            _check("agent_manifest", False, _invalid_manifest_detail(problems)),
             server_check,
             framework,
         )

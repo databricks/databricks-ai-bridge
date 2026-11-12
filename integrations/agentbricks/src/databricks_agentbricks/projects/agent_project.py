@@ -575,10 +575,12 @@ def _read_manifest(document: Mapping[str, Any]) -> tuple[_ManifestFields, list[M
                     f"use {_choices(_FRAMEWORKS)}",
                 )
         else:
-            problem(
-                "agent.framework",
-                _invalid(raw_framework, _choices((*_FRAMEWORKS, CUSTOM_FRAMEWORK))),
+            # `custom` is only an allowed framework value where it is accepted, on the
+            # Agent Bricks server; a custom-server app always needs a framework adapter.
+            allowed = (
+                _FRAMEWORKS if server == AgentServer.CUSTOM else (*_FRAMEWORKS, CUSTOM_FRAMEWORK)
             )
+            problem("agent.framework", _invalid(raw_framework, _choices(allowed)))
         if server is None:
             problem("agent.server", _invalid(raw_server, _choices(_SERVERS)))
         raw_name = agent.get("deployment_name")

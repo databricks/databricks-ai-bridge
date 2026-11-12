@@ -850,6 +850,19 @@ def test_load_rejects_a_framework_less_custom_server(
     assert error.value.message == f"agent.toml: {expected}"
 
 
+def test_invalid_framework_on_a_custom_server_names_only_frameworks(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path, 'schema_version = 1\n\n[agent]\nframework = "durable"\nserver = "custom"\n'
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert error.value.message == (
+        'agent.toml: agent.framework: "durable" is not valid; use langgraph or openai'
+    )
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
