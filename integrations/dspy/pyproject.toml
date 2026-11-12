@@ -9,7 +9,8 @@ readme = "README.md"
 license = { text="Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "dspy>=2.6.27",
+    # DSPy 3.5 removes the LM.forward hook used by DatabricksLM.
+    "dspy>=2.6.27,<3.5",
     "databricks-sdk>=0.58.0",
     "mlflow>=3.0.0",
     "litellm<=1.82.6",
