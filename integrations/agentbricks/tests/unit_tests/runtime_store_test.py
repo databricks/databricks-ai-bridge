@@ -823,3 +823,20 @@ async def test_store_rejects_empty_invocation_id():
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
     with pytest.raises(ValueError, match="must not be empty"):
         await store.accept("", {})
+
+
+@pytest.mark.asyncio
+async def test_optional_history_api_filters_requests_and_preserves_acceptance_order():
+    store = InMemoryRuntimeStore()
+    await store.accept("first", {"agent_id": "a", "extra": None}, session_id="s")
+    await store.accept("second", {"agent_id": "a"}, session_id="s")
+    await store.accept("other", {"agent_id": "b"}, session_id="s")
+    states = await store.list_invocations(session_id="s", request_filter={"agent_id": "a"})
+    assert [state.invocation_id for state in states] == ["second", "first"]
+    assert [
+        state.invocation_id
+        for state in await store.list_invocations(request_filter={"extra": None})
+    ] == ["first"]
+    assert len(await store.list_invocations(limit=1)) == 1
+    with pytest.raises(ValueError):
+        await store.list_invocations(limit=1001)

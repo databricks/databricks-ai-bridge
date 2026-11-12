@@ -108,6 +108,7 @@ async def create_agent_graph(
     model: str | None = None,
     *,
     workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    checkpointer_override: Any | None = None,
 ):
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools.
 
@@ -137,7 +138,7 @@ async def create_agent_graph(
         ),
         tools=tools,
         middleware=middleware,
-        checkpointer=checkpointer(),
+        checkpointer=checkpointer_override if checkpointer_override is not None else checkpointer(),
     )
 
 

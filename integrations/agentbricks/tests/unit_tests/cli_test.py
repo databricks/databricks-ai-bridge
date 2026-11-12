@@ -41,6 +41,7 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "endpoint",
+        "environment",
         "tools",
     } <= names
     assert "eval" not in names
