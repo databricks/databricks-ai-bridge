@@ -23,6 +23,7 @@ from databricks_agentbricks.cli.failure_text import MAX_FAILURE_BYTES, scrub_fai
         "-----BEGIN PRIVATE KEY-----\nsynthetic-secret\n-----END PRIVATE KEY-----",
         "-----BEGIN PRIVATE KEY-----\nsynthetic-secret",
         "Authorization: Be\x1b[31marer synthetic-secret",
+        'Authorization: "synthetic-secret\ncontinued"',
     ],
 )
 def test_credentials_are_scrubbed(value):
@@ -69,6 +70,9 @@ def test_escaped_backslash_keeps_following_error_text():
 
 
 @pytest.mark.parametrize(
+    "name", ["credentials", "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"]
+)
+@pytest.mark.parametrize(
     "value",
     [
         '{"client_secret": "synthetic-opaque-value"}',
@@ -76,21 +80,23 @@ def test_escaped_backslash_keeps_following_error_text():
         '{\n  "nested": {"value": "synthetic-opaque-value"}\n}',
         '[{"value": "synthetic-opaque-value"}]',
         '["synthetic-opaque-value"]',
+        '[\n  "synthetic-opaque-value"\n]',
         r"""{'value': 'synthetic-opaque-value\'with}braces'}""",
     ],
 )
-def test_credential_containers_are_scrubbed_without_losing_following_error(value):
-    result = scrub_failure_text(f"credentials: {value}\nConnection failed")
+def test_credential_containers_are_scrubbed_without_losing_following_error(name, value):
+    result = scrub_failure_text(f"{name}: {value}\nConnection failed")
     assert result == "[REDACTED]\nConnection failed"
 
 
 @pytest.mark.parametrize(
+    "name", ["credentials", "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"]
+)
+@pytest.mark.parametrize(
     "value", ['{"value": "synthetic-opaque-value"', '["synthetic-opaque-value"}']
 )
-def test_incomplete_or_malformed_credential_container_is_omitted(value):
-    assert scrub_failure_text(f"Request failed: credentials={value}") == (
-        "Request failed: [REDACTED]"
-    )
+def test_incomplete_or_malformed_credential_container_is_omitted(name, value):
+    assert scrub_failure_text(f"Request failed: {name}={value}") == ("Request failed: [REDACTED]")
 
 
 @pytest.mark.parametrize("pattern", ["a-", "a/", "http://", "eyJ-", "eyJ-."])

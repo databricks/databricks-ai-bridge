@@ -724,6 +724,12 @@ def test_default_free_form_and_unresolved_values_are_omitted():
         json.dumps({"credentials": {"client_secret": "synthetic-opaque-value"}}),
         json.dumps({"credentials": [{"value": "synthetic-opaque-value"}]}, indent=2),
         json.dumps({"credentials": ["synthetic-opaque-value"]}),
+        *[
+            json.dumps({header: [{"value": "synthetic-opaque-value"}]}, indent=2)
+            for header in ["Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"]
+        ],
+        'Cookie: [\n"synthetic-opaque-value"',
+        'Authorization: {\n"value": "synthetic-opaque-value"',
     ],
 )
 def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
