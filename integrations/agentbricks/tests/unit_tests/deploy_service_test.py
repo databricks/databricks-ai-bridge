@@ -70,6 +70,8 @@ from databricks_agentbricks.services.deployment.tool_access_provisioner import T
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _auth_plan(
     *,
@@ -393,7 +395,6 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     assert result.env["RUNTIME_STORE_DATABASE"] == "db-id"
     assert result.session_grant_error == "grant denied"
     assert result.tool_access is not None and result.tool_access.app_resources == 1
-    assert result.created_app_yaml is True
     assert result.uses_runtime_api is True
 
 
@@ -713,7 +714,6 @@ env:
     }
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
-    assert result.created_app_yaml is False
     context = deployment_fixture.app.start_compute.call_args.args[0]
     deployment_fixture.app.start_compute.assert_called_once_with(context, None, 3)
     deployment_fixture.runtime.after_app_created.assert_called_once_with(
@@ -721,13 +721,73 @@ env:
     )
 
 
-def test_deploy_with_no_manifest_changes_does_not_scaffold_app_yaml(
+def _assert_no_workspace_call(f: SimpleNamespace) -> None:
+    f.provider.get.assert_not_called()
+    f.app.prepare_app_auth.assert_not_called()
+    f.apps.app_state.assert_not_called()
+    f.apps.exists.assert_not_called()
+    f.app.start_compute.assert_not_called()
+
+
+def test_deploy_outside_a_project_fails_before_any_workspace_call(
     deployment_fixture, tmp_path: pathlib.Path
 ):
-    result = deployment_fixture.service.deploy(_request(tmp_path))
+    (tmp_path / "app.yaml").unlink()
 
-    assert result.created_app_yaml is False
+    with pytest.raises(AgentCliError) as exc_info:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc_info.value.message == (
+        f"No Agent Bricks project in {tmp_path.resolve()} (no agent.toml or app.yaml)."
+    )
+    _assert_no_workspace_call(deployment_fixture)
     assert not (tmp_path / "app.yaml").exists()
+
+
+def test_deploy_of_a_project_without_app_yaml_names_the_expected_path(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    (tmp_path / "app.yaml").unlink()
+    deployment_fixture.resolver.load.return_value.write()
+
+    with pytest.raises(AgentCliError, match=f"No app.yaml in {tmp_path.resolve()}"):
+        deployment_fixture.service.prepare(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert not (tmp_path / "app.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "match"),
+    [
+        ("command: ['# TODO: set your run command']\n", "has a placeholder command"),
+        ("command: [unterminated", "Could not parse"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
+    ],
+)
+def test_deploy_rejects_an_unusable_app_yaml_before_any_workspace_call(
+    deployment_fixture, tmp_path: pathlib.Path, text: str, match: str
+):
+    (tmp_path / "app.yaml").write_text(text)
+
+    with pytest.raises(AgentCliError, match=match):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert (tmp_path / "app.yaml").read_text() == text
+
+
+def test_deploy_with_no_manifest_changes_leaves_app_yaml_alone(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.resolver.load.return_value = None
+    before = (tmp_path / "app.yaml").read_text()
+
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert (tmp_path / "app.yaml").read_text() == before
     deployment_fixture.provider.get.assert_called_once_with()
 
 

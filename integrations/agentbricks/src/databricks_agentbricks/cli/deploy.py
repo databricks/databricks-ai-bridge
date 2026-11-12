@@ -208,8 +208,7 @@ def _ignore_hangup() -> None:
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory for the deployment (containing app.yaml). Defaults to the "
-    "current directory.",
+    help="Project directory (with app.yaml). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",

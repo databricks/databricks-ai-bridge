@@ -33,6 +33,11 @@ For a local deploy record, `deployments wait` only includes that link when the s
 matches the recorded workspace host and ID. Use the deployment's original workspace profile;
 old records without workspace identity omit the link.
 
+`deploy` needs an `app.yaml` with a real `command:` in the source directory. If it exits before
+deploying with "No app.yaml", "No Agent Bricks project", or a placeholder command, run it from the
+project directory, pass `--source <directory>`, add the real start command to `app.yaml`, or create
+a project with `agentbricks init`.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run

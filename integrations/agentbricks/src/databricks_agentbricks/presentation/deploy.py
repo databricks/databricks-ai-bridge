@@ -311,12 +311,6 @@ def present_deploy_result(
         )
     if result.url:
         steps.insert(0, f"Open the deployed agent: {result.url}")
-    if result.created_app_yaml:
-        steps.insert(
-            0,
-            f"Set a real `command:` in {pathlib.Path(result.source) / 'app.yaml'} "
-            "(a placeholder was written)",
-        )
     if result.model_services and result.model_service_grant_error is not None:
         steps.insert(
             0,

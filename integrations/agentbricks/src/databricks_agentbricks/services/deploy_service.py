@@ -152,8 +152,6 @@ class DeployResult:
     memory_grant_attempted: bool
     session_grant_attempted: bool
     tool_access: Optional[ToolAccessSummary]
-    # True only when deploy created a missing app.yaml with a placeholder command.
-    created_app_yaml: bool
     pip_index_url: Optional[str]
     instance_count: Optional[int]
     uses_runtime_api: bool
@@ -294,7 +292,6 @@ class _RolledOut:
     bindings: ModelBindingState
     tracing: TracingState
     env: dict[str, str]
-    created_app_yaml: bool
     tool_plan: Optional[ToolAccessPlan]
     workspace_path: str
 
@@ -817,7 +814,6 @@ class DeployService:
             )
             if tool_plan is not None
             else None,
-            created_app_yaml=rollout.created_app_yaml,
             pip_index_url=request.pip_index_url,
             instance_count=instance_count,
             uses_runtime_api=bool(
@@ -866,7 +862,7 @@ class DeployService:
         *,
         early_compute: bool,
     ) -> _RolledOut:
-        """Reconcile resources, write app.yaml, and roll out source, in either path's order.
+        """Reconcile resources, update app.yaml env, and roll out source, in either path's order.
 
         With ``early_compute`` the compute is already booting, so everything that leaves the App
         untouched runs before the join on ACTIVE. Otherwise (a request-user App) the App is made
@@ -909,7 +905,7 @@ class DeployService:
         # 2. Patch app.yaml with the initial env. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
         with timer("app_yaml"):
-            created_app_yaml = (
+            if env or env_removals or prepared.agent_project is not None:
                 AppManifest.upsert_env_file(
                     source_dir,
                     env,
@@ -918,9 +914,6 @@ class DeployService:
                     if prepared.agent_project is not None
                     else (),
                 )
-                if (env or env_removals or prepared.agent_project is not None)
-                else False
-            )
         if not early_compute:
             # 3. A request-user App: ensure it exists and its compute is active. Create only when
             #    new; the compute wait runs every deploy.
@@ -944,11 +937,8 @@ class DeployService:
         env.update(runtime_late.env)
         if runtime_late.env or runtime_late.env_removals:
             with timer("app_yaml"):
-                created_app_yaml = (
-                    AppManifest.upsert_env_file(
-                        source_dir, runtime_late.env, list(runtime_late.env_removals)
-                    )
-                    or created_app_yaml
+                AppManifest.upsert_env_file(
+                    source_dir, runtime_late.env, list(runtime_late.env_removals)
                 )
 
         # 5. Resolve the upload destination explicitly. With the compute booting, app.yaml is now
@@ -990,7 +980,6 @@ class DeployService:
             bindings=bindings,
             tracing=tracing,
             env=env,
-            created_app_yaml=created_app_yaml,
             tool_plan=tool_plan,
             workspace_path=workspace_path,
         )
@@ -1021,6 +1010,8 @@ class DeployService:
         of the same App still running from this project is refused before anything changes.
         """
         source_dir = pathlib.Path(request.source)
+        # Deploy never writes a new app.yaml: without a usable one the App could never start.
+        AppManifest.require_deployable(source_dir)
         resolved = self._resolve_deployment(source_dir, request.name)
         running = deploy_state.running_deploy(
             deploy_state.state_path(source_dir, resolved.name), now=self._clock()

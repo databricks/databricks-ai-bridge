@@ -27,6 +27,8 @@ _PREVIEW = "agent_memory_sessions"
 _APP = "agent-bricks-demo"
 _DETAILS_URL = f"https://workspace.example/ml/agents/details/{_APP}?o=123"
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 @pytest.mark.parametrize("background", [False, True])
 def test_printed_deploy_link_matches_the_emitted_command(tmp_path, monkeypatch, background):

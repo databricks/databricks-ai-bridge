@@ -881,6 +881,7 @@ def test_repeated_waits_have_distinct_invocation_ids():
 
 @pytest.mark.parametrize("background_child", [False, True])
 @pytest.mark.parametrize("failure_state_write", [False, True])
+@pytest.mark.usefixtures("deployable_tmp_path")
 def test_failed_deploy_hook_records_known_outcome(
     tmp_path, monkeypatch, background_child, failure_state_write
 ):
@@ -935,6 +936,7 @@ def test_failed_deploy_hook_records_known_outcome(
 
 
 @pytest.mark.parametrize("background_child", [False, True])
+@pytest.mark.usefixtures("deployable_tmp_path")
 def test_preparation_failure_hook_keeps_outcome_unspecified(
     tmp_path, monkeypatch, background_child
 ):

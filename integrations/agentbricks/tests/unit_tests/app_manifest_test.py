@@ -53,11 +53,75 @@ def test_parse_lenient_reads_dict():
     assert manifest.raw_env() == [{"name": "FOO", "value": "bar"}]
 
 
-def test_scaffold_has_placeholder_command_and_empty_env():
-    manifest = AppManifest.scaffold()
-    doc = yaml.safe_load(manifest.to_yaml())
-    assert doc["command"] == ["# TODO: set your run command, e.g. ['uvicorn', 'app:app']"]
-    assert doc["env"] == []
+def test_require_deployable_names_the_resolved_dir_when_not_a_project(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(AgentCliError) as exc_info:
+        AppManifest.require_deployable(pathlib.Path("."))
+    assert exc_info.value.message == (
+        f"No Agent Bricks project in {tmp_path.resolve()} (no agent.toml or app.yaml)."
+    )
+    assert "--source <dir>" in (exc_info.value.hint or "")
+    assert "agentbricks init" in (exc_info.value.hint or "")
+    assert not (tmp_path / "app.yaml").exists()
+
+
+def test_require_deployable_names_the_missing_app_yaml_of_a_project(tmp_path: pathlib.Path):
+    (tmp_path / "agent.toml").write_text("")
+    with pytest.raises(AgentCliError) as exc_info:
+        AppManifest.require_deployable(tmp_path)
+    assert exc_info.value.message == f"No app.yaml in {tmp_path.resolve()}."
+    assert "agentbricks init" in (exc_info.value.hint or "")
+    assert not (tmp_path / "app.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "command: [\"# TODO: set your run command, e.g. ['uvicorn', 'app:app']\"]\nenv: []\n",
+        "command: REPLACE_WITH_YOUR_COMMAND\n",
+        "command: [python, replace_with_entrypoint.py]\n",
+    ],
+)
+def test_require_deployable_rejects_placeholder_commands(tmp_path: pathlib.Path, text: str):
+    (tmp_path / "app.yaml").write_text(text)
+    with pytest.raises(AgentCliError) as exc_info:
+        AppManifest.require_deployable(tmp_path)
+    assert exc_info.value.message == f"{tmp_path.resolve() / 'app.yaml'} has a placeholder command."
+
+
+@pytest.mark.parametrize(
+    ("text", "match"),
+    [
+        ("command: [unterminated", "Could not parse"),
+        ("- just\n- a\n- list\n", "top level must be an object"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
+        ("command: [x]\nenv: not-a-list\n", "env must be a list"),
+    ],
+)
+def test_require_deployable_rejects_unparseable_app_yaml(
+    tmp_path: pathlib.Path, text: str, match: str
+):
+    (tmp_path / "app.yaml").write_text(text)
+    with pytest.raises(AgentCliError, match=match):
+        AppManifest.require_deployable(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "text", ["command: ['uvicorn', 'app:app']\n", "env: []\n", "", "# only a comment\n"]
+)
+def test_require_deployable_accepts_a_real_or_default_command(tmp_path: pathlib.Path, text: str):
+    (tmp_path / "app.yaml").write_text(text)
+    AppManifest.require_deployable(tmp_path)
+
+
+def test_upsert_env_file_never_creates_app_yaml(tmp_path: pathlib.Path):
+    with pytest.raises(AgentCliError, match="No app.yaml in"):
+        AppManifest.upsert_env_file(tmp_path, {"FOO": "bar"})
+    assert not (tmp_path / "app.yaml").exists()
 
 
 def test_raw_env_empty_when_absent():
@@ -122,12 +186,12 @@ def test_set_env_replaces_and_preserves_non_dicts():
 
 
 def test_to_yaml_round_trips_and_preserves_key_order():
-    manifest = AppManifest.scaffold()
+    manifest = AppManifest.parse_lenient("command: [uvicorn, app:app]\nenv: []\n")
     manifest.upsert_env({"FOO": "bar"})
     text = manifest.to_yaml()
     doc = yaml.safe_load(text)
     assert doc == {
-        "command": ["# TODO: set your run command, e.g. ['uvicorn', 'app:app']"],
+        "command": ["uvicorn", "app:app"],
         "env": [{"name": "FOO", "value": "bar"}],
     }
     command_index = text.index("command")
