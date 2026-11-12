@@ -103,7 +103,7 @@ class StreamRelay:
                     cpu_started = time.thread_time()
                 try:
                     view = memoryview(data)
-                    while view and forward:
+                    while view and forward and not self._stop.is_set():
                         try:
                             view = view[os.write(destination, view) :]
                         except OSError:
@@ -122,13 +122,17 @@ class StreamRelay:
         finally:
             stream.close()
 
+    def cancel(self) -> None:
+        """Abandon pending output without waiting for a blocked destination."""
+        self._stop.set()
+
     def finish(self) -> None:
         # Bound processing while allowing blocked output forwarding to finish.
         with self._state_lock:
             now = time.monotonic()
             started = self._forward_started if self._forward_started is not None else now
             deadline = self._drain_deadline = started - self._forward_wait_seconds + _DRAIN_GRACE_S
-        while self._thread.is_alive():
+        while self._thread.is_alive() and not self._stop.is_set():
             self._thread.join(timeout=0.05)
             with self._state_lock:
                 if (
