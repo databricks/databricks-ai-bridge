@@ -72,6 +72,21 @@ def test_escaped_backslash_keeps_following_error_text():
     assert scrub_failure_text(r'password="synthetic-prefix\\" after') == "[REDACTED] after"
 
 
+@pytest.mark.parametrize("prefix", ["b", "B", "r", "u", "br", "rb", "f", "fr", "rf"])
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("separator", [" ", ",", ";", "\n"])
+def test_prefixed_credential_literals_are_scrubbed_completely(prefix, quote, separator):
+    value = f"{prefix}{quote}{separator}synthetic-opaque-value{quote}"
+    assert scrub_failure_text(f"password={value}\nConnection failed") == (
+        "[REDACTED]\nConnection failed"
+    )
+
+
+def test_prose_apostrophes_do_not_hide_the_following_error():
+    value = r"Error: app doesn't exist in workspace; see .\logs\x.log; Final error: quota exceeded"
+    assert scrub_failure_text(value) == value
+
+
 @pytest.mark.parametrize("depth", [0, 1, 3])
 @pytest.mark.parametrize(
     "value",
