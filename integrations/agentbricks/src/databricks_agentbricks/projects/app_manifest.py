@@ -31,8 +31,15 @@ import yaml
 from databricks_agentbricks.errors import AgentCliError
 
 # Placeholder commands from older deploy scaffolds and templates. An app.yaml still carrying one can
-# never start, so deploy refuses it (the same rule as doctor's `app_command` check).
+# never start, so deploy refuses it and doctor's `app_command` check fails it.
 _PLACEHOLDER_MARKERS = ("# todo: set your run command", "replace_with")
+
+
+def is_placeholder_command(command: object) -> bool:
+    """Whether an app.yaml ``command`` (a string or list) is still a scaffold/template placeholder."""
+    parts = command if isinstance(command, list) else [command]
+    rendered = " ".join(str(part) for part in parts if part is not None).casefold()
+    return any(marker in rendered for marker in _PLACEHOLDER_MARKERS)
 
 
 class AppManifest:
@@ -83,9 +90,7 @@ class AppManifest:
                 "`agentbricks init`.",
             )
         command = cls.parse(app_yaml.read_text(), source=app_yaml)._doc.get("command")
-        parts = command if isinstance(command, list) else [command]
-        rendered = " ".join(str(part) for part in parts if part is not None).casefold()
-        if any(marker in rendered for marker in _PLACEHOLDER_MARKERS):
+        if is_placeholder_command(command):
             raise AgentCliError(
                 f"{app_yaml} has a placeholder command.",
                 hint="Set a real `command:` in it, or create a project with `agentbricks init`.",
