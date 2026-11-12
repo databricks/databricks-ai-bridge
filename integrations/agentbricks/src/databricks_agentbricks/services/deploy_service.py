@@ -36,6 +36,7 @@ from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.app_probe import AppProbe, ProbeResult
 from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
+from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
@@ -223,6 +224,8 @@ class WaitResult:
     log: Optional[str] = None
     # For a succeeded deploy: True once the App answered; None when it couldn't be checked.
     ready: Optional[bool] = None
+    from_local_state: bool = False
+    workspace: WorkspaceIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +243,7 @@ class _WaitSnapshot:
     ready: Optional[bool] = None
     # Why readiness couldn't be checked, when the probe said.
     unverified_detail: Optional[str] = None
+    workspace: WorkspaceIdentity | None = None
 
 
 # How often `deployments wait` re-reads a local deploy record, and the App when there is none.
@@ -541,6 +545,8 @@ class DeployService:
                     uses_runtime_api=uses_runtime_api,
                     log=snap.log,
                     ready=snap.ready if snap.status == deploy_state.SUCCEEDED else None,
+                    from_local_state=local,
+                    workspace=snap.workspace,
                 )
             poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
             self._sleep(max(0.0, min(poll, deadline - now)))
@@ -567,6 +573,7 @@ class DeployService:
             else (),
             log=str(log) if log else None,
             ready=result.get("ready") if isinstance(result, dict) else None,
+            workspace=WorkspaceIdentity.from_dict(state.get("workspace")),
         )
 
     def _server_snapshot(
@@ -606,6 +613,10 @@ class DeployService:
         )
 
     # --- deploy -------------------------------------------------------------
+
+    def workspace_identity(self) -> WorkspaceIdentity | None:
+        """The authenticated target workspace for a background deployment's local record."""
+        return WorkspaceIdentity.from_client(self._api_client_provider.get())
 
     def check_auth(self) -> None:
         """Fail now, rather than in a background deploy, when the profile can't authenticate."""
@@ -679,6 +690,8 @@ class DeployService:
         instance_count = request.instance_count
         # The shared provider stays lazy through every local project/auth validation above.
         client = self._api_client_provider.get()
+        if self._state_tracker is not None:
+            self._state_tracker.set_workspace(WorkspaceIdentity.from_client(client))
         ctx = ResourceContext(
             project=ProjectContext(
                 source_dir=source_dir, name=name, agent_project=prepared.agent_project

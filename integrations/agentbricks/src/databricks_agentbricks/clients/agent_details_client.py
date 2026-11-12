@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import quote, urlencode
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 
 _DETAILS_LOOKUP_TIMEOUT_S = 2.0
 _AGENT_UI_FLAG = "databricks.fe.customagents.agentCentricView.enable"
@@ -29,13 +30,15 @@ class AgentDetailsClient:
     def __init__(self, api_client_provider: ApiClientProvider) -> None:
         self._api_client_provider = api_client_provider
 
-    def get_url(self, deployment: str) -> str | None:
+    def get_url(
+        self, deployment: str, *, expected_workspace: WorkspaceIdentity | None = None
+    ) -> str | None:
         """Omit the optional link rather than delay or fail a deployment."""
         urls: queue.Queue[str | None] = queue.Queue(maxsize=1)
 
         def fetch() -> None:
             try:
-                urls.put(self._fetch_url(deployment))
+                urls.put(self._fetch_url(deployment, expected_workspace))
             except Exception:  # noqa: BLE001 - optional UI discovery must not change deploy outcomes
                 urls.put(None)
 
@@ -45,8 +48,15 @@ class AgentDetailsClient:
         except queue.Empty:
             return None
 
-    def _fetch_url(self, deployment: str) -> str | None:
+    def _fetch_url(
+        self, deployment: str, expected_workspace: WorkspaceIdentity | None
+    ) -> str | None:
         client = self._api_client_provider.get()
+        if (
+            expected_workspace is not None
+            and WorkspaceIdentity.from_client(client) != expected_workspace
+        ):
+            return None
         workspace = client.workspace_client
         workspace_id = workspace.config.workspace_id
         # Request named items so SAFE's compact, hashed browser representation is unnecessary.

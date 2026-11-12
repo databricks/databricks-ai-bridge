@@ -26,6 +26,9 @@ Deploy output includes an Agent details management link when the workspace's Age
 Sessions beta and new Agents UI are both enabled. JSON exposes it as `details_url`; `url` remains
 the deployed agent's invocation address. `--no-wait` and `deployments wait` also include the gated
 link, which can be used to inspect an in-progress deployment.
+For a local deploy record, `deployments wait` only includes that link when the selected profile
+matches the recorded workspace host and ID. Use the deployment's original workspace profile;
+old records without workspace identity omit the link.
 
 ### Deploying from a coding agent
 
