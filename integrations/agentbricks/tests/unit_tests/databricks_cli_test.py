@@ -146,7 +146,7 @@ def test_databricks_with_ready_probe_uses_the_readiness_runner(monkeypatch):
 @pytest.mark.parametrize(
     "failure_output, retained",
     [
-        ("x" * 20000 + "\nMissing dependency\n", "Missing dependency\n"),
+        ("x" * 20000 + "\nMissing dependency\n", "[REDACTED]"),
         (
             "credentials = {\n"
             + " \n" * 2000
@@ -213,7 +213,7 @@ def test_merged_output_preserves_child_write_order(tmp_path, destination):
     if destination == "file":
         assert stdout == ""
     else:
-        assert stdout.endswith("out 511\nerr 511\n")
+        assert stdout == "[REDACTED]"
     assert len(stdout.encode()) <= 3072
     assert stderr == ""
 
