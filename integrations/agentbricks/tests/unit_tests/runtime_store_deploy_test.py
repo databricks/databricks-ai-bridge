@@ -43,6 +43,8 @@ _LEGACY_BACKEND = LakebaseBackend(
     resource_name="postgres",
 )
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _runtime_provisioner(*, use_managed: bool, apps: mock.Mock, client=None):
     reporter = mock.Mock(spec=Reporter)

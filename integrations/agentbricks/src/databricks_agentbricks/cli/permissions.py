@@ -14,6 +14,13 @@ from databricks_agentbricks.presentation.render import field
 from databricks_agentkit._permissions import MAX_PERMISSION_PAGE_SIZE
 
 
+class _UpperChoice(click.Choice):
+    """Case-insensitive choice that shows values uppercase in help and errors, like the API."""
+
+    def normalize_choice(self, choice: object, ctx: click.Context | None) -> str:
+        return super().normalize_choice(choice, ctx).upper()
+
+
 def _principal(user: str | None, service_principal: str | None) -> tuple[str, str]:
     if (user is None) == (service_principal is None):
         raise click.UsageError("Specify exactly one of --user or --service-principal.")
@@ -140,7 +147,7 @@ def store_permissions(kind: str, *, resolve_get: Callable | None = None) -> clic
     @click.option(
         "--permission",
         required=True,
-        type=click.Choice(["READ", "WRITE"], case_sensitive=False),
+        type=_UpperChoice(["READ", "WRITE"], case_sensitive=False),
         help="Access to grant. WRITE includes READ; READ preserves an existing WRITE grant.",
     )
     @click.pass_obj

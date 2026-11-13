@@ -41,21 +41,24 @@ ty check
 
 ## Software Factory
 
-For factory-assigned work, start with [factory-author](.claude/skills/factory-author/SKILL.md),
-then use [factory-evidence](.claude/skills/factory-evidence/SKILL.md) and
-[factory-pr](.claude/skills/factory-pr/SKILL.md) as needed. Use
-[factory-session](.claude/skills/factory-session/SKILL.md) only to launch or locate
-a session. These repository files are the source of truth; `.agents/skills/`
-links to the same files for Codex. The factory reads them from the task checkout,
-so a new checkout of `main` picks up updates after they merge.
+Use [author](.claude/skills/author/SKILL.md) for interactive or ticket-backed
+authoring, evidence and PR follow-through. Factory-assigned work also uses
+[factory-steering](.claude/skills/factory-steering/SKILL.md) for coordination and
+human decisions. These are the two workflow skills; `.agents/skills/` aliases the
+same source files for Codex. The hosted factory packages committed snapshots so
+its steering model and native worker use the same reviewed policy.
 
 ## Code Review
 
-AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
+AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment, with each finding on a changed line also left as an inline review comment on that line; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
 
 Pushes to eligible PRs also request a new review, with at most three automatic push-review attempts per PR by default (`AI_REVIEW_MAX_PUSH_REVIEWS`; set `0` to disable). Failed attempts count toward the limit. A bot comment tracks the count; the initial review and manually requested `/review` runs do not consume this budget. Pushing still dismisses stale approvals after the limit is reached.
 
-When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): a high merge safety score, no blocking, security, or uncertain findings, a small diff that only changes `integrations/agentbricks/` or Markdown/reST docs and doesn't touch CI, review rules, dependencies, or credential code, and an author with write access. The approval comes from `github-actions[bot]`. Pushing new commits dismisses that approval.
+When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): a high review score, no blocking, security, or uncertain findings, a small diff that only changes `integrations/agentbricks/` or Markdown/reST docs and doesn't touch CI, review rules, dependencies, or credential code, and an author with write access. The approval comes from `github-actions[bot]`. Pushing new commits dismisses that approval.
+
+Reviews separately classify change risk as Low, Moderate, or High based on affected components, public behavior, sensitive operations, tests, and reversibility, with a rationale and no numerical safety score. CI applies minimum risk levels for sensitive paths/components and large changes, then assigns one of `risk:low`, `risk:medium` (moderate), `risk:high`, or `risk:unrated` even when automatic approval is disabled. Low and moderate changes can pass automatic approval by default, alongside the existing review-score and eligibility checks; set `AI_REVIEW_AUTO_APPROVE_MAX_RISK` to `low` to restrict approval to low-risk changes. High and unrated changes cannot be auto-approved. Pushing clears labels for the old head until the new head is reviewed.
+
+A current-head review that passes findings, review-score, and reviewer-coverage checks receives `ai-approved` independently of change risk and the auto-approval setting. This label is an AI verdict, not a GitHub approval; path, size, author, and configured risk requirements still gate bot approvals. Pushes clear the label until the new head is reviewed; a failed subsequent review removes it.
 
 ## Integration Tests
 

@@ -15,3 +15,59 @@ same review process.
 The root file preserves the existing repository checks. The AgentBricks subtree
 adds its own criteria and automation-eligibility note without changing workflow
 triggers, approval behavior, or merge permissions.
+
+Reviews report two independent assessments: a numerical review score for
+findings and reviewer coverage, and a Low/Moderate/High change-risk
+classification for the impact of the change itself. Change risk has a
+contextual rationale, not a numerical safety score. Missing or invalid
+assessments withhold approval and are Unrated. Reviewer coverage affects the
+review score and approval eligibility separately from change risk.
+
+For example, `Review score: 100/100 · reviewers: 2/2` can appear alongside
+`Change risk: MODERATE` for a clean review of a consequential change. Only
+change risk carries a risk classification; the review score does not.
+
+Each comment starts with one line giving the review score, reviewer coverage,
+and change risk, then three short sections: **Summary** (the findings, or "No
+findings.", and the reviewer's take on the approach), **Risk** (the rationale and
+any CI risk adjustments, with each group of files listed once), and **AI
+approval** (whether the PR is eligible and, if not, what would unblock it). The
+full review is collapsed below. Eligibility is separate from final
+authorization: automation must be enabled, the author eligible, the PR
+non-draft, and the reviewed head current.
+
+The reviewer considers actual behavior, affected users/packages, public API
+compatibility, credentials/data writes, tests, and rollback. CI adds minimum
+risk levels: protected CI/review/dependency/credential paths, migration/release
+behavior, and binaries are high; public CLI/API/runtime/persistence paths and
+multiple production packages are at least moderate. More than 10 paths is at
+least moderate; more than 1000 lines or 30 paths is high. The configurable
+`AI_REVIEW_AUTO_APPROVE_MAX_LINES` separately limits approval eligibility without
+changing the risk classification. Low and moderate risk are eligible by default;
+set `AI_REVIEW_AUTO_APPROVE_MAX_RISK` to `low` to restrict approval to low risk.
+CI raises the classification directly when a
+minimum risk level applies and shows the reasons in the review comment.
+CI floors never lower risk. Root and scoped REVIEW.md changes remain
+protected; this does not add AGENTS.md or CLAUDE.md to the protected filenames.
+
+The workflow labels completed current-head reviews with `risk:low`,
+`risk:medium` (moderate), `risk:high`, or `risk:unrated` regardless of the auto-approval setting. It replaces
+the old risk label and clears stale labels after pushes, including when the
+push-review budget is exhausted. The configured risk ceiling does not override
+findings, coverage, author, scope, size, or commit checks.
+
+Publishing and push cleanup use the same reconciler: derive the desired label
+from the latest current-head bot assessment, mutate labels, and reread both the
+head and assessment. If either changed, retry up to three times. This prevents
+an older publisher or delayed cleanup from leaving a newer head mislabeled.
+API failures surface except for missing labels, and approval invalidation runs
+independently even if label maintenance fails.
+
+A current-head review that passes the configured review-score threshold,
+complete reviewer coverage, and empty blocking/security/uncertain findings
+receives `ai-approved`, even when risk, path, size, or author restrictions
+prevent a GitHub approval. This label records the AI review verdict only.
+It does not satisfy a required GitHub approval. High and unrated changes still
+need human approval; eligible low- and moderate-risk changes can receive the
+bot's GitHub approval when auto-approval is enabled. The same reconciler
+removes `ai-approved` on an unreviewed push or a failed subsequent review.
