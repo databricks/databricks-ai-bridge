@@ -90,6 +90,19 @@ lens can still produce a Critical finding.
   change belongs in its chosen module, duplication of an existing helper
   (name both implementations), needless indirection, and comments that narrate
   the code.
+  - Trace new enums, diagnostic fields, and context objects to production
+    consumers in the reviewed revision and declared stack dependencies. Identify
+    what they change in control flow, output, or telemetry; assignments and tests
+    alone do not establish a consumer. Question a second failure taxonomy that
+    only maps back to existing categories when direct exception/code mapping
+    would suffice. Cite the redundant mapping or unused state and its maintenance
+    cost; keep distinctions that callers actually need.
+  - Place helpers by responsibility and dependencies, following scoped project
+    guidance. CLI-independent telemetry scrubbing belongs with telemetry
+    utilities; Click context and command adapters belong with the CLI. Inspect
+    the helper's imports and callers before suggesting a move, and explain the
+    ownership or coupling it improves. A single caller or a preferred directory
+    name alone is not a finding.
 - **Performance:** extra network round trips, unbounded loops or buffering,
   repeated client construction, and blocking calls in async paths.
 - **Operational safety:** retries and timeouts, failures that are swallowed
