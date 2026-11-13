@@ -742,3 +742,106 @@ def test_add_help_explains_manifest_review(path):
     text = " ".join(result.stdout.split())
     assert "Review" in text
     assert "agent.toml" in text
+
+
+def _invoke(project: pathlib.Path, *args: str):
+    return CliRunner().invoke(tools, [*args, "--source", str(project)], obj=_Ctx())
+
+
+@pytest.mark.parametrize(
+    "remove_args", [["web_search"], ["mcp", "system.ai.web_search"]], ids=["by-id", "by-service"]
+)
+def test_remove_last_tool_then_add_writes_tools_table(tmp_path: pathlib.Path, remove_args):
+    project = _project(tmp_path)
+    manifest = project / "agent.toml"
+    assert _invoke(project, "add", "mcp", "system.ai.web_search").exit_code == 0
+
+    removed = _invoke(project, "remove", *remove_args)
+    assert removed.exit_code == 0, removed.output
+    assert "tools =" not in manifest.read_text()
+    assert AgentProject.load(project).tools == []
+
+    added = _invoke(project, "add", "mcp", "system.ai.web_search", "--auth", "app")
+    assert added.exit_code == 0, added.output
+    assert "[[tools]]" in manifest.read_text()
+    assert AgentProject.load(project).tools == [
+        ToolSpec.mcp("web_search", service="system.ai.web_search", auth="app")
+    ]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        "tools = []\n",
+        'tools = [{id = "lookup", auth = "user", '
+        'source = {kind = "uc_function", function = "main.tools.lookup"}}]\n',
+    ],
+    ids=["empty", "inline"],
+)
+def test_add_into_hand_written_inline_tools_array(tmp_path: pathlib.Path, existing):
+    project = _project(tmp_path)
+    manifest = project / "agent.toml"
+    manifest.write_text(existing + manifest.read_text(), encoding="utf-8")
+    before = AgentProject.load(project).tools
+
+    added = _invoke(project, "add", "mcp", "system.ai.web_search")
+
+    assert added.exit_code == 0, added.output
+    assert AgentProject.load(project).tools == [
+        *before,
+        ToolSpec.mcp("web_search", service="system.ai.web_search", auth="user"),
+    ]
+    text = manifest.read_text()
+    if existing.startswith("tools = [{"):
+        assert (
+            '{id = "web_search", auth = "user", source = {kind = "mcp", '
+            'service = "system.ai.web_search"}}' in text
+        )
+    assert _invoke(project, "add", "mcp", "system.ai.web_search").exit_code == 0
+
+
+def test_add_conflict_names_differing_auth_and_remove_command(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    assert _invoke(project, "add", "mcp", "system.ai.web_search", "--auth", "user").exit_code == 0
+    before = (project / "agent.toml").read_bytes()
+
+    result = _invoke(project, "add", "mcp", "system.ai.web_search", "--auth", "app")
+
+    assert result.exit_code == 1, result.output
+    text = " ".join(result.output.split())
+    assert "different auth (existing: user; requested: app)" in text
+    assert "system.ai.web_search" not in text
+    assert "agentbricks tools remove web_search" in text
+    assert (project / "agent.toml").read_bytes() == before
+
+
+def test_add_conflict_names_each_differing_field(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    added = _invoke(project, "add", "uc-function", "main.tools.lookup", "--name", "web")
+    assert added.exit_code == 0, added.output
+
+    result = _invoke(
+        project, "add", "mcp", "system.ai.web_search", "--name", "web", "--auth", "app"
+    )
+
+    assert result.exit_code == 1, result.output
+    text = " ".join(result.output.split())
+    assert (
+        "different kind, service, function, auth (existing: uc_function, none, "
+        "main.tools.lookup, user; requested: mcp, system.ai.web_search, none, app)"
+    ) in text
+    assert "agentbricks tools remove web" in text
+
+
+def test_write_refuses_invalid_toml_and_keeps_old_file(tmp_path: pathlib.Path, monkeypatch):
+    project = _project(tmp_path)
+    manifest = AgentProject.load(project)
+    before = manifest.path.read_bytes()
+    manifest.add_tool(ToolSpec.mcp("web_search", service="system.ai.web_search"))
+    monkeypatch.setattr(
+        "databricks_agentbricks.projects.agent_project.tomlkit.dumps", lambda _: "tools = [x\n"
+    )
+
+    with pytest.raises(AgentCliError, match="invalid agent manifest"):
+        manifest.write()
+    assert manifest.path.read_bytes() == before

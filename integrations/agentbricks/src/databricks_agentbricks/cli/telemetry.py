@@ -18,8 +18,9 @@ import uuid
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
-from typing import Any
+from typing import Any, Literal
 from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
 from click.core import ParameterSource
@@ -39,6 +40,57 @@ _CHOICE_VALUE_PREFIX = "AGENTBRICKS_CLI_"
 _MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
 _MAX_STATIC_NAME_LENGTH = 128
+_DEPLOYMENT_META_KEY = "agentbricks.deployment_telemetry"
+DeploymentOutcome = Literal[
+    "DEPLOYMENT_OUTCOME_UNSPECIFIED",
+    "DEPLOYMENT_OUTCOME_RUNNING",
+    "DEPLOYMENT_OUTCOME_SUCCEEDED",
+    "DEPLOYMENT_OUTCOME_FAILED",
+]
+
+
+@dataclass
+class DeploymentTelemetry:
+    """Attribution for a single printed command result, not a logical rollout."""
+
+    invocation_id: str
+    background_child: bool = False
+    details_link_emitted: bool = False
+    deployment_outcome: DeploymentOutcome = "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def begin_deployment(*, background_child: bool = False) -> None:
+    ctx = click.get_current_context()
+    ctx.meta[_DEPLOYMENT_META_KEY] = DeploymentTelemetry(
+        invocation_id=str(uuid.uuid4()), background_child=background_child
+    )
+
+
+def set_deployment_outcome(outcome: DeploymentOutcome) -> None:
+    """Record observed state without replacing a deployment exception."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        attribution = _deployment_metadata(ctx)
+        if attribution is not None:
+            attribution.deployment_outcome = outcome
+    except BaseException:
+        return
+
+
+def deployment_details_url(url: str | None) -> str | None:
+    """Join browser arrivals to command telemetry while preserving opt-out."""
+    ctx = click.get_current_context()
+    attribution = ctx.meta.get(_DEPLOYMENT_META_KEY)
+    if not isinstance(attribution, DeploymentTelemetry):
+        return url
+    attribution.details_link_emitted = url is not None
+    if url is None or attribution.background_child or _telemetry_disabled():
+        return url
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query.extend([("source", "agentbricks-cli"), ("cli_invocation_id", attribution.invocation_id)])
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
 
 _ERROR_CATEGORIES = frozenset(
     {
@@ -103,6 +155,7 @@ class _AgentBricksCliLog:
     error_category: str | None = None
     parameters: tuple[_ParameterEntry, ...] = ()
     failure_message: str | None = None
+    deployment: DeploymentTelemetry | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -118,6 +171,13 @@ class _AgentBricksCliLog:
             data["parameters"] = [parameter.to_dict() for parameter in self.parameters]
         if self.failure_message is not None:
             data["failure_message"] = self.failure_message
+        if self.deployment is not None:
+            data.update(
+                invocation_id=self.deployment.invocation_id,
+                background_child=self.deployment.background_child,
+                details_link_emitted=self.deployment.details_link_emitted,
+                deployment_outcome=self.deployment.deployment_outcome,
+            )
         return data
 
 
@@ -414,6 +474,7 @@ def _build_log(
         error_category=category,
         parameters=invocation.parameters,
         failure_message=_failure_message(exception) if is_failure else None,
+        deployment=_deployment_metadata(ctx),
     )
 
 
@@ -434,6 +495,11 @@ def _failure_message(exc: BaseException | None) -> str | None:
         if isinstance(detail, str) and detail and detail not in parts:
             parts.append(detail[:65536])
     return scrub_failure_text("\nCaused by: ".join(parts)) or None
+
+
+def _deployment_metadata(ctx: Any) -> DeploymentTelemetry | None:
+    metadata = getattr(ctx, "meta", {}).get(_DEPLOYMENT_META_KEY)
+    return metadata if isinstance(metadata, DeploymentTelemetry) else None
 
 
 def _root_obj(ctx: Any) -> Any:
