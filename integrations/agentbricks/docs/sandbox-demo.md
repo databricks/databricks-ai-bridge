@@ -65,10 +65,14 @@ Deploy creates a missing `uv.lock` with Python 3.12 before source upload; existi
 locks are preserved. This resolves dependencies without installing them locally.
 The `uv add` step above also creates the lock as part of pinning the prototype SDK;
 deploy does not automatically replace your SDK dependency with an unreleased wheel.
-For `--git-revision`, commit the lockfile first. Private indexes belong in the
-project's `pyproject.toml` or `uv.toml`, which are copied into the sandbox. For the
-internal Databricks mirror, add `--default-index https://pypi-proxy.cloud.databricks.com/simple`
-to the `uv add` command above; that records the index in the project.
+For `--git-revision`, commit the lockfile first. Package indexes configured in the
+project's `pyproject.toml` or `uv.toml` must be reachable from the sandbox: the lock
+also records package download URLs. The internal Databricks PyPI mirror is reachable
+from some development hosts but timed out from the e2-dogfood sandbox used for this
+demo. Use public PyPI for this agent. If the development host cannot reach it, generate
+the lock on a machine or temporary sandbox that can, then copy the matching project
+configuration and lockfile back before deploying. An existing lock is uploaded as-is.
+The internal mirror can still be used to install the local CLI separately.
 
 Choose an unused deployment name if `sb-demo` already belongs to someone else:
 
