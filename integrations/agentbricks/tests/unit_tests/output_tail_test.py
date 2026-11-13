@@ -12,7 +12,7 @@ from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
 
 
 @pytest.mark.parametrize("chunk_size", [1, 7, 8192])
-def test_pem_output_is_omitted_even_when_the_header_leaves_the_tail(chunk_size):
+def test_long_pem_output_is_omitted(chunk_size):
     output = (
         b"-----BEGIN PRIVATE KEY-----\n"
         + b"synthetic-key-body\n" * 400
@@ -33,6 +33,10 @@ def test_pem_output_is_omitted_even_when_the_header_leaves_the_tail(chunk_size):
         (b'password="', b'"\n'),
         (b"password:\n", b""),
         (b"token=\n", b""),
+        (b"--token\n", b""),
+        (b"--password\n", b""),
+        (b"-api-key\n", b""),
+        (b"command --future-option\n", b""),
         (b"Bearer\n", b""),
         (b"Basic\n", b""),
         (b"Be\rarer\n", b""),
@@ -50,20 +54,43 @@ def test_truncated_values_do_not_outlive_their_credential_context(chunk_size, op
     assert tail.text() == "[REDACTED]"
 
 
-def test_short_structured_output_keeps_its_context_for_downstream_scrubbing():
-    output = b'credentials = {"value": "synthetic-opaque-value"}\n'
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize(
+    "output",
+    [
+        b'credentials = {"value": "synthetic-opaque-value"}\n',
+        b"--password\nsynthetic-opaque-value\n",
+        b"-----BEGIN PRIVATE KEY-----\nsynthetic-key-body\n-----END PRIVATE KEY-----\n",
+        "進行中\nMissing dependency\n".encode(),
+    ],
+)
+def test_short_output_keeps_its_context_for_downstream_scrubbing(chunk_size, output):
     tail = OutputTail()
-    tail.append(output)
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
     assert tail.text() == output.decode()
 
 
-def test_plain_unicode_output_keeps_the_final_error():
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize("output", [b"x" * 3072, "進".encode() * 1024])
+def test_output_at_byte_limit_is_kept_until_any_additional_byte(chunk_size, output):
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == output.decode()
+    tail.append(b"\n")
+    assert tail.text() == "[REDACTED]"
+    tail.append(b"later error\n")
+    assert tail.text() == "[REDACTED]"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+def test_long_plain_unicode_output_omits_the_final_error(chunk_size):
     tail = OutputTail()
     output = ("進行中\n" * 1000 + "Missing dependency\n").encode()
-    for offset in range(0, len(output), 7):
-        tail.append(output[offset : offset + 7])
-    assert tail.text().endswith("Missing dependency\n")
-    assert "進行中" in tail.text()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == "[REDACTED]"
 
 
 def test_reader_owns_its_pipe_after_the_original_is_closed():
@@ -133,7 +160,7 @@ def test_slow_open_destination_preserves_every_byte_after_child_exit():
                 child_exited.set()
                 relay.finish()
                 assert not relay._thread.is_alive()
-                assert relay.tail.text() == "FINAL-FAILURE\n"
+                assert relay.tail.text() == "[REDACTED]"
             finally:
                 child_exited.set()
                 proc.kill()

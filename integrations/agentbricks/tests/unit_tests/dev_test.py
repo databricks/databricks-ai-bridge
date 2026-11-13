@@ -96,9 +96,13 @@ def test_dev_preflight_failure_has_configuration_category(tmp_path, monkeypatch,
         + b"-----END PRIVATE KEY-----\n",
         b"credentials = {\n" + b" \n" * 2000 + b'"value": "synthetic-key-body"\n}\n',
         b"password:\n" + b"\n" * 4000 + b"  synthetic-key-body\nstartup failed\n",
+        b"--password\n" + b"\n" * 4000 + b"  synthetic-key-body\nstartup failed\n",
+        b"progress\n" * 1000 + b"Missing dependency\n",
+        b"-----BEGIN PRIVATE KEY-----\nsynthetic-key-body\n-----END PRIVATE KEY-----\n",
+        b"--password\nsynthetic-key-body\n",
     ],
 )
-def test_dev_telemetry_omits_values_when_output_tail_drops_context(tmp_path, monkeypatch, output):
+def test_dev_telemetry_omits_overflow_and_scrubs_complete_output(tmp_path, monkeypatch, output):
     (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
     tail = OutputTail()
     for offset in range(0, len(output), 31):
@@ -118,6 +122,7 @@ def test_dev_telemetry_omits_values_when_output_tail_drops_context(tmp_path, mon
     assert result.exit_code == 1
     assert len(records) == 1
     assert "synthetic-key-body" not in str(records)
+    assert "Missing dependency" not in records[0]["failure_message"]
     assert "[REDACTED]" in records[0]["failure_message"]
 
 
