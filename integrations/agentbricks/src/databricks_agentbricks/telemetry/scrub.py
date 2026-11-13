@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 MAX_FAILURE_BYTES = 4096
-_MAX_INPUT_CHARS = 65536
+MAX_FAILURE_INPUT_CHARS = 65536
 _TRUNCATED = "\n[truncated]"
 _REDACTED = "[REDACTED]"
 _ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]")
@@ -72,10 +72,11 @@ def _scrub_jwt(match: re.Match[str]) -> str:
 
 def scrub_failure_text(value: str) -> str:
     """Best-effort scrubbing; the result remains sensitive customer content."""
-    truncated = len(value) > _MAX_INPUT_CHARS
-    value = _ANSI.sub("", value[:_MAX_INPUT_CHARS])
+    if len(value) > MAX_FAILURE_INPUT_CHARS:
+        return ""
+    value = _ANSI.sub("", value)
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
-    # Mask URL credentials before truncation can discard their closing delimiter.
+    # Mask URL credentials before encoded-text omission can discard their closing delimiter.
     value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     # Free-form credential values have no reliable end boundary; retain only preceding text.
     for pattern in (_ENCODED, _HEADER, _ASSIGNMENT, _OPTION):
@@ -91,8 +92,6 @@ def scrub_failure_text(value: str) -> str:
         value = pattern.sub(r"\1[REDACTED_PATH]", value)
     value = _PATH_CANDIDATE.sub(_scrub_relative_path, value)
     value = _EMAIL.sub("[REDACTED_EMAIL]", value).strip()
-    if truncated:
-        value += _TRUNCATED
     encoded = value.encode("utf-8", errors="replace")
     if len(encoded) > MAX_FAILURE_BYTES:
         marker = _TRUNCATED + "\n"

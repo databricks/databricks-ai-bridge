@@ -27,7 +27,7 @@ from click.core import ParameterSource
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
 
-from databricks_agentbricks.telemetry.scrub import scrub_failure_text
+from databricks_agentbricks.telemetry.scrub import MAX_FAILURE_INPUT_CHARS, scrub_failure_text
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
@@ -484,17 +484,22 @@ def _failure_message(exc: BaseException | None) -> str | None:
     ):
         return None
     parts: list[str] = []
+    separator = "\nCaused by: "
+    size = 0
     for error in _exception_chain(exc):
         try:
             text = str(error)
         except Exception:
             continue
-        if text and text not in parts:
-            parts.append(text[:65536])
-        detail = getattr(error, "failure_detail", None)
-        if isinstance(detail, str) and detail and detail not in parts:
-            parts.append(detail[:65536])
-    return scrub_failure_text("\nCaused by: ".join(parts)) or None
+        for part in (text, getattr(error, "failure_detail", None)):
+            if not isinstance(part, str) or not part or part in parts:
+                continue
+            size += len(part) + (len(separator) if parts else 0)
+            # Cutting raw fragments can discard credential context before scrubbing.
+            if size > MAX_FAILURE_INPUT_CHARS:
+                return None
+            parts.append(part)
+    return scrub_failure_text(separator.join(parts)) or None
 
 
 def _deployment_metadata(ctx: Any) -> DeploymentTelemetry | None:

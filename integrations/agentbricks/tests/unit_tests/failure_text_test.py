@@ -296,5 +296,18 @@ def test_bound_does_not_leave_partial_assignment_secret():
     assert len(result.encode()) <= MAX_FAILURE_BYTES
 
 
+@pytest.mark.parametrize("length", [65535, 65536, 65537])
+@pytest.mark.parametrize("character", ["x", "界"])
+def test_input_budget_omits_oversized_text_without_cutting_it(length, character):
+    prefix = "Request failed: "
+    value = prefix + character * (length - len(prefix))
+    result = scrub_failure_text(value)
+    if length > 65536:
+        assert result == ""
+    else:
+        assert result.startswith(prefix)
+        assert len(result.encode("utf-8")) <= MAX_FAILURE_BYTES
+
+
 def test_control_sequences_are_removed():
     assert scrub_failure_text("\x1b[31mfailed\x1b[0m\x00\r\nnext") == "failed\nnext"
