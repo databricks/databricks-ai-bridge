@@ -75,12 +75,13 @@ def scrub_failure_text(value: str) -> str:
     truncated = len(value) > _MAX_INPUT_CHARS
     value = _ANSI.sub("", value[:_MAX_INPUT_CHARS])
     value = "".join(c for c in value if c in "\n\t" or (c.isprintable() and c != "\x7f"))
+    # Mask URL credentials before truncation can discard their closing delimiter.
+    value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     # Free-form credential values have no reliable end boundary; retain only preceding text.
     for pattern in (_ENCODED, _HEADER, _ASSIGNMENT, _OPTION):
         if match := pattern.search(value):
             value = value[: match.start()] + _REDACTED
     value = _PRIVATE_KEY.sub(_REDACTED, value)
-    value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
     value = _URL.sub(_scrub_url_query, value)
     value = _AUTH_SCHEME.sub(_REDACTED, value)
     value = _TOKEN.sub(_REDACTED, value)

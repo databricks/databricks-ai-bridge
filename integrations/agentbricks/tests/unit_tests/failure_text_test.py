@@ -52,6 +52,17 @@ def test_url_credentials_are_scrubbed_for_any_scheme(scheme, password):
     assert "[REDACTED]" in result
 
 
+@pytest.mark.parametrize("escape", [r"\u0031", r"\x31", r"\\"])
+def test_url_credentials_are_masked_before_encoded_text_is_omitted(escape):
+    value = (
+        f"Connection failed: https://user:synthetic-prefix{escape}synthetic-tail@host/db; "
+        "retry later"
+    )
+    assert scrub_failure_text(value) == (
+        "Connection failed: https://[REDACTED]@host/db; retry later"
+    )
+
+
 @pytest.mark.parametrize(
     "name", ["secretKey", "tokenValue", "access_token_value", "apiKeyValue", "private-token-value"]
 )

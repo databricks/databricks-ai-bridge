@@ -782,6 +782,20 @@ def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, d
     assert "Request failed" in payload
 
 
+def test_uploaded_failure_masks_escaped_url_credentials(monkeypatch):
+    api = _ApiClient()
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    error = AgentCliError(r"Connection failed: https://user:synthetic-prefix\u0031@host/db")
+    telemetry.emit_command(_Context(api), exit_code=1, exception=error)
+
+    assert len(api.calls) == 1
+    payload = api.calls[0][2]
+    log = _inner(payload)["agentbricks_cli_log"]
+    assert log["failure_message"] == "Connection failed: https://[REDACTED]@host/db"
+    assert "synthetic-prefix" not in json.dumps(payload)
+    assert log["exit_code"] == 1
+
+
 def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeypatch):
     api = _ApiClient()
     context = _Context(api)
