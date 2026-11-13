@@ -114,6 +114,79 @@ describe('convertToResponsesInput', () => {
         })
       ).rejects.toThrow()
     })
+
+    it('converts user message with an image file part to input_image', async () => {
+      const prompt: LanguageModelV3Prompt = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            { type: 'file', mediaType: 'image/png', data: 'aGVsbG8=' },
+          ],
+        },
+      ]
+
+      const { input, warnings } = await convertToResponsesInput({
+        prompt,
+        systemMessageMode: 'system',
+      })
+
+      expect(input).toEqual([
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'What is in this image?' },
+            { type: 'input_image', image_url: 'data:image/png;base64,aGVsbG8=' },
+          ],
+        },
+      ])
+      expect(warnings).toHaveLength(0)
+    })
+
+    it('converts image file parts given as URL, URL string, and bytes', async () => {
+      const prompt: LanguageModelV3Prompt = [
+        {
+          role: 'user',
+          content: [
+            { type: 'file', mediaType: 'image/png', data: new URL('https://example.com/cat.png') },
+            { type: 'file', mediaType: 'image/jpeg', data: 'https://example.com/dog.jpg' },
+            { type: 'file', mediaType: 'image/png', data: new Uint8Array([104, 105]) },
+          ],
+        },
+      ]
+
+      const { input } = await convertToResponsesInput({
+        prompt,
+        systemMessageMode: 'system',
+      })
+
+      expect(input).toEqual([
+        {
+          role: 'user',
+          content: [
+            { type: 'input_image', image_url: 'https://example.com/cat.png' },
+            { type: 'input_image', image_url: 'https://example.com/dog.jpg' },
+            { type: 'input_image', image_url: 'data:image/png;base64,aGk=' },
+          ],
+        },
+      ])
+    })
+
+    it('throws error for non-image file parts', async () => {
+      const prompt: LanguageModelV3Prompt = [
+        {
+          role: 'user',
+          content: [{ type: 'file', mediaType: 'application/pdf', data: 'aGVsbG8=' }],
+        },
+      ]
+
+      await expect(
+        convertToResponsesInput({
+          prompt,
+          systemMessageMode: 'system',
+        })
+      ).rejects.toThrow('file part with mediaType application/pdf')
+    })
   })
 
   describe('assistant messages', () => {
@@ -1311,7 +1384,6 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
   })
 
 })
-
 
 // ============================================================================
 // Tests for convertResponsesAgentResponseToMessagePart
