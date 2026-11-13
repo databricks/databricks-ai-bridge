@@ -9,7 +9,6 @@ share it without importing each other.
 
 from __future__ import annotations
 
-import collections
 import os
 import stat
 import subprocess
@@ -19,15 +18,22 @@ from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.clients import terminal_relay
-from databricks_agentbricks.clients.output_tail import StreamRelay
+from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
 from databricks_agentbricks.errors import AgentCliError
 
-# Lines of relayed output a `tee` run keeps for callers that inspect a failure.
-_TEE_TAIL_LINES = 200
 # Seconds between readiness probes while a long-running command starts up.
 _READY_POLL_S = 0.25
 # Seconds an interrupted command gets to exit on its own before it is killed (as `subprocess.run`).
 _SIGINT_WAIT_S = 0.25
+APP_BUSY_MARKER = "another operation is in progress"
+
+
+class DatabricksCliResult(subprocess.CompletedProcess[str]):
+    """Retain retry facts independently of diagnostic output truncation."""
+
+    def __init__(self, args: list[str], returncode: int, *, stdout: str, app_busy: bool) -> None:
+        super().__init__(args, returncode, stdout=stdout, stderr="")
+        self.app_busy = app_busy
 
 
 def _databricks(
@@ -88,10 +94,7 @@ def _databricks(
             action or "A Databricks CLI command failed.",
             hint=detail,
             subprocess_exit_code=result.returncode,
-            # A legacy tee tail may have discarded the context needed for credential scrubbing.
-            failure_detail=(result.stderr or result.stdout or "").strip() or None
-            if not tee
-            else None,
+            failure_detail=(result.stderr or result.stdout or "").strip() or None,
         )
     return result
 
@@ -99,8 +102,9 @@ def _databricks(
 def _run_tee(
     cmd: list[str], *, cwd: Optional[str], env: Optional[Mapping[str, str]]
 ) -> subprocess.CompletedProcess:
-    """Run ``cmd`` relaying its merged output to stderr; return its tail as ``stdout``."""
-    tail: collections.deque[str] = collections.deque(maxlen=_TEE_TAIL_LINES)
+    """Relay merged output to stderr, retaining bounded diagnostics and independent retry facts."""
+    tail = OutputTail()
+    app_busy = False
     with subprocess.Popen(
         cmd,
         text=True,
@@ -113,8 +117,9 @@ def _run_tee(
         for line in proc.stdout:
             sys.stderr.write(line)
             sys.stderr.flush()
-            tail.append(line)
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(tail), stderr="")
+            app_busy |= APP_BUSY_MARKER in line.lower()
+            tail.append(line.encode("utf-8", errors="replace"))
+    return DatabricksCliResult(cmd, proc.returncode, stdout=tail.text(), app_busy=app_busy)
 
 
 def _run_until_ready(

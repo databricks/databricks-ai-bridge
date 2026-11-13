@@ -66,7 +66,8 @@ def test_to_stderr_keeps_stdout_for_the_agentbricks_payload(monkeypatch):
     assert seen["stdout"] is None
 
 
-def test_tee_relays_output_to_stderr_and_returns_its_tail(monkeypatch, capsys):
+@pytest.mark.parametrize("check", [False, True])
+def test_tee_relays_output_to_stderr_and_preserves_short_failure_detail(monkeypatch, capsys, check):
     calls = []
 
     class FakePopen:
@@ -83,13 +84,20 @@ def test_tee_relays_output_to_stderr_and_returns_its_tail(monkeypatch, capsys):
 
     monkeypatch.setattr(dc.subprocess, "Popen", FakePopen)
 
-    result = dc._databricks(["apps", "deploy", "x"], "prof", tee=True, check=False)
+    if check:
+        with pytest.raises(dc.AgentCliError) as raised:
+            dc._databricks(["apps", "deploy", "x"], "prof", tee=True)
+        assert raised.value.failure_detail == "Uploading…\nError: Another operation is in progress."
+        assert raised.value.subprocess_exit_code == 1
+        assert raised.value.hint is None
+    else:
+        result = dc._databricks(["apps", "deploy", "x"], "prof", tee=True, check=False)
+        assert result.returncode == 1
+        assert "Another operation is in progress" in result.stdout
 
     captured = capsys.readouterr()
     assert captured.out == ""  # stdout stays clean for -o json
     assert "Another operation is in progress" in captured.err
-    assert result.returncode == 1
-    assert "Another operation is in progress" in result.stdout
     cmd, kwargs = calls[0]
     assert cmd == ["databricks", "apps", "deploy", "x", "--profile", "prof"]
     assert kwargs["stderr"] is dc.subprocess.STDOUT
@@ -97,6 +105,28 @@ def test_tee_relays_output_to_stderr_and_returns_its_tail(monkeypatch, capsys):
 
 def _python(code: str) -> list[str]:
     return [sys.executable, "-c", code]
+
+
+@pytest.mark.parametrize(
+    "failure_output",
+    [
+        "-----BEGIN PRIVATE KEY-----\n"
+        + "synthetic-key-body\n" * 400
+        + "-----END PRIVATE KEY-----\n",
+        "progress\n" * 1000 + "Missing dependency\n",
+    ],
+)
+def test_tee_omits_long_diagnostics_without_changing_displayed_output(capsys, failure_output):
+    result = dc._run_tee(
+        _python(f"import sys; sys.stdout.write({failure_output!r}); raise SystemExit(1)"),
+        cwd=None,
+        env=None,
+    )
+    assert result.returncode == 1
+    assert result.stdout == "[REDACTED]"
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == failure_output
 
 
 def test_run_until_ready_calls_on_ready_once_the_probe_succeeds(monkeypatch):
