@@ -377,6 +377,7 @@ def _get_store(obj, name: str) -> dict:
         raise AgentCliError(
             f"No memory store named '{name}'",
             hint=(
+                "Stores in agent.toml are created on the first agentbricks deploy. "
                 "Search by part of the name: "
                 f"agentbricks memory stores list --name {shlex.quote(name)}"
             ),
