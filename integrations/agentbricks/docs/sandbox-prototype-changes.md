@@ -111,7 +111,9 @@ The workbench uses `sandbox file → ExecuteCommand(tail -F) → App → SSE` fo
 live text. Invocation claims, lifecycle events and final results stay in the
 shared Runtime Store. One attempt-file descriptor replaces per-token events;
 existing table schemas are unchanged. The [diagram](diagrams/sandbox-direct-streaming.png)
-has [editable SVG source](diagrams/sandbox-direct-streaming.svg).
+has [editable SVG source](diagrams/sandbox-direct-streaming.svg). The
+[source overview](diagrams/sandbox-source-overview.png) also reflects lifecycle/final
+results in Lakebase, with [editable SVG](diagrams/sandbox-source-overview.svg).
 
 Focused unit and offline Chromium checks cover replay, subscriber cancellation,
 attempt changes, bounded preview buffering, SQL-free live delivery, CLI SSE and
@@ -136,3 +138,7 @@ last changed preview and final status. This is a functional spot check, not a
 controlled latency comparison or a browser rendering benchmark. Full MAR
 StreamItems/Session Store commit-discard, subscriber fan-out and file retention
 remain outside this prototype.
+
+Current rollout: `01f1df29996b1c868c474280ddfb5d63`, runtime wheel
+`0.10.0.dev0+sandbox.b1e30159b428a98c`, includes the final runtime documentation
+correction. Executable Python/JavaScript is unchanged from the live checks above.
