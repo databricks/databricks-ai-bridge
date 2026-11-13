@@ -24,6 +24,8 @@ Environment (set by the launcher under ``env -i`` with an allowlist; no secrets)
                             worker runs and lets inactivity_timeout stop it if it dies
   CMA_ON_EXIT               "delete" (ephemeral, default) or "stop" (resumable): what to do with this
                             sandbox when the worker returns, after memory stores are flushed
+  CMA_FINISHING_MARKER      written when this worker starts finishing (export, then delete or stop), so the
+                            launcher replaces it instead of treating it as still serving the session
   CMA_REPLACING_MARKER      if this file exists on exit, a newer worker is replacing this one: skip the
                             delete/stop step so the replacement keeps its sandbox
   CMA_EXPORT_VOLUME         optional UC Volume folder; files under CMA_EXPORT_DIR are copied to
@@ -57,6 +59,9 @@ from anthropic import AsyncAnthropic
 from anthropic.lib.environments import EnvironmentWorker
 
 log = logging.getLogger("databricks_anthropic.worker")
+
+# Display-name marker on a sandbox kept because its export failed; must equal dispatcher.KEPT_MARKER.
+KEPT_MARKER = "[export failed, kept]"
 
 # Partner attribution, fixed by the connector; must equal databricks_anthropic._useragent.
 PRODUCT_NAME = "ClaudeManagedAgents-DatabricksSandbox"
@@ -114,22 +119,64 @@ def _export_outputs(session_id: str) -> bool:
         return False
 
 
-def _finish(name: str, session_id: str) -> None:
-    """Export outputs, then delete (ephemeral) or stop (resumable) this sandbox."""
-    action = os.environ.get("CMA_ON_EXIT", "delete")
+def _being_replaced() -> bool:
     marker = os.environ.get("CMA_REPLACING_MARKER")
-    if marker and os.path.exists(marker):
+    return bool(marker and os.path.exists(marker))
+
+
+def _mark_finishing() -> None:
+    marker = os.environ.get("CMA_FINISHING_MARKER")
+    if marker:
+        with contextlib.suppress(OSError):
+            with open(marker, "w") as f:
+                f.write(str(os.getpid()))
+
+
+def _mark_kept(w: Any, name: str, session_id: str) -> None:
+    """Tag a kept sandbox in its display name (tags are immutable) so cleanup keeps it until retention."""
+    from databricks.sdk.common.types.fieldmask import FieldMask
+    from databricks.sdk.service.sandbox import Sandbox
+
+    try:
+        w.sandbox.update_sandbox(
+            name,
+            Sandbox(display_name=f"Claude session {session_id} {KEPT_MARKER}"),
+            FieldMask(field_mask=["display_name"]),
+        )
+    except Exception as e:  # noqa: BLE001 - best effort; the sandbox is still stopped, not deleted
+        log.warning("could not mark %s as kept: %s: %s", name, type(e).__name__, e)
+
+
+def _finish(name: str, session_id: str, *, attached: bool = True) -> None:
+    """Export outputs, then delete (ephemeral) or stop (resumable) this sandbox.
+
+    ``attached=False`` (start-up failed before the session was served): leave the sandbox alone, so the
+    launcher can read this worker's log and delete it.
+    """
+    _mark_finishing()
+    if not attached:
+        log.error("worker failed before serving the session: keeping %s for the launcher", name)
+        return
+    action = os.environ.get("CMA_ON_EXIT", "delete")
+    if _being_replaced():
         # A newer worker for this session is starting in this sandbox: leave the sandbox alone.
         log.info("replaced by a newer worker: keeping %s", name)
         action = "keep"
     exported = _export_outputs(session_id)
+    kept = False
     if action == "delete" and not exported:
         log.warning(
             "export failed: stopping %s instead of deleting it, so its files are kept", name
         )
-        action = "stop"
+        action, kept = "stop", True
+    # The export can take a while: a replacement may have started meanwhile. Check again right before acting.
+    if action != "keep" and _being_replaced():
+        log.info("replaced by a newer worker during export: keeping %s", name)
+        action = "keep"
     try:
         w = _workspace_client()
+        if kept and action == "stop":
+            _mark_kept(w, name, session_id)
         if action == "delete":
             log.info("deleting %s (ephemeral)", name)
             w.sandbox.delete_sandbox(name)
@@ -165,20 +212,25 @@ def _mcp_read_timeout(seconds: float) -> Any:
 GENIE_TERMINAL = {"completed", "incomplete", "failed", "cancelled"}
 
 
-def _mcp_payload(result: Any) -> Any:
-    """JSON payload of a CallToolResult (mcp 1.x or 2.x field names)."""
+def _mcp_payload(result: Any) -> dict[str, Any]:
+    """JSON payload of a CallToolResult (mcp 1.x or 2.x field names), always as a dict.
+
+    A JSON object is returned as is; any other JSON value becomes ``{"items": value}`` and text that
+    isn't JSON becomes ``{"text": text}``, so callers can always use ``.get``.
+    """
     structured = getattr(result, "structured_content", None) or getattr(
         result, "structuredContent", None
     )
     if structured:
-        return structured
+        return structured if isinstance(structured, dict) else {"items": structured}
     text = "\n".join(
         getattr(c, "text", "") for c in (result.content or []) if getattr(c, "type", "") == "text"
     )
     try:
-        return json.loads(text)
+        value = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return {"text": text}
+    return value if isinstance(value, dict) else {"items": value}
 
 
 def _mcp_error(result: Any) -> str | None:
@@ -220,6 +272,9 @@ def _genie_wait_tool(session: Any) -> Any:
         first = _mcp_payload(result)
         conv, resp = first.get("conversation_id"), first.get("response_id")
         status, final, polls, error = first.get("status"), first, 0, None
+        if status not in GENIE_TERMINAL and not (conv and resp):
+            # Nothing to poll (an immediate answer or an unexpected shape): return what Genie sent.
+            status = "completed"
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_s
         while status not in GENIE_TERMINAL and conv and resp and loop.time() < deadline:
@@ -254,6 +309,10 @@ def _genie_wait_tool(session: Any) -> Any:
         }
         if error is not None:
             answer["error"] = _clip(error, 4000)
+        if answer["final_answer"] is None and ("text" in final or "items" in final):
+            # Not Genie's usual shape: pass the content through rather than drop it.
+            raw = final.get("text") if "text" in final else json.dumps(final["items"])
+            answer["content"] = _clip(raw, 8000)
         return json.dumps(answer)  # fields are clipped, so this stays valid JSON
 
     return genie_ask_and_wait
@@ -346,6 +405,9 @@ def _load_secrets() -> dict[str, str]:
 async def main() -> None:
     name = os.environ["DBX_SANDBOX_NAME"]
     stop = threading.Event()
+    attached = (
+        False  # True once the session is being served; a failure before that keeps the sandbox
+    )
     try:
         work_secret, sessions_token = _session_credential(_load_secrets())
         workdir = os.environ.get("CMA_WORKDIR", "/home/sandbox-agent/agent-workspace")
@@ -387,6 +449,7 @@ async def main() -> None:
                 tools=tools,
                 max_idle=float(os.environ.get("CMA_MAX_IDLE", "300")),
             )
+            attached = True
             task = asyncio.create_task(
                 worker.handle_item(
                     work_id=os.environ["ANTHROPIC_WORK_ID"],
@@ -405,7 +468,7 @@ async def main() -> None:
     finally:
         # Covers startup failures too, so an ephemeral sandbox is always cleaned up.
         stop.set()
-        _finish(name, os.environ.get("ANTHROPIC_SESSION_ID", "unknown-session"))
+        _finish(name, os.environ.get("ANTHROPIC_SESSION_ID", "unknown-session"), attached=attached)
 
 
 if __name__ == "__main__":

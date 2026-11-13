@@ -40,8 +40,9 @@ log = logging.getLogger("cma_dispatcher_app")
 REQUIRED = ("ANTHROPIC_ENVIRONMENT_ID", "ANTHROPIC_ENVIRONMENT_KEY", "CMA_SANDBOX_ID_KEY")
 # A crashed poll loop restarts after this backoff (doubling, capped).
 RESTART_MIN_S, RESTART_MAX_S = 2.0, 60.0
-# /api/health fails after this many consecutive poll-loop crashes.
+# /api/health fails after this many consecutive poll-loop crashes, until a run stays up for RECOVERED_AFTER_S.
 UNHEALTHY_AFTER_RESTARTS = 3
+RECOVERED_AFTER_S = 2 * RESTART_MAX_S
 
 
 class ConfigError(RuntimeError):
@@ -91,6 +92,7 @@ class DispatcherService:
     consecutive_crashes: int = 0
     last_crash: str | None = None
     started_at: float = field(default_factory=time.time)
+    run_started_at: float | None = None  # time.monotonic() when the current poll loop started
     _task: asyncio.Task[None] | None = None
     dispatcher: DatabricksSandboxDispatcher | None = None
     _sandbox_counts: tuple[float, dict[str, int] | str] | None = None
@@ -113,7 +115,7 @@ class DispatcherService:
         assert self.dispatcher is not None
         delay = RESTART_MIN_S
         while True:
-            t0 = time.monotonic()
+            t0 = self.run_started_at = time.monotonic()
             try:
                 await self.dispatcher.run()
                 self.last_crash = "poll loop returned"
@@ -123,8 +125,9 @@ class DispatcherService:
                 self.last_crash = type(e).__name__
                 log.error("dispatcher poll loop crashed: %s: %s", type(e).__name__, e)
             self.restarts += 1
+            self.run_started_at = None
             # A loop that ran a while before failing is a fresh incident, not a crash loop.
-            if time.monotonic() - t0 > 5 * RESTART_MAX_S:
+            if time.monotonic() - t0 > RECOVERED_AFTER_S:
                 self.consecutive_crashes, delay = 0, RESTART_MIN_S
             self.consecutive_crashes += 1
             await asyncio.sleep(delay)
@@ -134,9 +137,16 @@ class DispatcherService:
     def healthy(self) -> bool:
         if self._task is None or self._task.done() or self.dispatcher is None:
             return False
-        return (
-            self.dispatcher.status.polling and self.consecutive_crashes < UNHEALTHY_AFTER_RESTARTS
-        )
+        if not self.dispatcher.status.polling:
+            return False
+        if self.consecutive_crashes < UNHEALTHY_AFTER_RESTARTS:
+            return True
+        # After a crash loop: healthy again once the current run has stayed up long enough.
+        running_for = time.monotonic() - self.run_started_at if self.run_started_at else 0.0
+        if running_for > RECOVERED_AFTER_S:
+            self.consecutive_crashes = 0
+            return True
+        return False
 
     def sandbox_counts(self, max_age_s: float = 30) -> dict[str, int] | str:
         """This deployment's sandboxes by state (its prefix and tags only), cached briefly.

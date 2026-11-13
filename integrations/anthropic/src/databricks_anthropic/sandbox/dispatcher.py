@@ -26,6 +26,9 @@ from databricks_anthropic.sandbox.launcher import (
 # An ephemeral sandbox deletes itself when its worker finishes; one still around (stopped) after
 # this long means the worker crashed or was killed, so cleanup removes it.
 EPHEMERAL_GRACE_S = 3600
+# A worker whose export failed stops (not deletes) its sandbox and appends this to its display name, so the
+# files survive: such sandboxes are kept until retention_days, not EPHEMERAL_GRACE_S.
+KEPT_MARKER = "[export failed, kept]"
 # results / failures keep only the most recent launches (the dispatcher can run for weeks).
 MAX_RECORDED = 1000
 
@@ -72,8 +75,9 @@ class DatabricksSandboxDispatcher:
 
     ``drain=True`` returns once the queue is empty (scripts, tests); the default polls
     until cancelled. ``accept`` optionally filters claimed session items (e.g. only the
-    caller's own session in a test). The poller acks every item it yields; a skipped item
-    gets no heartbeat, so it is re-delivered to the next poll that sets ``reclaim_older_than_ms``.
+    caller's own session in a test). The poller acknowledges every item it yields, and
+    ``reclaim_older_than_ms`` only reclaims *un-acknowledged* work, so a skipped item is not handed
+    straight back; it waits unserved until its lease expires. Only skip items another dispatcher serves.
     An item whose launch fails is stopped (``force``), so it is not relaunched in a loop.
 
     While polling (not in drain mode) it also sweeps every ``sweep_interval_s``: stopped
@@ -179,6 +183,9 @@ class DatabricksSandboxDispatcher:
                 status.polling = False
                 if sweeper:
                     sweeper.cancel()
+                # Wait for launches already claimed, including ones still queued for the semaphore: each is an
+                # acknowledged work item, and cancelling it would drop that session's turn. Shutdown can take as
+                # long as the slowest launch; the platform's termination grace period bounds it.
                 pending = [t for t in inflight.values() if not t.done()]
                 if pending:
                     await asyncio.gather(*pending, return_exceptions=True)
@@ -219,7 +226,7 @@ class DatabricksSandboxDispatcher:
         ]
 
     def _owns(self, sandbox: Any) -> bool:
-        tags = dict(getattr(getattr(sandbox, "metadata", None), "custom_tags", None) or {})
+        tags = _ops.tags_of(sandbox)
         return (
             tags.get(TAG_MANAGED_BY) == MANAGED_BY
             and tags.get(TAG_ENVIRONMENT) == self.launcher.environment_id
@@ -245,7 +252,7 @@ class DatabricksSandboxDispatcher:
         sessions_api = sessions_api if sessions_api is not None else self.sessions_api
         plan = []
         for sb in self.list_session_sandboxes():
-            tags = dict(getattr(getattr(sb, "metadata", None), "custom_tags", None) or {})
+            tags = _ops.tags_of(sb)
             state = sb.status.state if sb.status else None
             stopped = state == _ops.SandboxState.SANDBOX_STATE_STOPPED
             last_used = max(_seconds(sb.update_time), _seconds(sb.create_time))
@@ -268,6 +275,15 @@ class DatabricksSandboxDispatcher:
                     CleanupAction(
                         sb.name, "delete", f"Claude session {tags[TAG_SESSION]} deleted or archived"
                     )
+                )
+            elif (
+                stopped
+                and tags.get(TAG_LIFECYCLE) == "ephemeral"
+                and KEPT_MARKER in (getattr(sb, "display_name", None) or "")
+                and idle_s <= retention_s
+            ):
+                plan.append(
+                    CleanupAction(sb.name, "keep", "kept: export failed (within retention)")
                 )
             elif stopped and tags.get(TAG_LIFECYCLE) == "ephemeral" and idle_s > EPHEMERAL_GRACE_S:
                 plan.append(

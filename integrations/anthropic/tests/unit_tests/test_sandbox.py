@@ -108,7 +108,8 @@ def ops(monkeypatch):
     record("stop_pidfile_process")
     record("live_worker", None)
     record("start_detached", 4242)
-    record("is_alive", True)
+    record("alive_with_log", (True, ""))
+    record("state_of", _ops.SandboxState.SANDBOX_STATE_RUNNING)
     record("delete_quietly")
     record("upload_text")
     record("tail", "log tail")
@@ -148,14 +149,14 @@ def test_create_deletes_sandbox_that_never_starts(ops, monkeypatch):
 
 def test_launch_deletes_sandbox_it_created_when_worker_dies(ops, monkeypatch):
     monkeypatch.setattr(_ops, "ensure_running", MagicMock(side_effect=NotFound("nope")))
-    monkeypatch.setattr(_ops, "is_alive", lambda *a, **k: False)
+    monkeypatch.setattr(_ops, "alive_with_log", lambda *a, **k: (False, "boom"))
     with pytest.raises(_ops.SandboxCommandError):
         make_launcher().launch(work_item())
     assert len(ops["delete_quietly"]) == 1
 
 
 def test_launch_keeps_existing_sandbox_on_failure(ops, monkeypatch):
-    monkeypatch.setattr(_ops, "is_alive", lambda *a, **k: False)
+    monkeypatch.setattr(_ops, "alive_with_log", lambda *a, **k: (False, "boom"))
     with pytest.raises(_ops.SandboxCommandError):
         make_launcher().launch(work_item())
     assert "delete_quietly" not in ops  # resumed session: never delete the user's sandbox
@@ -168,7 +169,9 @@ def test_launch_replaces_previous_worker(ops):
 
 def test_bootstrap_skips_install_when_spec_matches(ops, monkeypatch):
     launcher = make_launcher()
-    spec = " ".join(sorted(launcher.packages()))
+    import hashlib
+
+    spec = f"lock-sha256={hashlib.sha256(launcher.worker_lock()[1].encode()).hexdigest()[:16]}"
     scripts = []
 
     def fake_run(w, name, script, **kwargs):
@@ -192,8 +195,8 @@ def test_bootstrap_installs_when_spec_differs(ops, monkeypatch):
     make_launcher(index_url="https://user:tok@proxy/simple").launch(work_item())
     script, kwargs = next(c for c in calls if "uv pip install" in c[0])
     assert (
-        "anthropic" in script and "proxy" not in script
-    )  # index URL (maybe with credentials) not in the script
+        "--require-hashes -r" in script and "proxy" not in script
+    )  # hash-locked install; the index URL (maybe with credentials) is not in the script
     assert kwargs["envs"]["UV_DEFAULT_INDEX"] == "https://user:tok@proxy/simple"
     assert "tok@" not in kwargs["envs"]["DBX_SPEC"]
 

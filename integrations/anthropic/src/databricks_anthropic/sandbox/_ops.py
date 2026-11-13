@@ -18,6 +18,7 @@ import os
 import re
 import shlex
 import time
+from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
@@ -60,6 +61,11 @@ _UPLOAD_B64_CHUNK = 120 * 1024
 
 class SandboxCommandError(RuntimeError):
     """A command run in the sandbox did not complete with exit code 0."""
+
+
+def tags_of(sandbox: Any) -> dict[str, str]:
+    """A sandbox's custom tags as a dict (empty when it has no metadata or tags)."""
+    return dict(getattr(getattr(sandbox, "metadata", None), "custom_tags", None) or {})
 
 
 def sandbox_name(sandbox_id: str) -> str:
@@ -210,7 +216,8 @@ def start_detached(
         if not key.replace("_", "").isalnum():
             raise ValueError(f"invalid environment variable name {key!r}")
     keep = [*WORKER_ENV_ALLOWLIST, *envs]
-    env_args = " ".join(f'{k}="${{{k}}}"' for k in keep)
+    # ${K+"K=$K"}: pass a variable only if it is set (an unset TZ or LC_ALL stays unset, not "").
+    env_args = " ".join(f'${{{k}+"{k}=${{{k}}}"}}' for k in keep)
     log_dir = shlex.quote(os.path.dirname(log_path))
     script = (
         f"mkdir -p {log_dir}; "
@@ -226,17 +233,48 @@ def start_detached(
     raise SandboxCommandError(f"could not read pid from {out!r}")
 
 
+def _is_our_worker(worker_path: str) -> str:
+    """Shell test: does pid ``$p`` run ``worker_path``?
+
+    The pidfile lives in the persistent home, so after a stop/start it can name a pid that an unrelated
+    process now holds (pids restart low after a boot). Never trust ``kill -0`` alone.
+    """
+    return (
+        f'[ -n "$p" ] && kill -0 "$p" 2>/dev/null && '
+        f"tr '\\0' ' ' </proc/\"$p\"/cmdline 2>/dev/null | grep -qF -- {shlex.quote(worker_path)}"
+    )
+
+
 def live_worker(
-    w: WorkspaceClient, name: str, pid_path: str, work_id_path: str
+    w: WorkspaceClient,
+    name: str,
+    pid_path: str,
+    work_id_path: str,
+    *,
+    worker_path: str,
+    finishing_path: str | None = None,
 ) -> tuple[int, str] | None:
-    """(pid, work id) of a still-running worker, or None if none is alive or it recorded no work id."""
+    """(pid, work id) of a running worker that is still serving, else None.
+
+    None when no process holds the recorded pid, when that pid isn't our worker (stale pidfile after a
+    restart: the stale files are removed), when no work id was recorded, or when the worker is already
+    finishing (``finishing_path`` exists: it is exporting or deleting its sandbox and will not serve a
+    new turn, so the caller must replace it).
+    """
+    pid, work_id = shlex.quote(pid_path), shlex.quote(work_id_path)
+    finishing = (
+        f"if [ -e {shlex.quote(finishing_path)} ]; then echo finishing; else "
+        if finishing_path
+        else "if false; then :; else "
+    )
     out = (
         run(
             w,
             name,
-            f"p=$(cat {shlex.quote(pid_path)} 2>/dev/null); "
-            f'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then '
-            f'echo "$p $(cat {shlex.quote(work_id_path)} 2>/dev/null)"; fi',
+            f"p=$(cat {pid} 2>/dev/null); "
+            f"if {_is_our_worker(worker_path)}; then "
+            f'{finishing}echo "$p $(cat {work_id} 2>/dev/null)"; fi; '
+            f"else rm -f {pid} {work_id}; fi",
             check=False,
         ).stdout
         or ""
@@ -251,21 +289,46 @@ def is_alive(w: WorkspaceClient, name: str, pid: int) -> bool:
     return "ALIVE" in out
 
 
-def stop_pidfile_process(
-    w: WorkspaceClient, name: str, pid_path: str, *, marker_path: str, grace_s: int = 10
-) -> None:
-    """Terminate the process group recorded in ``pid_path`` (a previous worker) and wait for it to exit.
+def alive_with_log(
+    w: WorkspaceClient, name: str, pid: int, log_path: str, lines: int = 40
+) -> tuple[bool, str]:
+    """Whether ``pid`` runs, plus the tail of ``log_path``, from a single exec. Raises NotFound."""
+    out = (
+        run(
+            w,
+            name,
+            f"ps -p {int(pid)} >/dev/null && echo ALIVE || echo DEAD; "
+            f"tail -n {int(lines)} {shlex.quote(log_path)} 2>&1",
+            check=False,
+        ).stdout
+        or ""
+    )
+    first, _, rest = out.partition("\n")
+    return first.strip() == "ALIVE", rest
 
-    ``marker_path`` exists while this runs: a worker that sees it on exit is being replaced, so it skips
-    its delete/stop step (otherwise it would delete or stop the sandbox its replacement is about to use).
-    TERM first (the worker flushes memory stores), KILL after ``grace_s``; the marker is removed once the
-    old worker is gone, so the replacement's own exit step runs normally.
+
+def stop_pidfile_process(
+    w: WorkspaceClient,
+    name: str,
+    pid_path: str,
+    *,
+    marker_path: str,
+    worker_path: str,
+    grace_s: int = 10,
+) -> None:
+    """Terminate the previous worker recorded in ``pid_path`` (and its process group) and wait for it to exit.
+
+    Only a pid that is running ``worker_path`` is signalled: after a stop/start the pidfile can name an
+    unrelated process. ``marker_path`` exists while this runs: a worker that sees it on exit is being
+    replaced, so it skips its delete/stop step (otherwise it would delete or stop the sandbox its
+    replacement is about to use). TERM first (the worker flushes memory stores), KILL after ``grace_s``;
+    the marker is removed once the old worker is gone, so the replacement's own exit step runs normally.
     """
     pid, marker = shlex.quote(pid_path), shlex.quote(marker_path)
     run(
         w,
         name,
-        f'p=$(cat {pid} 2>/dev/null); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then '
+        f"p=$(cat {pid} 2>/dev/null); if {_is_our_worker(worker_path)}; then "
         f"touch {marker}; "
         'kill -TERM -"$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; '
         f'for _ in $(seq {int(grace_s) * 2}); do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done; '

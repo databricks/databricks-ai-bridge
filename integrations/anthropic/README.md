@@ -23,8 +23,8 @@ Claude Console / your app          Anthropic                       Databricks wo
 ```
 
 - **Outbound only.** The App long-polls Anthropic; nothing calls into the workspace.
-- **One sandbox per session.** It is created on the session's first message, bootstrapped (`uv` venv with exactly
-  pinned packages), and gets the worker, whose file hash is checked when it starts.
+- **One sandbox per session.** It is created on the session's first message, bootstrapped (`uv` venv installed from
+  hash-locked requirements, `--require-hashes`), and gets the worker, whose file hash is checked when it starts.
 - **Narrow credentials.** The environment key, which can claim any session, stays in the App. A sandbox only gets
   its own work item's session token, in a `0600` file the worker reads and deletes before any tool runs. That token
   cannot read the work queue, other sessions, or memory stores that aren't attached to the session. The App never

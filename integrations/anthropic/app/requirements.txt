@@ -1,4 +1,4 @@
-# Exact pins (H6). The connector wheel is built from packages/databricks-anthropic by scripts/build_wheel.sh.
+# Exact pins. The connector wheel is built from the package next to app/ by scripts/build_wheel.sh.
 ./wheels/databricks_anthropic-0.1.0-py3-none-any.whl
 anthropic==2.3.0
 databricks-sdk[sandbox]==0.159.0

@@ -105,6 +105,7 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
   workers keep their session tokens; new launches use the new key.
 - **Rotate the HMAC key** (`put_secrets.py --rotate-hmac`) only with no sessions running: existing sandbox names stop
   matching.
+- **Shutdown and redeploys** wait for launches the App has already claimed (each is an acknowledged turn; cancelling it would drop that turn), so a stop can take as long as the slowest launch, bounded by the platform's termination grace period.
 - **Stop serving:** `databricks apps stop cma-dispatcher-<target>`. Sessions on the environment then wait in the
   queue.
 

@@ -7,7 +7,7 @@ Routes (all behind the Apps proxy, so only users with CAN_USE on the App reach t
   GET /api/health  200 while the poll loop runs, 503 otherwise (the Apps proxy answers /healthz itself)
 
 There are no write routes in M1: sessions are created in the Claude Console or with the Anthropic API on the
-service-mode environment, and this App serves them. See docs/design/hosted-dispatcher.md.
+service-mode environment, and this App serves them. See app/README.md.
 """
 
 from __future__ import annotations

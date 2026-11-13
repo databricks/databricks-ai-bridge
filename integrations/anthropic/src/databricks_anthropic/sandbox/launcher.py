@@ -54,14 +54,18 @@ WORKER_WORK_ID = f"{TOOLS_DIR}/worker.work_id"
 WORKER_SECRETS = f"{TOOLS_DIR}/worker.secrets"
 # Present while a previous worker is being replaced: that worker then skips its delete/stop step.
 WORKER_REPLACING = f"{TOOLS_DIR}/worker.replacing"
+# Written by a worker when it starts finishing (export, then delete or stop): it will not serve another turn,
+# so a new turn for the session must replace it rather than reuse it. Cleared when a new worker starts.
+WORKER_FINISHING = f"{TOOLS_DIR}/worker.finishing"
 VENV_MARKER = f"{TOOLS_DIR}/venv.spec"
 DEFAULT_WORKDIR = f"{HOME_DIR}/agent-workspace"
 # EnvironmentWorker downloads attached memory stores to /mnt/memory/<store-name>/. `/` is an ephemeral
 # overlay (wiped on stop) owned by root, so the launcher recreates it via the image's passwordless sudo.
 MEMORY_DIR = "/mnt/memory"
 
-# Exact pins for the in-sandbox venv (supply chain: a fresh resolve never pulls an unreviewed release). Each
-# pin must satisfy the package's own range in pyproject.toml (unit-tested). The worker imports anthropic.lib.*.
+# Exact top-level pins for the in-sandbox venv. The venv itself is installed from hash-locked requirements
+# generated from these pins (worker-requirements*.txt, scripts/lock_worker.sh), so every dependency is pinned
+# too. Each pin must satisfy the package's range in pyproject.toml (unit-tested). The worker imports anthropic.lib.*.
 WORKER_PACKAGES = ("anthropic==2.3.0", "databricks-sdk[sandbox]==0.159.0")
 
 # Tags written on every sandbox at creation; cleanup uses them to find the owning session.
@@ -239,7 +243,7 @@ class DatabricksSandboxLauncher:
         tags (written at creation) plus an unpredictable name (``sandbox_id_key``) are the check.
         """
         sandbox = self.workspace_client.sandbox.get_sandbox(name)
-        tags = dict((sandbox.metadata.custom_tags or {}) if sandbox.metadata else {})
+        tags = _ops.tags_of(sandbox)
         expected = {
             TAG_MANAGED_BY: MANAGED_BY,
             TAG_SESSION: session_id,
@@ -323,6 +327,7 @@ class DatabricksSandboxLauncher:
             "ANTHROPIC_SESSION_ID": work.data.id,
             "CMA_SECRETS_FILE": WORKER_SECRETS,
             "CMA_REPLACING_MARKER": WORKER_REPLACING,
+            "CMA_FINISHING_MARKER": WORKER_FINISHING,
             "CMA_ANTHROPIC_BASE_URL": self.anthropic_base_url,
             "DBX_SANDBOX_NAME": sandbox_name,
             "CMA_WORKDIR": self.workdir,
@@ -352,7 +357,16 @@ class DatabricksSandboxLauncher:
         name, created = self.ensure_sandbox(session_id)
         try:
             if not created:
-                live = _ops.live_worker(w, name, WORKER_PID, WORKER_WORK_ID)
+                live = _ops.live_worker(
+                    w,
+                    name,
+                    WORKER_PID,
+                    WORKER_WORK_ID,
+                    worker_path=WORKER_PATH,
+                    finishing_path=WORKER_FINISHING,
+                )
+                # Work ids are per session, so a new turn arrives with the same id as the last one: a live,
+                # non-finishing worker for it is already serving the session.
                 if live is not None and live[1] == work.id:
                     # Re-delivered item whose worker is still running: never start a second one.
                     log.info("worker for work=%s already running in %s; leaving it", work.id, name)
@@ -365,15 +379,23 @@ class DatabricksSandboxLauncher:
                     )
             self._prepare_memory_dir(name)
             worker_sha256 = self._bootstrap(name)
-            # A resumed session may still have the previous item's worker; replace it.
-            _ops.stop_pidfile_process(w, name, WORKER_PID, marker_path=WORKER_REPLACING)
+            # A resumed session may still have the previous item's worker (or one that is finishing); replace it.
+            _ops.stop_pidfile_process(
+                w, name, WORKER_PID, marker_path=WORKER_REPLACING, worker_path=WORKER_PATH
+            )
+            if not created and not self._still_usable(name):
+                # The previous worker deleted the sandbox as it finished, before it saw the replace marker.
+                log.warning("%s was deleted by its previous worker; recreating it", name)
+                name, created = self.ensure_sandbox(session_id)
+                self._prepare_memory_dir(name)
+                worker_sha256 = self._bootstrap(name)
             _ops.upload_text(w, name, WORKER_SECRETS, json.dumps(secrets), mode="600")
             pid = _ops.start_detached(
                 w,
                 name,
                 # Verify the worker file in the same exec that starts it, and record the work id it serves.
                 f"echo {worker_sha256}'  '{WORKER_PATH} | sha256sum -c --quiet - || exit 97; "
-                f'printf %s "$ANTHROPIC_WORK_ID" > {WORKER_WORK_ID}; '
+                f'rm -f {WORKER_FINISHING}; printf %s "$ANTHROPIC_WORK_ID" > {WORKER_WORK_ID}; '
                 f"mkdir -p {shlex.quote(self.workdir)} && cd {shlex.quote(self.workdir)} && "
                 f"exec {VENV_PYTHON} -I {WORKER_PATH}",
                 log_path=WORKER_LOG,
@@ -381,9 +403,16 @@ class DatabricksSandboxLauncher:
                 envs=envs,
             )
             time.sleep(self.confirm_s)
-            if not _ops.is_alive(w, name, pid):
+            # Liveness and the log tail in one call, so the reason survives even if the sandbox goes away next.
+            try:
+                alive, log_tail = _ops.alive_with_log(w, name, pid, WORKER_LOG)
+            except NotFound as e:
                 raise _ops.SandboxCommandError(
-                    f"worker exited right after launch in {name}:\n{_ops.tail(w, name, WORKER_LOG)}"
+                    f"{name} was deleted while its worker was starting; see the App or dispatcher log"
+                ) from e
+            if not alive:
+                raise _ops.SandboxCommandError(
+                    f"worker exited right after launch in {name}:\n{log_tail}"
                 )
         except BaseException:
             # Never leak a sandbox we just created if bring-up fails.
@@ -405,6 +434,16 @@ class DatabricksSandboxLauncher:
         )
         return LaunchResult(sandbox_name=name, pid=pid, created=created, seconds=seconds)
 
+    def _still_usable(self, name: str) -> bool:
+        """False if the sandbox is gone; otherwise make sure it is running (a finishing worker may have stopped it)."""
+        try:
+            state = _ops.state_of(self.workspace_client, name)
+        except NotFound:
+            return False
+        if state != _ops.SandboxState.SANDBOX_STATE_RUNNING:
+            _ops.ensure_running(self.workspace_client, name)
+        return True
+
     def _prepare_memory_dir(self, name: str) -> None:
         """Make /mnt/memory writable for the worker (needed for memory stores); runs on every launch."""
         out = (
@@ -425,27 +464,47 @@ class DatabricksSandboxLauncher:
                 "%s is not writable in %s; memory stores will fail to mount", MEMORY_DIR, name
             )
 
+    def worker_lock(self) -> tuple[str, str]:
+        """(file name, contents) of the hash-locked requirements for this launcher's worker venv."""
+        filename = "worker-requirements-mcp.txt" if self.mcp_servers else "worker-requirements.txt"
+        return filename, resources.files("databricks_anthropic.sandbox").joinpath(
+            filename
+        ).read_text()
+
     def _bootstrap(self, name: str) -> str:
-        """Idempotently build the worker venv (persists across stop/start), upload the worker; return its sha256."""
+        """Idempotently build the worker venv (persists across stop/start), upload the worker; return its sha256.
+
+        The venv is installed from a hash-locked requirements file (every package, with ``--require-hashes``),
+        so a fresh sandbox never resolves an unreviewed release. ``extra_packages`` are installed afterwards
+        without hashes (an advanced option; document what you add).
+        """
         w = self.workspace_client
+        lock_name, lock = self.worker_lock()
+        lock_path = f"{TOOLS_DIR}/{lock_name}"
         # The index URL may embed credentials: only its hash goes on disk, and it reaches uv via env.
         index_tag = (
             hashlib.sha256(self.index_url.encode()).hexdigest()[:12] if self.index_url else ""
         )
-        spec = " ".join(sorted(self.packages())) + (
-            f" index-sha256={index_tag}" if index_tag else ""
+        spec = " ".join(
+            [
+                f"lock-sha256={hashlib.sha256(lock.encode()).hexdigest()[:16]}",
+                *sorted(self.extra_packages),
+                *([f"index-sha256={index_tag}"] if index_tag else []),
+            ]
         )
         current = _ops.run(w, name, f"cat {VENV_MARKER} 2>/dev/null", check=False).stdout or ""
         if current.strip() != spec:
-            pkgs = " ".join(shlex.quote(p) for p in self.packages())
+            _ops.upload_text(w, name, lock_path, lock)
+            extra = " ".join(shlex.quote(p) for p in self.extra_packages)
             # The default image ships python3 + uv but not pip.
             _ops.run(
                 w,
                 name,
                 f"set -e; mkdir -p {TOOLS_DIR}; "
                 f"[ -x {VENV_PYTHON} ] || uv venv --quiet --python python3 {VENV_DIR}; "
-                f"uv pip install --quiet --python {VENV_PYTHON} {pkgs}; "
-                f'printf %s "$DBX_SPEC" > {VENV_MARKER}',
+                f"uv pip install --quiet --python {VENV_PYTHON} --require-hashes -r {lock_path}; "
+                + (f"uv pip install --quiet --python {VENV_PYTHON} {extra}; " if extra else "")
+                + f'printf %s "$DBX_SPEC" > {VENV_MARKER}',
                 envs={
                     "DBX_SPEC": spec,
                     **({"UV_DEFAULT_INDEX": self.index_url} if self.index_url else {}),

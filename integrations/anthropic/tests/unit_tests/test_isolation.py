@@ -86,7 +86,8 @@ def ops(monkeypatch):
         ("stop_pidfile_process", None),
         ("live_worker", None),
         ("start_detached", 4242),
-        ("is_alive", True),
+        ("alive_with_log", (True, "")),
+        ("state_of", _ops.SandboxState.SANDBOX_STATE_RUNNING),
         ("delete_quietly", None),
         ("upload_text", None),
         ("tail", ""),
@@ -174,8 +175,8 @@ def test_worker_starts_under_env_i_with_allowlist(monkeypatch):
     script, kwargs = scripts[0]
     assert pid == 7 and " env -i " in script and "--noprofile --norc -c" in script
     assert (
-        'CMA_X="${CMA_X}"' in script
-        and 'DATABRICKS_CONFIG_FILE="${DATABRICKS_CONFIG_FILE}"' in script
+        '${CMA_X+"CMA_X=${CMA_X}"}' in script
+        and '${DATABRICKS_CONFIG_FILE+"DATABRICKS_CONFIG_FILE=${DATABRICKS_CONFIG_FILE}"}' in script
     )
     assert "PYTHONPATH" not in script and "LD_PRELOAD" not in script
     assert kwargs["envs"] == {"CMA_X": "1"}  # values via the exec env, never the command line
@@ -248,7 +249,7 @@ def test_already_exists_squatted_name_is_refused(ops, monkeypatch):
 def test_redelivered_item_with_live_worker_is_left_alone(ops, monkeypatch):
     lc = make_launcher()
     get_sandbox(lc).return_value = tagged()
-    monkeypatch.setattr(_ops, "live_worker", lambda *a: (99, "work_1"))
+    monkeypatch.setattr(_ops, "live_worker", lambda *a, **k: (99, "work_1"))
     result = lc.launch(work(work_id="work_1"))
     assert result.reused and result.pid == 99
     assert "stop_pidfile_process" not in ops and "start_detached" not in ops
@@ -257,18 +258,23 @@ def test_redelivered_item_with_live_worker_is_left_alone(ops, monkeypatch):
 def test_new_item_replaces_previous_worker(ops, monkeypatch):
     lc = make_launcher()
     get_sandbox(lc).return_value = tagged()
-    monkeypatch.setattr(_ops, "live_worker", lambda *a: (99, "work_OLD"))
+    monkeypatch.setattr(_ops, "live_worker", lambda *a, **k: (99, "work_OLD"))
     result = lc.launch(work(work_id="work_2"))
     assert not result.reused and len(ops["stop_pidfile_process"]) == 1
 
 
 def test_live_worker_parses_pid_and_work_id(monkeypatch):
     monkeypatch.setattr(_ops, "run", lambda *a, **k: SimpleNamespace(stdout="123 work_9\n"))
-    assert _ops.live_worker(MagicMock(), "s", "/p", "/w") == (123, "work_9")
+    assert _ops.live_worker(MagicMock(), "s", "/p", "/w", worker_path="/x/worker.py") == (
+        123,
+        "work_9",
+    )
     monkeypatch.setattr(_ops, "run", lambda *a, **k: SimpleNamespace(stdout=""))
-    assert _ops.live_worker(MagicMock(), "s", "/p", "/w") is None
+    assert _ops.live_worker(MagicMock(), "s", "/p", "/w", worker_path="/x/worker.py") is None
     monkeypatch.setattr(_ops, "run", lambda *a, **k: SimpleNamespace(stdout="123\n"))
-    assert _ops.live_worker(MagicMock(), "s", "/p", "/w") is None  # no work id recorded
+    assert (
+        _ops.live_worker(MagicMock(), "s", "/p", "/w", worker_path="/x/worker.py") is None
+    )  # no work id recorded
 
 
 # ---------------------------------------------------------------- H6 / H7

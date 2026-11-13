@@ -1,4 +1,4 @@
-# Hosted dispatcher (M1, service mode) as a Databricks App. See docs/design/hosted-dispatcher.md.
+# Dispatcher (service mode) as a Databricks App. See README.md in this folder.
 #
 #   app/scripts/deploy.sh <target> <profile> <environment id> [--store-secrets [KEY_ENV_VAR]] [-- <bundle args>]
 # builds the wheel, deploys, stores the secrets, and starts the App, with the CLI attributed to the connector.

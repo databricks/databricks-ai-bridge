@@ -132,9 +132,21 @@ def test_sweep_keeps_sandbox_when_session_lookup_fails():
 def test_relaunch_marks_replacement_and_waits_for_old_worker(monkeypatch):
     scripts = []
     monkeypatch.setattr(_ops, "run", lambda w, n, s, **k: scripts.append(s))
-    _ops.stop_pidfile_process(MagicMock(), "sb", "/x/worker.pid", marker_path="/x/worker.replacing")
+    _ops.stop_pidfile_process(
+        MagicMock(),
+        "sb",
+        "/x/worker.pid",
+        marker_path="/x/worker.replacing",
+        worker_path="/x/worker.py",
+    )
     script = scripts[0]
-    assert script.index("touch /x/worker.replacing") < script.index("kill -TERM")
+    # Only a pid running our worker is signalled (a stale pidfile after a restart can name another process).
+    assert (
+        script.index("/proc/")
+        < script.index("touch /x/worker.replacing")
+        < script.index("kill -TERM")
+    )
+    assert "grep -qF -- /x/worker.py" in script
     assert "kill -0" in script and "kill -KILL" in script
     assert script.rstrip().endswith("rm -f /x/worker.replacing; true")
 
