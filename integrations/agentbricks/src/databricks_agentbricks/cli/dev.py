@@ -19,6 +19,7 @@ from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use, route_exists
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.clients.uv import uv_sync
+from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
@@ -44,13 +45,17 @@ _clock = time.monotonic
 
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
+    diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
+    diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks),
+        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
         uv_sync=uv_sync,
+        diagnostics=diagnostics,
     )
 
 

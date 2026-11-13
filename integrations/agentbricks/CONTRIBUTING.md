@@ -186,6 +186,27 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
+The emitter follows bounded explicit exception causes and maps exception types and allowlisted
+service codes directly to the existing centralized `error_category`. `AgentCliError.failure_detail`
+and `subprocess_exit_code` preserve child output and status without changing the displayed message
+or process exit code. The CLI-independent scrubber lives in `telemetry/scrub.py`; Click context
+handling and upload orchestration remain in `cli/telemetry.py`.
+Workflow stages, readiness, child exit codes, and operation IDs
+are not part of the log schema. The only new wire field is top-level `failure_message`, which carries
+up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
+credential, path, and email scrubbing; this remains sensitive, labeled
+`DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
+Combined exception, cause, and subprocess text over 65,536 characters is omitted before
+scrubbing so the input limit cannot discard credential context.
+Do not add raw text to centralizable fields. Privacy review is tracked in
+[LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
+[LPP-5543](https://databricks.atlassian.net/browse/LPP-5543). LPP-8330 is approved; collection
+must satisfy its regional retention, access, and customer-policy controls.
+Regional logging and CMK policies can remove the text entirely; central analytics must use the
+existing command, exit-code, and error-category fields and account for missing text. Deploy the matching
+`proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
+a CLI that emits `failure_message`.
+
 Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
 upload against the fake workspace's receiver. It verifies the FrontendLog payload without workspace

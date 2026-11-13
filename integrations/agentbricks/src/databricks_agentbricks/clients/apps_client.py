@@ -20,9 +20,14 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from databricks_agentbricks.clients.databricks_cli import _databricks
+from databricks_agentbricks.clients.databricks_cli import (
+    APP_BUSY_MARKER,
+    DatabricksCliResult,
+    _databricks,
+)
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.local_ports import accepts_connections
+from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
@@ -30,7 +35,6 @@ DatabricksRunner = Callable[..., subprocess.CompletedProcess]
 # Apps rejects a change while another operation (a create, an update, a deployment) is still running
 # on the App, and asks the caller to retry. Only that error is retried, and only for calls that
 # re-send the same idempotent request: a deploy, a scale update, and masked resource updates.
-_APP_BUSY_MARKER = "another operation is in progress"
 # Seconds to wait before each retry: about two minutes in total before giving up.
 _APP_BUSY_BACKOFF_S = (5, 10, 15, 20, 30, 30)
 
@@ -107,7 +111,9 @@ def _is_app_busy(result: subprocess.CompletedProcess) -> bool:
     """Whether a failed Apps call failed only because another operation is running on the App."""
     if result.returncode == 0:
         return False
-    return _APP_BUSY_MARKER in f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+    if isinstance(result, DatabricksCliResult):
+        return result.app_busy
+    return APP_BUSY_MARKER in f"{result.stdout or ''}\n{result.stderr or ''}".lower()
 
 
 def _app_busy_hint(name: str) -> str:
@@ -163,12 +169,14 @@ class AppsClient:
         runner: DatabricksRunner = _databricks,
         on_busy: Optional[Callable[[str], None]] = None,
         sleep: Callable[[float], None] = time.sleep,
+        diagnostics: CommandDiagnostics | None = None,
     ) -> None:
         self._profile = profile
         self._run = runner
         self._on_busy = on_busy
         self._sleep = sleep
         self._sp_cache: dict[str, str] = {}
+        self._diagnostics = diagnostics or CommandDiagnostics()
 
     def _run_app_change(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         """Run one App-modifying call, retrying while Apps reports another operation in progress.
@@ -574,10 +582,12 @@ class AppsClient:
             return
 
         started = False
+        self._diagnostics.starting_local_agent()
 
         def _on_ready() -> None:
             nonlocal started
             started = True
+            self._diagnostics.local_agent_listened()
             on_ready()
 
         result = self._run(
@@ -590,15 +600,21 @@ class AppsClient:
             on_ready=_on_ready,
             quiet_status=quiet_status,
         )
+        self._diagnostics.subprocess_exit_code = result.returncode
         if result.returncode != 0:
+            detail = (result.stderr or "").strip() or (result.stdout or "").strip() or None
             if started:
                 raise AgentCliError(
                     "The local agent stopped unexpectedly.",
                     hint="See the output above for the cause.",
+                    subprocess_exit_code=result.returncode,
+                    failure_detail=detail,
                 )
             raise AgentCliError(
                 "Could not start the agent locally.",
                 hint="See the output above for the cause.",
+                subprocess_exit_code=result.returncode,
+                failure_detail=detail,
             )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:

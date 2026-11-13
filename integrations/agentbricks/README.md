@@ -126,7 +126,27 @@ scripting.
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Parameter entries include explicitly supplied options
+nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
+error text in `failure_message`. Error text includes exception messages and fully captured
+failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
+Combined failure text over 65,536 characters is also omitted before scrubbing.
+Credential assignments, auth headers, credential options, and encoded text cause the remaining
+captured text to be omitted; preceding diagnostic text is retained. This avoids parsing arbitrary
+JSON, YAML, or Python values. Recognizable standalone tokens and private keys are also masked.
+This follows the Asset Bundles minimization pattern and is best effort; other customer content
+may remain in service responses or application output.
+It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
+regionally only where customer logging and encryption policies permit. Error text is omitted for
+parser errors and interruptions. Collection requires Legal approval and schema deployment.
+For `dev`, failure text can include complete child output up to 3072 bytes per captured stream.
+Once a stream exceeds that limit, all its retained text is permanently discarded and replaced with
+`[REDACTED]`, including later plain error messages, because partial output may have lost credential
+context. Short complete output is scrubbed before upload, including private keys. Displayed child
+output is unchanged. With one output stream redirected, the terminal stream is inherited unchanged
+and only the redirected stream is retained. When both streams point to the same regular file, both
+are inherited without capture to preserve their original offsets and redirection behavior.
+Startup milestones remain internal; a killed process or unavailable upload can still leave no event.
+Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
 values; fallbacks applied only inside command callbacks are not visible to Click. Omitted free-form
@@ -136,9 +156,8 @@ choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numer
 contribute their typed values; explicitly supplied non-finite floats and integers outside the log
 schema's 64-bit range remain presence-only, while unsupported defaults are omitted. Hidden and
 deprecated options follow the same policy, and repeated
-options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
-raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
-messages are omitted. Set
+options contribute one parameter entry per supplied value, up to 64 entries. Parameter telemetry
+omits positional arguments, raw command arguments, paths, IDs, and arbitrary free-form values. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
 
 Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help

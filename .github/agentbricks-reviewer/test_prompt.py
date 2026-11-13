@@ -17,9 +17,9 @@ class PromptTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         self.root = root
         self.workflow = (root / ".github/workflows/agentbricks-reviewer.yml").read_text()
-        start = self.workflow.index(
-            "          import hashlib, html, json, os, pathlib\n"
-        )
+        step = self.workflow.index("      - name: Collect PR context and build prompt\n")
+        opening = "          python3 - <<'PYEOF'\n"
+        start = self.workflow.index(opening, step) + len(opening)
         end = self.workflow.index("\n          PYEOF", start)
         builder = "\n".join(
             line[10:] for line in self.workflow[start:end].splitlines()
@@ -51,7 +51,10 @@ class PromptTest(unittest.TestCase):
             (scratch / "pr_changed_paths.json").write_text(json.dumps(changed_paths))
             (scratch / "lockfile_pins.txt").write_text("")
             (scratch / "linked_issues.json").write_text(json.dumps({"issues": []}))
-            with patch.dict(os.environ, {"GITHUB_WORKSPACE": str(workspace)}):
+            with (
+                patch.dict(os.environ, {"GITHUB_WORKSPACE": str(workspace)}),
+                patch.object(sys, "path", [str(self.root / ".github/scripts"), *sys.path]),
+            ):
                 exec(compile(tree, "workflow-prompt-builder", "exec"), {})
             return (scratch / "review_prompt.txt").read_text()
 
