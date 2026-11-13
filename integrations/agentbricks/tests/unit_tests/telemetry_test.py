@@ -785,6 +785,50 @@ def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, d
     assert "Request failed" in payload
 
 
+def test_uploaded_failure_masks_escaped_url_credentials(monkeypatch):
+    api = _ApiClient()
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    error = AgentCliError(r"Connection failed: https://user:synthetic-prefix\u0031@host/db")
+    telemetry.emit_command(_Context(api), exit_code=1, exception=error)
+
+    assert len(api.calls) == 1
+    payload = api.calls[0][2]
+    log = _inner(payload)["agentbricks_cli_log"]
+    assert log["failure_message"] == "Connection failed: https://[REDACTED]@host/db"
+    assert "synthetic-prefix" not in json.dumps(payload)
+    assert log["exit_code"] == 1
+
+
+@pytest.mark.parametrize("source", ["message", "detail", "cause", "combined"])
+def test_oversized_failure_text_is_omitted_from_uploaded_payload(monkeypatch, source):
+    api = _ApiClient()
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    oversized = "synthetic-over-budget " + "x" * 65536
+    if source == "message":
+        error = AgentCliError(oversized)
+    elif source == "detail":
+        error = AgentCliError("Request failed", failure_detail=oversized)
+    elif source == "cause":
+        error = AgentCliError("Request failed")
+        error.__cause__ = RuntimeError(oversized)
+    else:
+        error = AgentCliError("a" * 32768, failure_detail="b" * 32768)
+    displayed_message = str(error)
+
+    telemetry.emit_command(
+        _Context(api), exit_code=1, error_category="ERROR_CATEGORY_RUNTIME", exception=error
+    )
+
+    assert len(api.calls) == 1
+    payload = api.calls[0][2]
+    log = _inner(payload)["agentbricks_cli_log"]
+    assert "failure_message" not in log
+    assert "synthetic-over-budget" not in json.dumps(payload)
+    assert log["exit_code"] == 1
+    assert log["error_category"] == "ERROR_CATEGORY_RUNTIME"
+    assert str(error) == displayed_message
+
+
 def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeypatch):
     api = _ApiClient()
     context = _Context(api)
