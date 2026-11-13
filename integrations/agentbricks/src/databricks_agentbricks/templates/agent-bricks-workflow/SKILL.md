@@ -16,6 +16,8 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
   Inspect `agent.toml` and the generated project instructions before changing integration points.
 - **Existing agent adoption:** inspect its framework, then use
   `agentbricks init --existing --framework <framework> <directory>` when migration is requested.
+  A hand-written `DurableAgentServer` with no framework adapter uses `framework = "custom"` and
+  `server = "agentbricks"` in `agent.toml`.
   Read the generated `agent-bricks-migrate/SKILL.md` and its references. Migration remains a separate
   workflow because it must preserve existing state and client contracts. Do not scaffold over an
   existing application or migrate it merely to debug a CLI command.

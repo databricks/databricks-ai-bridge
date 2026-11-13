@@ -41,6 +41,11 @@ def announce_bound_resources(preview: DevPreview) -> None:
         )
 
 
+def announce_installing() -> None:
+    """Say why the next stretch of output is uv's: dev is building the environment first."""
+    render.console().print(f"[{render.DIM}]Installing dependencies…[/]")
+
+
 def announce_starting() -> None:
     """Say the agent is starting, in a neutral style: success is shown only once it answers.
 
@@ -77,8 +82,14 @@ def announce_local_url(
     trace_url: str | None = None,
     *,
     has_chat_ui: bool | None = None,
+    uses_runtime_api: bool | None = None,
+    elapsed: float | None = None,
 ) -> None:
-    """Show the chat URL or an invocation example once the local agent is answering."""
+    """Show the chat URL or an invocation example once the local agent is answering.
+
+    ``uses_runtime_api`` is what the running app serves (``/api/invocations``); None guesses it from
+    the project. ``elapsed`` is the seconds since the command started.
+    """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     if has_chat_ui is None:
@@ -88,14 +99,16 @@ def announce_local_url(
         if server == AgentServer.CUSTOM
         else ("agentbricks tools add mcp <service>", "Give the agent a tool")
     )
-    uses_runtime_api = has_chat_ui or server == AgentServer.AGENTBRICKS
+    if uses_runtime_api is None:
+        uses_runtime_api = has_chat_ui or server == AgentServer.AGENTBRICKS
+    title = "Agent ready" if elapsed is None else f"Agent ready in {format_elapsed(elapsed)}"
     invoke_step = agent_invoke_step(f"--url {base}", uses_runtime_api=uses_runtime_api)
     if has_chat_ui:
         fields = {"Chat UI": base}
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
-            "Agent is running",
+            title,
             fields=fields,
             next_steps=[
                 f"Open {base} to chat with your agent",
@@ -118,7 +131,7 @@ def announce_local_url(
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
-            "API-only agent is running (no chat UI — see `agentbricks init --help`)",
+            title,
             fields=fields,
             next_steps=[
                 (sample, "Send a test request"),

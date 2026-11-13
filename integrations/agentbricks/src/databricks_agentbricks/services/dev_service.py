@@ -14,6 +14,9 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+import tomlkit
+from tomlkit.exceptions import ParseError
+
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
@@ -80,8 +83,12 @@ class DevPlan:
 
     preview: DevPreview
     entry_point: pathlib.Path
+    # Build the environment through `apps run-local --prepare-environment`.
     prepare_environment: bool
     app_port: int
+    # Build it with `uv sync` instead, so only the project's declared dependencies are installed
+    # (run-local's prepare also installs the Apps runtime's preinstalled packages).
+    install_dependencies: bool = False
 
 
 class DevService:
@@ -91,6 +98,8 @@ class DevService:
     It does not own output or a workspace client; those concerns are supplied by the CLI through
     ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, and
     ``free_port`` picks one for the app behind run-local's proxy, so tests need no real sockets.
+    ``uv_sync`` builds a pyproject project's environment. ``diagnostics`` records bounded failure
+    facts for telemetry.
     """
 
     def __init__(
@@ -100,6 +109,7 @@ class DevService:
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
         free_port: Callable[[], int],
+        uv_sync: Callable[[pathlib.Path], None],
         diagnostics: CommandDiagnostics | None = None,
     ) -> None:
         self._project_resolver = project_resolver
@@ -107,6 +117,7 @@ class DevService:
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
         self._free_port = free_port
+        self._uv_sync = uv_sync
         self._diagnostics = diagnostics or CommandDiagnostics()
 
     @contextmanager
@@ -155,10 +166,11 @@ class DevService:
             with self._diagnostics.phase(FailureStage.PROJECT):
                 # Repeat runs reuse an existing environment; an explicit request overrides that
                 # auto-detection exactly as the old Click command did.
-                prepare_environment = request.prepare_environment
-                if prepare_environment is None:
-                    prepare_environment = not (source_dir / ".venv").exists()
-                self._diagnostics.prepare_environment = prepare_environment
+                build = request.prepare_environment
+                if build is None:
+                    build = not (source_dir / ".venv").exists()
+                self._diagnostics.prepare_environment = build
+                sync_with_uv = _builds_with_uv_sync(source_dir)
 
                 local_env = dict(tracing_env)
                 if memory_store:
@@ -187,10 +199,11 @@ class DevService:
             yield DevPlan(
                 preview=preview,
                 entry_point=entry_point,
-                prepare_environment=prepare_environment,
+                prepare_environment=build and not sync_with_uv,
                 # The user-facing port is run-local's proxy; the app gets a free port behind it so
                 # concurrent runs don't collide on run-local's default app or proxy port.
                 app_port=app_port,
+                install_dependencies=build and sync_with_uv,
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
@@ -215,6 +228,8 @@ class DevService:
         ``quiet_status`` gives the line to show while run-local's output is quiet before then.
         """
         with self._diagnostics.phase(FailureStage.RUN_LOCAL):
+            if plan.install_dependencies:
+                self._uv_sync(plan.preview.source_dir)
             self._apps_client.run_local(
                 plan.preview.source_dir,
                 plan.entry_point.name,
@@ -224,6 +239,22 @@ class DevService:
                 on_ready=on_ready,
                 quiet_status=quiet_status,
             )
+
+
+def _builds_with_uv_sync(source_dir: pathlib.Path) -> bool:
+    """Whether ``uv sync`` builds the environment: only for a pyproject with a ``[project]`` table.
+
+    ``uv sync`` installs nothing from requirements.txt, and a tooling-only pyproject has no project
+    to sync, so either keeps run-local's prepare, which installs requirements.txt.
+    """
+    pyproject = source_dir / "pyproject.toml"
+    if not pyproject.is_file() or (source_dir / "requirements.txt").exists():
+        return False
+    try:
+        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+    except (OSError, ParseError):
+        return False
+    return "project" in document
 
 
 def _dev_entry_point(

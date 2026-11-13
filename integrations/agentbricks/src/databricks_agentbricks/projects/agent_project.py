@@ -6,8 +6,9 @@ import os
 import pathlib
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Literal, cast
 
 import tomlkit
@@ -17,6 +18,7 @@ from tomlkit.items import Array, Table
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.types import (
+    CUSTOM_FRAMEWORK,
     AgentFramework,
     AgentServer,
     parse_framework,
@@ -322,46 +324,93 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
-def _prompts_from_manifest(value: object) -> dict[str, str]:
-    """Read ``[experimental.prompts]`` (``key = "catalog.schema.name"``), or {} if there is none."""
+def _prompts_from_manifest(value: object, problems: list[ManifestProblem]) -> dict[str, str]:
+    """Read ``[experimental.prompts]`` (``key = "catalog.schema.name"``), or {} if there is none.
+
+    Each invalid key is recorded in ``problems`` under its own path; the rest are still returned.
+    """
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise AgentCliError(f"agent.toml [{PROMPTS_PATH}] must be a table of key = prompt name.")
+        problems.append(
+            ManifestProblem(
+                PROMPTS_PATH, f"agent.toml [{PROMPTS_PATH}] must be a table of key = prompt name."
+            )
+        )
+        return {}
     prompts: dict[str, str] = {}
     for key, name in cast(Mapping[str, Any], value).items():
-        model_role(key)
-        # Plain str, not tomlkit's String (see _model_services_from_manifest).
-        prompts[str(key)] = str(
-            _three_part_name(_required_string(name, f"[{PROMPTS_PATH}] {key}"), "prompt")
-        )
+        path = f"{PROMPTS_PATH}.{key}"
+        try:
+            model_role(key)
+        except AgentCliError as exc:
+            problems.append(ManifestProblem(path, _problem_text(exc)))
+            continue
+        prompt = _checked(problems, path, partial(_prompt_name, name, f"[{PROMPTS_PATH}] {key}"))
+        if prompt is not None:
+            # Plain str, not tomlkit's String (see _model_services_from_manifest).
+            prompts[str(key)] = prompt
     return prompts
 
 
-def _model_services_from_manifest(value: object) -> dict[str, ModelServiceBinding]:
-    """Read the ``[experimental.model_services.<role>]`` tables, or {} if there are none."""
+def _prompt_name(value: object, where: str) -> str:
+    return str(_three_part_name(_required_string(value, where), "prompt"))
+
+
+def _model_services_from_manifest(
+    value: object, problems: list[ManifestProblem]
+) -> dict[str, ModelServiceBinding]:
+    """Read the ``[experimental.model_services.<role>]`` tables, or {} if there are none.
+
+    Each invalid role or field is recorded in ``problems`` under its own path (for example
+    ``experimental.model_services.router.name``); the valid bindings are still returned.
+    """
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise AgentCliError(f"agent.toml [{MODEL_SERVICES_PATH}] must be a table of roles.")
+        problems.append(
+            ManifestProblem(
+                MODEL_SERVICES_PATH, f"agent.toml [{MODEL_SERVICES_PATH}] must be a table of roles."
+            )
+        )
+        return {}
     bindings: dict[str, ModelServiceBinding] = {}
     for role, table in cast(Mapping[str, Any], value).items():
-        model_role(role)
-        where = f"[{MODEL_SERVICES_PATH}.{role}]"
+        path = f"{MODEL_SERVICES_PATH}.{role}"
+        try:
+            model_role(role)
+        except AgentCliError as exc:
+            problems.append(ManifestProblem(path, _problem_text(exc)))
+            continue
+        where = f"[{path}]"
         if not isinstance(table, Mapping):
-            raise AgentCliError(f"agent.toml {where} must be a table.")
-        name = _three_part_name(
-            _required_string(table.get("name"), f"{where} name"), "model service"
+            problems.append(ManifestProblem(path, f"agent.toml {where} must be a table."))
+            continue
+        table = cast(Mapping[str, Any], table)
+        name = _checked(problems, f"{path}.name", partial(_model_service_name, table, where))
+        default = _checked(
+            problems,
+            f"{path}.{MODEL_SERVICE_DEFAULT_KEY}",
+            partial(_model_service_default, table, where),
         )
-        default = table.get(MODEL_SERVICE_DEFAULT_KEY)
-        if default is not None and not (isinstance(default, str) and default):
-            raise AgentCliError(
-                f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
-            )
-        # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
-        # can't represent tomlkit types.
-        bindings[role] = ModelServiceBinding(str(name), str(default) if default else None)
+        if name is not None:
+            # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
+            # can't represent tomlkit types.
+            bindings[role] = ModelServiceBinding(str(name), default)
     return bindings
+
+
+def _model_service_name(table: Mapping[str, Any], where: str) -> str:
+    return _three_part_name(_required_string(table.get("name"), f"{where} name"), "model service")
+
+
+def _model_service_default(table: Mapping[str, Any], where: str) -> str | None:
+    default = table.get(MODEL_SERVICE_DEFAULT_KEY)
+    if default is not None and not (isinstance(default, str) and default):
+        raise AgentCliError(
+            f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
+        )
+    return str(default) if default else None
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -467,6 +516,218 @@ def _tool_table(spec: ToolSpec) -> Any:
     return table
 
 
+@dataclass(frozen=True)
+class ManifestProblem:
+    """One missing or invalid agent.toml field and what it accepts."""
+
+    field: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.field}: {self.message}"
+
+
+@dataclass(frozen=True)
+class _ManifestFields:
+    """The values `AgentProject.load` reads from a manifest that has no problems."""
+
+    framework: AgentFramework | None = None
+    server: AgentServer = AgentServer.AGENTBRICKS
+    tools: list[ToolSpec] = field(default_factory=list)
+    memory_store: str | None = None
+    session_store: str | None = None
+    memory_store_id: str | None = None
+    deployment_name: str | None = None
+    trace_experiment_name: str | None = None
+    user_auth: tool_manifest.UserAuthConfig | None = None
+    model_services: dict[str, ModelServiceBinding] = field(default_factory=dict)
+    prompts: dict[str, str] = field(default_factory=dict)
+    allowed_origins: tuple[str, ...] = ()
+
+
+def _choices(values: Sequence[str]) -> str:
+    """``a or b`` / ``a, b, or c``."""
+    if len(values) < 3:
+        return " or ".join(values)
+    return f"{', '.join(values[:-1])}, or {values[-1]}"
+
+
+def _rendered(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, str):
+        return f'"{value}"'
+    return str(value)
+
+
+def _invalid(value: object, allowed: str) -> str:
+    return (
+        f"missing; use {allowed}"
+        if value is None
+        else f"{_rendered(value)} is not valid; use {allowed}"
+    )
+
+
+def _problem_text(exc: AgentCliError) -> str:
+    return f"{exc.message} {exc.hint}" if exc.hint else exc.message
+
+
+def _checked(
+    problems: list[ManifestProblem], field_name: str, read: Callable[[], Any], fallback: Any = None
+) -> Any:
+    """Run ``read``; an invalid value is recorded in ``problems`` under ``field_name``."""
+    try:
+        return read()
+    except AgentCliError as exc:
+        problems.append(ManifestProblem(field_name, _problem_text(exc)))
+    except (tool_manifest.ToolManifestError, ValueError) as exc:
+        problems.append(ManifestProblem(field_name, str(exc)))
+    return fallback
+
+
+_FRAMEWORKS = tuple(framework.value for framework in AgentFramework)
+_SERVERS = tuple(server.value for server in AgentServer)
+
+
+def _read_manifest(document: Mapping[str, Any]) -> tuple[_ManifestFields, list[ManifestProblem]]:
+    """Check every agent.toml field, collecting all problems rather than stopping at the first."""
+    problems: list[ManifestProblem] = []
+
+    def problem(field_name: str, message: str) -> None:
+        problems.append(ManifestProblem(field_name, message))
+
+    def checked(field_name: str, read: Callable[[], Any], fallback: Any = None) -> Any:
+        return _checked(problems, field_name, read, fallback)
+
+    schema_version = document.get("schema_version")
+    if schema_version is None:
+        problem("schema_version", f"missing; use {_SCHEMA_VERSION}")
+    elif schema_version != _SCHEMA_VERSION:
+        problem(
+            "schema_version", f"{_rendered(schema_version)} is not supported; use {_SCHEMA_VERSION}"
+        )
+
+    framework: AgentFramework | None = None
+    server: AgentServer | None = None
+    deployment_name: str | None = None
+    agent = document.get("agent")
+    if not isinstance(agent, Mapping):
+        problem("agent", "missing; add an [agent] table with framework and server")
+    else:
+        raw_server = agent.get("server")
+        if isinstance(raw_server, str) and raw_server in _SERVERS:
+            server = AgentServer(raw_server)
+        raw_framework = agent.get("framework")
+        if isinstance(raw_framework, str) and raw_framework in _FRAMEWORKS:
+            framework = AgentFramework(raw_framework)
+        elif raw_framework is None or raw_framework == CUSTOM_FRAMEWORK:
+            # A hand-written agent on the Agent Bricks server needs no framework adapter.
+            if server == AgentServer.CUSTOM:
+                problem(
+                    "agent.framework",
+                    _invalid(None, _choices(_FRAMEWORKS))
+                    if raw_framework is None
+                    else f'"{CUSTOM_FRAMEWORK}" needs agent.server = "agentbricks"; '
+                    f"use {_choices(_FRAMEWORKS)}",
+                )
+        else:
+            # `custom` is only an allowed framework value where it is accepted, on the
+            # Agent Bricks server; a custom-server app always needs a framework adapter.
+            allowed = (
+                _FRAMEWORKS if server == AgentServer.CUSTOM else (*_FRAMEWORKS, CUSTOM_FRAMEWORK)
+            )
+            problem("agent.framework", _invalid(raw_framework, _choices(allowed)))
+        if server is None:
+            problem("agent.server", _invalid(raw_server, _choices(_SERVERS)))
+        raw_name = agent.get("deployment_name")
+        if raw_name is not None and not (isinstance(raw_name, str) and raw_name):
+            problem("agent.deployment_name", "must be a non-empty string")
+        elif raw_name is not None:
+            deployment_name = str(raw_name)
+
+    user_auth, auth_problems = tool_manifest.user_auth_problems(document)
+    for field_name, message in auth_problems:
+        problem(field_name, message)
+    allowed_origins: tuple[str, ...] = checked(
+        "cors", lambda: allowed_origins_from_manifest(document), ()
+    )
+    if allowed_origins and server == AgentServer.CUSTOM:
+        problem("cors", 'needs agent.server = "agentbricks"')
+
+    tools: list[ToolSpec] = []
+    raw_tools = document.get("tools", [])
+    if not isinstance(raw_tools, list):
+        problem("tools", "must be an array of tables ([[tools]])")
+    else:
+        for index, item in enumerate(raw_tools):
+            tool = checked(f"tools[{index}]", lambda item=item: _tool_from_manifest(item))
+            if tool is not None:
+                tools.append(tool)
+        ids = [tool.id for tool in tools]
+        if len(ids) != len(set(ids)):
+            problem("tools", "tool ids must be unique")
+
+    memory_store = checked(
+        MEMORY_STORE_TABLE,
+        lambda: _store_name_from_manifest(document.get(MEMORY_STORE_TABLE), MEMORY_STORE_TABLE),
+    )
+    session_store = checked(
+        SESSION_STORE_TABLE,
+        lambda: _store_name_from_manifest(document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE),
+    )
+    tracing_table = document.get(TRACING_TABLE)
+    trace_experiment_name: str | None = None
+    if isinstance(tracing_table, Mapping):
+        raw_experiment = tracing_table.get(EXPERIMENT_NAME_KEY)
+        trace_experiment_name = (
+            str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
+        )
+
+    for moved in (MODEL_SERVICES_TABLE, PROMPTS_TABLE):
+        if moved in document:
+            problem(
+                moved,
+                f"agent.toml declares [{moved}] at the top level; move it under "
+                f"[{EXPERIMENTAL_TABLE}]",
+            )
+    experimental = document.get(EXPERIMENTAL_TABLE)
+    if experimental is not None and not isinstance(experimental, Mapping):
+        problem(EXPERIMENTAL_TABLE, "must be a table")
+        experimental = None
+    experimental = cast(Mapping[str, Any], experimental or {})
+    model_services = _model_services_from_manifest(experimental.get(MODEL_SERVICES_TABLE), problems)
+    prompts = _prompts_from_manifest(experimental.get(PROMPTS_TABLE), problems)
+
+    fields = _ManifestFields(
+        framework=framework,
+        server=server or AgentServer.AGENTBRICKS,
+        tools=tools,
+        memory_store=memory_store,
+        session_store=session_store,
+        memory_store_id=_store_id_from_manifest(document.get(MEMORY_STORE_TABLE)),
+        deployment_name=deployment_name,
+        trace_experiment_name=trace_experiment_name,
+        user_auth=user_auth,
+        model_services=model_services,
+        prompts=prompts,
+        allowed_origins=allowed_origins,
+    )
+    return fields, problems
+
+
+def manifest_problems(document: Mapping[str, Any]) -> list[ManifestProblem]:
+    """Every missing or invalid field in a parsed agent.toml, each with the values it accepts."""
+    return _read_manifest(document)[1]
+
+
+def manifest_error(problems: Sequence[ManifestProblem]) -> AgentCliError:
+    """One error listing every problem, so a single run shows all of them."""
+    if len(problems) == 1:
+        return AgentCliError(f"agent.toml: {problems[0]}")
+    lines = "".join(f"\n  • {problem}" for problem in problems)
+    return AgentCliError(f"agent.toml has {len(problems)} problems:{lines}")
+
+
 def _tool_inline_table(value: Any) -> Any:
     # For hand-written `tools = [{...}]` arrays, where a `[[tools]]` table can't go.
     if isinstance(value, Table):
@@ -516,7 +777,7 @@ class AgentProject:
         self,
         root: pathlib.Path,
         document: TOMLDocument,
-        framework: AgentFramework,
+        framework: AgentFramework | None,
         server: AgentServer,
         tools: list[ToolSpec],
         memory_store: str | None = None,
@@ -532,6 +793,7 @@ class AgentProject:
         self.root = root
         self.path = root / "agent.toml"
         self._document = document
+        # None for a hand-written agent (`framework = "custom"` or omitted) on the Agent Bricks server.
         self.framework = framework
         # Server selection is deployment behavior, so agent.toml—not hidden template metadata—is
         # the source of truth for whether Agent Bricks provisions and wires a Runtime Store.
@@ -579,80 +841,24 @@ class AgentProject:
             ) from exc
         except (OSError, ParseError) as exc:
             raise AgentCliError(f"Could not read agent manifest at {path}: {exc}.") from exc
-        if document.get("schema_version") != _SCHEMA_VERSION:
-            raise AgentCliError(
-                f"Unsupported agent manifest schema in {path}.",
-                hint=f"Expected schema_version = {_SCHEMA_VERSION}.",
-            )
-        agent = document.get("agent")
-        if not isinstance(agent, Mapping):
-            raise AgentCliError("agent.toml must declare an [agent] table.")
-        framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
-        server = parse_server(_required_string(agent.get("server"), "agent.server"))
-        try:
-            user_auth = tool_manifest.parse_user_auth(document)
-        except tool_manifest.ToolManifestError as exc:
-            raise AgentCliError(str(exc)) from exc
-        try:
-            allowed_origins = allowed_origins_from_manifest(document)
-        except ValueError as exc:
-            raise AgentCliError(str(exc)) from exc
-        if allowed_origins and server != AgentServer.AGENTBRICKS:
-            raise AgentCliError("CORS configuration requires [agent].server = 'agentbricks'.")
-        deployment_name = agent.get("deployment_name")
-        if deployment_name is not None and not (
-            isinstance(deployment_name, str) and deployment_name
-        ):
-            raise AgentCliError("agent.toml [agent] deployment_name must be a non-empty string.")
-        raw_tools = document.get("tools", [])
-        if not isinstance(raw_tools, list):
-            raise AgentCliError("agent.toml tools must be an array of tables.")
-        tools = [_tool_from_manifest(item) for item in raw_tools]
-        ids = [tool.id for tool in tools]
-        if len(ids) != len(set(ids)):
-            raise AgentCliError("agent.toml tool ids must be unique.")
-        memory_store = _store_name_from_manifest(
-            document.get(MEMORY_STORE_TABLE), MEMORY_STORE_TABLE
-        )
-        memory_store_id = _store_id_from_manifest(document.get(MEMORY_STORE_TABLE))
-        session_store = _store_name_from_manifest(
-            document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
-        )
-        tracing_table = document.get(TRACING_TABLE)
-        trace_experiment_name: str | None = None
-        if isinstance(tracing_table, Mapping):
-            raw_experiment = tracing_table.get(EXPERIMENT_NAME_KEY)
-            trace_experiment_name = (
-                str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
-            )
-        moved = [t for t in (MODEL_SERVICES_TABLE, PROMPTS_TABLE) if t in document]
-        if moved:
-            raise AgentCliError(
-                f"agent.toml declares {', '.join(f'[{t}]' for t in moved)} at the top level.",
-                hint=f"Move {'them' if len(moved) > 1 else 'it'} under [{EXPERIMENTAL_TABLE}], e.g. "
-                f"[{MODEL_SERVICES_PATH}.<role>] and [{PROMPTS_PATH}].",
-            )
-        experimental = document.get(EXPERIMENTAL_TABLE)
-        if experimental is not None and not isinstance(experimental, Mapping):
-            raise AgentCliError(f"agent.toml [{EXPERIMENTAL_TABLE}] must be a table.")
-        experimental = cast(Mapping[str, Any], experimental or {})
-        model_services = _model_services_from_manifest(experimental.get(MODEL_SERVICES_TABLE))
-        prompts = _prompts_from_manifest(experimental.get(PROMPTS_TABLE))
+        fields, problems = _read_manifest(document)
+        if problems:
+            raise manifest_error(problems)
         return cls(
             project_root,
             document,
-            framework,
-            server,
-            tools,
-            memory_store,
-            session_store,
-            memory_store_id,
-            str(deployment_name) if deployment_name is not None else None,
-            trace_experiment_name,
-            user_auth,
-            model_services,
-            prompts,
-            allowed_origins,
+            fields.framework,
+            fields.server,
+            fields.tools,
+            fields.memory_store,
+            fields.session_store,
+            fields.memory_store_id,
+            fields.deployment_name,
+            fields.trace_experiment_name,
+            fields.user_auth,
+            fields.model_services,
+            fields.prompts,
+            fields.allowed_origins,
         )
 
     @classmethod

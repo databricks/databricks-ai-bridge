@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import http.client
 import socket
 import sys
 
@@ -11,6 +12,9 @@ import sys
 _APP_BIND_HOST = "0.0.0.0"
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 _CONNECT_TIMEOUT_S = 0.5
+_ROUTE_PROBE_TIMEOUT_S = 1.0
+# Auth gates answer before routing, so they say nothing about whether the route exists.
+_INCONCLUSIVE_STATUSES = frozenset({401, 403})
 
 
 def port_in_use(port: int) -> bool:
@@ -35,6 +39,27 @@ def port_in_use(port: int) -> bool:
 def accepts_connections(port: int) -> bool:
     """Whether a server is answering on ``port`` over IPv4 or IPv6 loopback (i.e. at ``localhost``)."""
     return any(_accepts_connections(host, port) for host in _LOOPBACK_HOSTS)
+
+
+def route_exists(port: int, path: str) -> bool | None:
+    """Whether the local app serves ``path``, judged from a ``GET``: False on 404, else True.
+
+    A POST-only route answers 405, so the probe has no side effects. None when the answer says
+    nothing about the route: no answer at all, an auth gate (401/403), a redirect, or a 5xx.
+    """
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=_ROUTE_PROBE_TIMEOUT_S)
+    try:
+        connection.request("GET", path)
+        status = connection.getresponse().status
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        connection.close()
+    if status == 404:
+        return False
+    if status in _INCONCLUSIVE_STATUSES or 300 <= status < 400 or status >= 500:
+        return None
+    return True
 
 
 def free_port() -> int:

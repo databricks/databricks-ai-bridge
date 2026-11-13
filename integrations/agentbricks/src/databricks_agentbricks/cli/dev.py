@@ -9,19 +9,22 @@ rather than re-implementing it.
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
-from databricks_agentbricks.clients.local_ports import free_port, port_in_use
+from databricks_agentbricks.clients.local_ports import free_port, port_in_use, route_exists
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.clients.uv import uv_sync
 from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
+    announce_installing,
     announce_starting,
     local_trace_label,
     starting_status,
@@ -36,6 +39,9 @@ from databricks_agentbricks.services.dev_service import (
     _dev_entry_point,  # noqa: F401 - compatibility re-export for existing callers
 )
 
+# The clock the ready banner's elapsed time is measured with; tests replace it.
+_clock = time.monotonic
+
 
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
@@ -48,8 +54,21 @@ def build_dev_service(obj) -> DevService:
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
+        uv_sync=uv_sync,
         diagnostics=diagnostics,
     )
+
+
+def _serves_runtime_api(app_port: int) -> bool | None:
+    """Whether the running app serves `/api/invocations` (True) or `/invocations` (False).
+
+    None if it serves neither, so the banner falls back to what the project declares.
+    """
+    if route_exists(app_port, "/api/invocations"):
+        return True
+    if route_exists(app_port, "/invocations"):
+        return False
+    return None
 
 
 @click.command()
@@ -62,8 +81,8 @@ def build_dev_service(obj) -> DevService:
 @click.option(
     "--prepare-environment/--no-prepare-environment",
     default=None,
-    help="Build the app's environment with uv before running. Default: build only if no .venv "
-    "exists yet, and reuse it otherwise. Requires uv.",
+    help="Build the app's environment before running: `uv sync` for a pyproject project, otherwise "
+    "`apps run-local --prepare-environment`. Default: build only if no .venv exists yet. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the agent on (default 8000).")
 @click.pass_obj
@@ -77,7 +96,8 @@ def dev(
 
     Starts the agent on a local server — by default http://localhost:8000 — and, once it answers,
     prints where to reach it: the chat UI if the project has one, otherwise a sample request against
-    the agent's API. If the agent fails to start, you get an error instead.
+    the agent's API. If the agent fails to start, you get an error instead. Checks agent.toml first
+    and lists every problem it finds.
 
     Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
@@ -96,6 +116,7 @@ def dev(
     `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make;
     that all happens at `agentbricks deploy` time.
     """
+    started = _clock()
     service = build_dev_service(obj)
     with service.prepare(
         DevRequest(source=source, prepare_environment=prepare_environment, app_port=app_port)
@@ -105,6 +126,8 @@ def dev(
                 "warning", plan.preview.tracing_warning, help=plan.preview.tracing_help
             )
         announce_bound_resources(plan.preview)
+        if plan.install_dependencies:
+            announce_installing()
         announce_starting()
         # The green panel waits until the agent answers on its port, so a failed start (bad auth, a
         # build error, a crash on import) never looks like a successful one.
@@ -117,6 +140,8 @@ def dev(
                     plan.preview.server,
                     local_trace_label(plan.preview),
                     has_chat_ui=plan.preview.has_chat_ui,
+                    uses_runtime_api=_serves_runtime_api(plan.app_port),
+                    elapsed=_clock() - started,
                 ),
                 # A spinner in the quiet stretches before the agent answers (e.g. while it imports
                 # its libraries), so a long wait doesn't look like a hang.

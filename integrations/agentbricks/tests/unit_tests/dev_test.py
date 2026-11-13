@@ -215,6 +215,13 @@ def _stub_free_port(monkeypatch):
     monkeypatch.setattr(dev_mod, "free_port", lambda: 54321)
 
 
+@pytest.fixture(autouse=True)
+def _stub_route_probe(monkeypatch):
+    """Nothing answers the banner's route probe unless a test says so: the banner then falls back
+    to what the project declares."""
+    monkeypatch.setattr(dev_mod, "route_exists", lambda port, path: None)
+
+
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")  # no .venv -> auto-prepare
     with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db:
@@ -595,7 +602,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "API-only" in result.output
+    assert "Agent ready in" in result.output
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
@@ -847,7 +854,9 @@ def test_dev_says_starting_before_the_agent_is_ready(tmp_path: pathlib.Path):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     starting = result.output.index("Starting agent locally")
-    assert starting < result.output.index("is running")  # neutral line first, success panel after
+    assert starting < result.output.index(
+        "Agent ready in"
+    )  # neutral line first, success panel after
 
 
 def test_dev_hides_success_panel_when_agent_fails_to_start(tmp_path: pathlib.Path):
@@ -864,7 +873,7 @@ def test_dev_hides_success_panel_when_agent_fails_to_start(tmp_path: pathlib.Pat
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
     assert "Starting agent locally" in result.output
-    assert "is running" not in result.output
+    assert "Agent ready" not in result.output
     assert "✔" not in result.output and "Chat UI" not in result.output
     assert "Could not start the agent locally." in result.output
     assert "See the output above for the cause." in result.output
@@ -887,7 +896,7 @@ def test_dev_reports_agent_that_stops_after_starting(tmp_path: pathlib.Path):
     with mock.patch.object(dev_mod, "_databricks", side_effect=_starts_then_crashes):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
-    assert "is running" in result.output
+    assert "Agent ready" in result.output
     assert "The local agent stopped unexpectedly." in result.output
     assert "Could not start" not in result.output
 
@@ -924,3 +933,126 @@ def test_dev_passes_a_starting_status_for_quiet_gaps(tmp_path: pathlib.Path):
     status = db.call_args.kwargs["quiet_status"](12.4)
     assert "Starting the agent… 0:12" in status
     assert status[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+_ECHO_SERVER = (
+    "from databricks_agentkit import DurableAgentServer\n"
+    "app = DurableAgentServer()\n"
+    "app.invoke(lambda value, context: value)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("served", "path", "has_id"),
+    [({"/api/invocations"}, "/api/invocations", True), ({"/invocations"}, "/invocations", False)],
+)
+def test_dev_banner_shows_the_route_the_running_app_serves(
+    tmp_path: pathlib.Path, monkeypatch, served, path, has_id
+):
+    # No agent.toml: a hand-written DurableAgentServer serves /api/invocations, not /invocations.
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    probes: list[tuple[int, str]] = []
+
+    def _route_exists(port, route):
+        probes.append((port, route))
+        return route in served
+
+    monkeypatch.setattr(dev_mod, "route_exists", _route_exists)
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    panel = _panel_text(result.output)
+    assert f"Invoke   POST http://localhost:8000{path}" in panel
+    assert ('"id": "00000000-0000-4000-8000-000000000000"' in panel) is has_id
+    assert probes[0] == (54321, "/api/invocations")  # the app's own port, behind the proxy
+
+
+def test_dev_banner_title_reports_time_to_ready(tmp_path: pathlib.Path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    clock = iter([100.0, 141.5])
+    monkeypatch.setattr(dev_mod, "_clock", lambda: next(clock))
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "✔ Agent ready in 0:41" in result.output
+
+
+def test_dev_lists_every_manifest_problem_before_starting_anything(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 2\n\n[agent]\nframework = "durable"\ndeployment_name = ""\n'
+    )
+    start_dev = mock.Mock()
+    monkeypatch.setattr(dev_mod.LocalTracingClient, "start_dev", start_dev)
+    with (
+        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(dev_mod, "uv_sync") as sync,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    output = result.output
+    assert "agent.toml has 4 problems:" in output
+    assert "schema_version: 2 is not supported; use 1" in output
+    assert 'agent.framework: "durable" is not valid; use langgraph, openai, or custom' in output
+    assert "agent.server: missing; use agentbricks or custom" in output
+    assert "agent.deployment_name: must be a non-empty string" in output
+    db.assert_not_called()
+    sync.assert_not_called()
+    start_dev.assert_not_called()
+
+
+@pytest.mark.parametrize("framework_line", ['framework = "custom"\n', ""])
+def test_dev_runs_a_framework_less_agentbricks_project(tmp_path: pathlib.Path, framework_line):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        f'schema_version = 1\n\n[agent]\n{framework_line}server = "agentbricks"\n'
+    )
+    (tmp_path / "main.py").write_text(_ECHO_SERVER)
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    db.assert_called_once()
+    assert "http://localhost:8000/api/invocations" in result.output
+
+
+def test_dev_builds_a_pyproject_environment_with_uv_sync(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "echo"\ndependencies = []\n')
+    events: list[str] = []
+
+    def _run_local(args, profile, **kwargs):
+        events.append("run-local")
+        return _run_local_starts(args, profile, **kwargs)
+
+    with (
+        mock.patch.object(dev_mod, "_databricks", side_effect=_run_local) as db,
+        mock.patch.object(dev_mod, "uv_sync", side_effect=lambda path: events.append("sync")),
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert events == ["sync", "run-local"]
+    assert "--prepare-environment" not in db.call_args.args[0]
+    assert "Installing dependencies…" in result.output
+
+
+def test_dev_reuses_a_pyproject_environment_without_syncing(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "echo"\ndependencies = []\n')
+    (tmp_path / ".venv").mkdir()
+    with (
+        mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db,
+        mock.patch.object(dev_mod, "uv_sync") as sync,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    sync.assert_not_called()
+    assert "--prepare-environment" not in db.call_args.args[0]
+    assert "Installing dependencies" not in result.output

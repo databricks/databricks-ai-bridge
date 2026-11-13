@@ -933,6 +933,21 @@ def test_durable_agent_server_requires_user_for_code_first_manifest(tmp_path, mo
     assert app.auth_policy.requires_user is True
 
 
+@pytest.mark.parametrize("framework_line", ['framework = "custom"\n', ""])
+def test_durable_agent_server_starts_with_a_framework_less_manifest(
+    tmp_path, monkeypatch, framework_line
+) -> None:
+    (tmp_path / "agent.toml").write_text(
+        f'schema_version = 1\n\n[agent]\n{framework_line}server = "agentbricks"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+
+    assert app.auth_policy.requires_user is False
+
+
 def test_state_payload_nests_completed_application_response() -> None:
     state = Invocation(
         invocation_id=_RUN_2,
