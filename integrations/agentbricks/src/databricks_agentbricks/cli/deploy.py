@@ -130,7 +130,9 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
         model_binding_provisioner=ModelBindingProvisioner(api_client_provider, reporter),
         reporter=reporter,
         state_tracker=state_tracker,
-        app_probe=AppProbe(WorkspaceOAuthAuthenticator(obj.profile).authorization_header),
+        app_probe=AppProbe(
+            WorkspaceOAuthAuthenticator(obj.profile, allow_pat=True).authorization_header
+        ),
     )
 
 

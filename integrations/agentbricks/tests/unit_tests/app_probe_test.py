@@ -84,16 +84,14 @@ def test_probe_counts_an_unreachable_app_as_booting():
     assert result.outcome == "booting"
 
 
-def test_probe_without_an_oauth_token_is_unverifiable_and_sends_nothing(server: str):
-    def pat_profile() -> str:
-        raise AgentCliError(
-            "Databricks Apps API routes require OAuth; the selected profile uses a PAT."
-        )
+def test_probe_without_a_token_is_unverifiable_and_sends_nothing(server: str):
+    def no_token() -> str:
+        raise AgentCliError("Could not initialize endpoint authentication: no profile.")
 
-    result = AppProbe(pat_profile).probe(server)
+    result = AppProbe(no_token).probe(server)
 
     assert result.outcome == "unverifiable"
-    assert result.detail is not None and "PAT" in result.detail
+    assert result.detail is not None and "no profile" in result.detail
     assert _Stub.seen == []
 
 

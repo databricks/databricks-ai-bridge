@@ -39,10 +39,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class AppProbe:
-    """GET ``<url>/`` with the profile's OAuth bearer and classify the answer.
+    """GET ``<url>/`` with the profile's bearer and classify the answer.
 
     ``authorization_header`` returns the ``Authorization`` value, raising :class:`AgentCliError`
-    when the profile has no OAuth token (a PAT can't call Apps).
+    when the profile has no token. A token the App rejects (a real PAT) gets 401/403.
     """
 
     def __init__(
