@@ -17,6 +17,8 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentbricks.services import dev_preflight as dev_preflight_module
+from databricks_agentbricks.services import dev_service as dev_service_module
 
 
 def _write_agent_manifest(
@@ -80,6 +82,14 @@ def _stub_free_port(monkeypatch):
     """Treat the app port as free so dev tests never depend on what this machine is running."""
     monkeypatch.setattr(dev_mod, "port_in_use", lambda port: False)
     monkeypatch.setattr(dev_mod, "free_port", lambda: 54321)
+
+
+@pytest.fixture(autouse=True)
+def _stub_dev_preflight(monkeypatch):
+    """`agentbricks dev` preflights uv and its Python before starting; stub the checks so ordinary
+    dev tests neither probe uv nor depend on this machine's tooling. The checks are covered in
+    dev_service_test.py, and test_dev_missing_uv_fails_before_starting wires the real ones."""
+    monkeypatch.setattr(dev_service_module, "run_dev_preflight", mock.Mock())
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -325,10 +335,11 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
 
 
 def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path, monkeypatch):
-    # A failure after the local server starts but before run-local (here a malformed app.yaml that
-    # `_dev_entry_point` rejects) must still tear the server down, not orphan it — everything after the
-    # server start runs under the try/finally.
-    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": "not-a-list"}))
+    # A failure after the local server starts but before run-local (here the dev manifest cannot
+    # be built) must still tear the server down, not orphan it — everything after the server start
+    # runs under the try/finally. (A malformed app.yaml fails even earlier: the manifest is parsed
+    # before the server starts, so there is nothing to tear down.)
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
@@ -341,11 +352,39 @@ def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path,
             environment={"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"},
         ),
     )
+    monkeypatch.setattr(
+        dev_service_module,
+        "_dev_entry_point",
+        mock.Mock(side_effect=AgentCliError("no local manifest")),
+    )
     with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
-    assert result.exit_code != 0  # the bad app.yaml surfaced as an error
+    assert result.exit_code != 0  # the setup failure surfaced as an error
     db.assert_not_called()  # failed before run-local was reached
     fake_server.terminate.assert_called_once()  # ...but the local server was still stopped
+
+
+def test_dev_missing_uv_fails_before_starting(tmp_path: pathlib.Path, monkeypatch):
+    # The preflight runs before anything starts: without uv, dev fails with the OS-specific fix
+    # instead of run-local's generic "Could not start the agent locally.".
+    (tmp_path / "app.yaml").write_text("command: [uv, run, start-server]\nenv: []\n")
+    real = dev_preflight_module.run_dev_preflight
+    monkeypatch.setattr(
+        dev_service_module,
+        "run_dev_preflight",
+        lambda source_dir, tokens, prepare: real(
+            source_dir, tokens, prepare, which=lambda _: None, os_name="posix"
+        ),
+    )
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "uv is required to run this agent locally, but uv was not found on PATH." in output
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in output
+    assert "run `uv --version` to verify" in output
+    db.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
 
 
 def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
