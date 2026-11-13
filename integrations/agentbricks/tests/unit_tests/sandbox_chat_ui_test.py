@@ -62,6 +62,8 @@ class Runtime:
         self.stop_error = False
         self.models = ["system.ai.claude-sonnet-5-5", "system.ai.gpt-5-mini"]
         self.models_error = False
+        self.warm_pool = {"maximum": 2, "ready": 1, "preparing": 1, "retiring": 0, "error": None}
+        self.pool_assignments = set()
 
     def run(self, session, *, run_id="run-one", status="running", stage="Running agent", text=""):
         row = {
@@ -101,6 +103,8 @@ class Runtime:
         data, status = None, 200
         if path == "/api/config":
             data = self.config
+        elif path == "/api/warm-pool":
+            data = self.warm_pool
         elif path == "/api/models":
             data, status = (
                 ({"detail": "Discovery unavailable"}, 503)
@@ -132,6 +136,9 @@ class Runtime:
                 "source_hash": "a" * 64,
                 "initial_bootstrap_timings_ms": {"install": 1234},
                 "preparation": self.preparations.get(session),
+                "warm_pool": {"slot_id": "pool:spare"}
+                if session in self.pool_assignments
+                else None,
             }
         elif path.endswith("/sessions") and body:
             self.preparation_posts.append(body)
@@ -1597,3 +1604,19 @@ def test_stream_transport_reconnects_without_submitting_another_invocation(ui):
     )
     assert runtime.posts == []
     playwright.expect(page.locator("#chat-log .message.assistant")).to_have_count(1)
+
+
+def test_warm_pool_panel_explains_capacity_and_session_assignment(ui):
+    runtime, page, open_page = ui
+    runtime.config["sandbox_warm_pool_size"] = 2
+    runtime.pool_assignments.add("pooled")
+    runtime.complete(runtime.run("pooled"))
+    open_page()
+    playwright.expect(page.locator("#warm-pool-status")).to_contain_text("1 ready")
+    playwright.expect(page.locator("#warm-pool-status")).to_contain_text("maximum 2")
+    page.locator(".session-open-button", has_text="pooled").click()
+    playwright.expect(page.locator("#warm-pool-allocation")).to_be_visible()
+    playwright.expect(page.locator("#warm-pool-allocation")).to_contain_text("prepared sandbox")
+    runtime.warm_pool.update(ready=2, preparing=0)
+    page.evaluate("refreshWarmPool()")
+    playwright.expect(page.locator("#warm-pool-status")).to_contain_text("2 ready")

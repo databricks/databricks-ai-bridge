@@ -21,6 +21,45 @@ cover allocation only. The shared Runtime serializes invocations within each ses
 the sandbox invocation guard also prevents execution from overlapping preparation or stop.
 An ambiguous sandbox create is reconciled by its stable label before retry.
 
+### Optional deployment warm pool
+
+`agentbricks deploy NAME --sandbox --source PROJECT --sandbox-warm-pool-size 2`
+starts one deployment-wide pool of unused prepared sandboxes. Default 0 disables it;
+the prototype supports 0–10. `WarmPool` prepares source, dependencies and a resident
+handler under the App's identity, without submitting agent invocations. The configured
+maximum counts preparing, ready and retiring spares, across all App replicas. Assigned
+sessions are additional compute; this setting is not a total deployment compute cap.
+
+`SessionSandboxClient.get_or_create(session)` atomically claims a compatible spare via
+`WarmPoolStore`, preserving its physical worker/state directory. The logical session ID
+still accompanies each invocation. A health probe verifies that the same initialized
+worker is alive and has never served a turn; probing cannot start or resume a worker.
+If no spare is available, normal cold preparation proceeds. Claiming wakes the replenisher.
+An assigned sandbox never returns to the pool, including after stop. Resume reuses the
+session's disk and initializes a new worker as before.
+
+An advisory lock elects one replenisher. Short transactions enforce the capacity limit
+and atomically move a spare's mapping to a user session. A generation stamped by deploy
+prevents old App replicas from refilling or claiming after a newer policy takes effect.
+Redeploy with 0 to drain unused spares; active sessions remain assigned. Unused workers
+are checked every 30 seconds and retired after one hour. Initialization failures back off
+for 60 seconds. Interrupted initialization is retired, never replayed; ambiguous sandbox
+creation retains its capacity reservation until its outcome can be reconciled. If the App
+disappears, platform idle timeout is the fallback for stopping compute. Pool readiness is
+independent of App readiness; `/api/warm-pool` and the Sandbox panel report capacity.
+
+This pool serves only the default published revision, using App authentication. Custom
+handlers can implement `prepare_session(state_dir)` to initialize more than imports.
+That hook must not depend on a future request or user identity; it may run for spares that
+are never assigned. Opting in authorizes that initialization and idle compute. Model/tool
+latency, request-dependent setup, pool misses and stop/resume still incur their usual cost.
+
+**Pool schema:** two additive tables in `SANDBOX_SCHEMA`: `warm_pool_config` (generation,
+revision compatibility key, maximum and backoff) and `warm_pool_slots` (inventory, state,
+expiry, worker handle and assignment). `sessions.bootstrap_metrics` stores the physical
+`worker_state_key` and pool origin after assignment. No existing columns or constraints
+change; the shared Runtime Store `invocations` and `invocation_events` schema is unchanged.
+
 The App uses `Runtime`, `DurableInvocationExecutor` and `LakebaseDurableRuntimeStore`
 for invocation acceptance, claims, heartbeat ownership, completion and event replay.
 `RunManager` supplies the sandbox execution callback; `ControlStore` projects standard

@@ -383,10 +383,14 @@ def present_sandbox_deploy_result(
     }
     if store := result.get("runtime_store"):
         fields["Runtime Store"] = store
+    if size := result.get("sandbox_warm_pool_size"):
+        fields["Warm pool"] = f"Up to {size} unassigned sandboxes; filling in the background"
     command = ["agentbricks", *(["-p", profile] if profile else [])]
     steps: list[str | tuple[str, str]] = ["Open the deployed agent using the URL above."]
     if result["installation"] != "prepared":
         steps.append("Choose New Chat to prepare a sandbox, then send a message.")
+    if result.get("sandbox_warm_pool_size"):
+        steps.append("Check the Sandbox tab for ready spares before trying a new session.")
     steps.extend(
         [
             (

@@ -36,6 +36,7 @@ class SandboxDeployRequest:
     name: str | None
     source: Path
     sandbox_idle_timeout: int = 900
+    sandbox_warm_pool_size: int = 0
     git_revision: str | None = None
     entrypoint: str | None = None
     workspace_path: str | None = None
@@ -52,6 +53,8 @@ class SandboxDeployService:
         """Freeze one source revision, then deploy only the generic orchestrator."""
         if not 60 <= request.sandbox_idle_timeout <= 86400:
             raise AgentCliError("Sandbox idle timeout must be 60–86400 seconds.")
+        if not 0 <= request.sandbox_warm_pool_size <= 10:
+            raise AgentCliError("Sandbox warm pool size must be 0–10.")
         git_source = None
         if request.git_revision is not None:
             if not request.git_revision.strip():
@@ -195,6 +198,7 @@ class SandboxDeployService:
             workspace_path=f"{root}/app",
             instances=request.instances,
             sandbox_idle_timeout=request.sandbox_idle_timeout,
+            sandbox_warm_pool_size=request.sandbox_warm_pool_size,
             index_url=request.index_url,
         )
 

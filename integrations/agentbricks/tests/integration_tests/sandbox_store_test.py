@@ -456,3 +456,301 @@ def test_durable_executor_recovers_stale_work_without_replaying_the_sandbox(cont
     finally:
         manager.stop()
         replacement.close()
+
+
+# Warm-pool ownership is exercised with real independent database connections.
+def pool_store(registry, *, size=2, generation=1, key="revision"):
+    from databricks_agentkit.sandbox.warm_pool_store import WarmPoolStore
+
+    value = WarmPoolStore(registry, key, generation, size)
+    value.initialize()
+    return value
+
+
+def ready_spare(store, *, owner="app"):
+    slot = store.reserve()
+    assert slot
+    sandbox_id = "sandbox-" + slot["slot_id"]
+    with store.registry.session(slot["slot_id"]) as session:
+        session.bind_owner(owner)
+        session.save(
+            "digest",
+            sandbox_id,
+            "ready",
+            {"timings_ms": {"install": 100}},
+            source_revision="revision",
+        )
+    store.mark(slot["slot_id"], "ready", expected="preparing", metadata={"sandbox_id": sandbox_id})
+    return slot, sandbox_id
+
+
+def test_pool_reservations_are_bounded_across_replicas(registry):
+    stores = [pool_store(registry) for _ in range(8)]
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        reserved = list(workers.map(lambda value: value.reserve(), stores))
+    assert len([slot for slot in reserved if slot]) == 2
+    assert stores[0].status()["preparing"] == 2
+
+
+def test_pool_concurrent_claims_move_one_mapping_and_keep_physical_state(registry):
+    store = pool_store(registry, size=1)
+    slot, sandbox_id = ready_spare(store)
+
+    def claim(number):
+        with registry.session(f"real-{number}") as session:
+            session.bind_owner("app")
+            session.save("digest", None, "pending", {"preparation": {"status": "preparing"}})
+            hit = store.claim(session, lambda _: True)
+            return hit, session.get()
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        results = list(workers.map(claim, range(8)))
+    hits = [row for hit, row in results if hit]
+    assert len(hits) == 1
+    assert hits[0]["sandbox_id"] == sandbox_id
+    assert hits[0]["source_revision"] == "revision"
+    metrics = hits[0]["bootstrap_metrics"]
+    assert metrics["worker_state_key"] == registry.session_key(slot["slot_id"])
+    assert metrics["preparation"] == {"status": "preparing"}
+    assert registry.runtime(slot["slot_id"])["sandbox"] is None
+    assert store.status()["ready"] == 0
+    assert store.reserve()  # Assigned sessions do not consume spare capacity.
+
+
+def test_pool_new_rollout_fences_old_replenishment_and_claims(registry):
+    old = pool_store(registry, size=2)
+    ready_spare(old)
+    disabled = pool_store(registry, generation=2, size=0)
+    old.initialize()  # A delayed old replica must not overwrite the new policy.
+    assert not old.current() and disabled.current()
+    assert old.reserve() is None and disabled.reserve() is None
+    with registry.session("new-session") as session:
+        session.bind_owner("app")
+        assert not old.claim(session, lambda _: True)
+        assert not disabled.claim(session, lambda _: True)
+    assert disabled.status()["maximum"] == 0
+
+
+@pytest.mark.parametrize("problem", ["expired", "unhealthy", "old-revision"])
+def test_pool_unusable_spare_is_never_assigned(registry, problem):
+    store = pool_store(registry, size=1)
+    ready_spare(store)
+    if problem == "expired":
+        with registry.connect() as db:
+            db.execute("UPDATE warm_pool_slots SET expires_at=now()-interval '1 second'")
+    if problem == "old-revision":
+        store = pool_store(registry, generation=2, size=1, key="new-revision")
+    with registry.session("new-session") as session:
+        session.bind_owner("app")
+        assert not store.claim(session, lambda _: problem != "unhealthy")
+        assert session.get()["sandbox_id"] is None
+    assert store.reserve() is None  # Still counts until shutdown confirmed.
+
+
+def test_pool_identity_failure_rolls_back_entire_claim(registry):
+    store = pool_store(registry, size=1)
+    slot, sandbox_id = ready_spare(store, owner="another-app")
+    with registry.session("new-session") as session:
+        session.bind_owner("app")
+        with pytest.raises(RuntimeError, match="identity mismatch"):
+            store.claim(session, lambda _: True)
+        assert session.get()["sandbox_id"] is None
+    assert registry.runtime(slot["slot_id"])["sandbox"]["sandbox_id"] == sandbox_id
+    assert store.status()["ready"] == 1
+
+
+def test_pool_claim_does_not_wait_for_another_claim_probe(registry):
+    store = pool_store(registry, size=2)
+    ready_spare(store)
+    ready_spare(store)
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_probe(slot):
+        entered.set()
+        assert release.wait(5)
+        return True
+
+    def claim(name, probe):
+        with registry.session(name) as session:
+            session.bind_owner("app")
+            assert store.claim(session, probe)
+            return session.get()["sandbox_id"]
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(claim, "one", slow_probe)
+        try:
+            assert entered.wait(5)
+            second = workers.submit(claim, "two", lambda _: True)
+            second_id = second.result(2)
+        finally:
+            release.set()
+        assert first.result(5) != second_id
+
+
+def controller(registry, *, size=1, generation=1):
+    from types import SimpleNamespace
+
+    from databricks_agentkit.sandbox.warm_pool import WarmPool
+
+    sandboxes, lakebox = client(registry)
+    lakebox.idle_timeout = 1800
+    lakebox.get.side_effect = lambda sandbox_id: {"sandboxId": sandbox_id, "status": "Running"}
+    lakebox.api.return_value = {"status": "stopped"}
+    orchestrator = MagicMock(
+        registry=registry,
+        sandboxes=sandboxes,
+        lakebox=lakebox,
+        sandbox_scope="session",
+        worker_mode="persistent",
+    )
+    pool = WarmPool(
+        orchestrator,
+        {"agent_id": "revision", "entrypoint": "agent:run"},
+        SimpleNamespace(digest="digest"),
+        size=size,
+        generation=generation,
+    )
+    pool.store.initialize()
+    pool.healthy = MagicMock(return_value=True)
+
+    def prepare(slot_id, **kwargs):
+        sandbox_id = "sandbox-" + slot_id
+        with registry.session(slot_id) as session:
+            session.bind_owner("app")
+            session.save("digest", sandbox_id, "ready", source_revision="revision")
+        return {
+            "sandbox_id": sandbox_id,
+            "worker": {"id": slot_id},
+            "pool_worker": {},
+            "entrypoint": "agent:run",
+            "timings_ms": {},
+        }
+
+    orchestrator.prepare_session.side_effect = prepare
+    return pool
+
+
+def test_pool_controller_fills_claims_replenishes_and_downsizes(registry):
+    pool = controller(registry, size=2)
+    pool.reconcile()
+    pool.reconcile()
+    pool.reconcile()
+    assert pool.orchestrator.prepare_session.call_count == 2
+    pool.sandboxes.warm_pool = pool
+    allocated = pool.sandboxes.get_or_create(
+        "real", source_hash="digest", source_revision="revision"
+    )
+    assert allocated.pool_hit and allocated.state_key
+    assert not allocated.created
+    pool.orchestrator.lakebox.create.assert_not_called()
+    pool.reconcile()
+    assert pool.store.status()["ready"] == 2
+    disabled = controller(registry, size=0, generation=2)
+    disabled.reconcile()
+    assert not disabled.store.slots()
+    assert registry.runtime("real")["sandbox"]["sandbox_id"] == allocated.id
+    stopped = [
+        call.args[2]["sandbox_id"] for call in disabled.orchestrator.lakebox.api.call_args_list
+    ]
+    assert len(stopped) == 2 and allocated.id not in stopped
+    pool.reconcile()
+    assert pool.orchestrator.prepare_session.call_count == 3
+
+
+def test_pool_controller_interrupted_preparation_is_retired_not_replayed(registry):
+    pool = controller(registry)
+    slot = pool.store.reserve()
+    with registry.session(slot["slot_id"]) as session:
+        session.bind_owner("app")
+        session.save("digest", "interrupted", "bootstrapping")
+    pool.reconcile()
+    assert registry.runtime(slot["slot_id"])["sandbox"] is None
+    assert pool.orchestrator.lakebox.api.call_args.args[2]["sandbox_id"] == "interrupted"
+    assert pool.orchestrator.prepare_session.call_count == 1
+    assert pool.orchestrator.prepare_session.call_args.args[0] != slot["slot_id"]
+
+
+def test_pool_ambiguous_create_retains_capacity_without_repeating(registry):
+    pool = controller(registry)
+    slot = pool.store.reserve()
+    with registry.session(slot["slot_id"]) as session:
+        session.bind_owner("app")
+        session.save("digest", None, "creating")
+    pool.reconcile()
+    assert pool.store.status()["retiring"] == 1
+    assert "unresolved" in pool.store.status()["error"]
+    pool.orchestrator.prepare_session.assert_not_called()
+    pool.orchestrator.lakebox.create.assert_not_called()
+
+
+def test_pool_recovery_clears_error_and_refill_backoff(registry):
+    pool = controller(registry)
+    pool.orchestrator.prepare_session.side_effect = RuntimeError("installation failed")
+    pool.reconcile()
+    pool.reconcile()
+    assert pool.store.status()["error"] == "installation failed"
+    assert pool.orchestrator.prepare_session.call_count == 1
+    with registry.connect() as db:
+        db.execute("UPDATE warm_pool_config SET retry_after=now()-interval '1 second'")
+    recovered = controller(registry)
+    recovered.reconcile()
+    assert recovered.store.status()["ready"] == 1
+    assert recovered.store.status()["error"] is None
+
+
+def test_pool_schema_initialization_is_safe_across_replicas(registry):
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        stores = list(workers.map(lambda _: pool_store(registry), range(4)))
+    assert all(store.current() for store in stores)
+
+
+def test_pool_controller_cannot_retire_a_concurrently_claimed_sandbox(registry):
+    pool = controller(registry)
+    slot, sandbox_id = ready_spare(pool.store)
+    entered, release = threading.Event(), threading.Event()
+
+    def probe(value):
+        if value.get("slot_id") == slot["slot_id"]:
+            entered.set()
+            assert release.wait(5)
+            return False
+        return True
+
+    pool.healthy.side_effect = probe
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        scanning = worker.submit(pool.reconcile)
+        try:
+            assert entered.wait(5)
+            with registry.session("claimed-during-scan") as session:
+                session.bind_owner("app")
+                assert pool.store.claim(session, lambda _: True)
+        finally:
+            release.set()
+        scanning.result(5)
+    assert registry.runtime("claimed-during-scan")["sandbox"]["sandbox_id"] == sandbox_id
+    pool.orchestrator.lakebox.api.assert_not_called()
+
+
+def test_pool_does_not_assign_another_agent_revision(registry):
+    pool = controller(registry)
+    ready_spare(pool.store)
+    with registry.session("other-revision") as session:
+        session.bind_owner("app")
+        assert not pool.claim(session, "other-digest", "revision")
+        assert not pool.claim(session, "digest", "other-revision")
+    assert pool.store.status()["ready"] == 1
+
+
+def test_pool_cannot_replace_an_ambiguous_existing_create(registry):
+    pool = controller(registry)
+    ready_spare(pool.store)
+    pool.sandboxes.warm_pool = pool
+    with registry.session("ambiguous-session") as session:
+        session.bind_owner("app")
+        session.save("digest", None, "creating", source_revision="revision")
+    with pytest.raises(RevisionConflict, match="ambiguous"):
+        pool.sandboxes.get_or_create(
+            "ambiguous-session", source_hash="digest", source_revision="revision"
+        )
+    assert pool.store.status()["ready"] == 1
+    pool.orchestrator.lakebox.create.assert_not_called()

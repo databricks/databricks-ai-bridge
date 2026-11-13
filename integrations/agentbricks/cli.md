@@ -1693,6 +1693,16 @@ Existing Runtime Store table schemas are unchanged; old prototype invocation his
 but not imported. No SQL connection
 is opened by the source publisher, and no operator-supplied Lakebase configuration is accepted.
 
+`--sandbox-warm-pool-size N` optionally keeps up to N unassigned sandboxes installed and
+initialized in the background (default 0, range 0–10). This is one deployment-wide pool,
+shared across App replicas, for the deployment's default source revision. A new session
+claims a healthy spare and keeps its resident worker; on a miss it uses ordinary cold
+preparation. Assigned sandboxes are dedicated to their sessions and never return to the pool.
+Preparing and retiring spares count toward N; assigned sessions do not. App readiness does
+not wait for pool readiness; the Sandbox panel shows ready/preparing/retiring counts.
+Redeploy with 0 to drain unused spares. The pool incurs idle compute while enabled and adds
+two inventory tables in the sandbox schema; existing Runtime Store schemas remain unchanged.
+
 `--workspace-path` is the root for immutable revision folders and separate orchestrator
 files. Its default is `/Users/<user>/agentbricks_deployments/<app>`. Identical publications
 are reused on retry. New source adds a revision in the same namespace when the same App and Workspace root
@@ -1741,6 +1751,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--sandbox` | flag | false | no | Upload source and deploy its orchestrator; install on session preparation or first invocation. |
 | `--sandbox-idle-timeout <SECONDS>` | integer, 60–86400 | 900 | no | Sandbox idle timeout in seconds; requires `--sandbox`. |
+| `--sandbox-warm-pool-size <N>` | integer, 0–10 | 0 (disabled) | no | Maximum unassigned prepared sandboxes; requires `--sandbox`. |
 | `--git-revision <REV>` | string | working tree | no | Local Git commit, tag or branch; requires `--sandbox`. |
 | `--entrypoint <CALLABLE>` | string | template adapter | no | Installed module:function; requires `--sandbox`. |
 | `--source <SOURCE>` | path | `.` | no | Local project; sandbox mode requires pyproject.toml and uv.lock. |

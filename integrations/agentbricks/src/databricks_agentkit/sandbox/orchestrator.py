@@ -80,6 +80,7 @@ class Orchestrator:
         _prepare_only=False,
         _warm_worker=False,
         _allow_install=True,
+        _pool_fill=False,
     ):
         started = time.perf_counter()
         metrics = {}
@@ -107,7 +108,9 @@ class Orchestrator:
                     allow_create=_allow_install and (not self.prepared_session_id or _prepare_only),
                     progress=report,
                     metrics=metrics,
+                    use_pool=not _pool_fill,
                 )
+                state_key = allocation.state_key or state_key
                 sandbox, sandbox_id = allocation.sandbox, allocation.id
                 created, replaced = allocation.created, allocation.replaced
                 try:
@@ -224,6 +227,8 @@ class Orchestrator:
                             )
                             timeline.complete(
                                 details=(result.get("details") or {}).get("timings_ms")
+                                if not worker.get("reused")
+                                else {"cached_handler": 0}
                             )
                             metrics["environment_startup"] = round(
                                 (time.perf_counter() - started) * 1000, 2
@@ -260,6 +265,7 @@ class Orchestrator:
                 "stream_transport": "ExecuteCommand(tail -F)" if emit or stream_ready else None,
                 "sandbox_created": created,
                 "sandbox_replaced": replaced,
+                "warm_pool_hit": allocation.pool_hit,
                 "environment_reused": bootstrap_reused,
                 "source_hash": bundle.digest,
                 "artifact_hash": execution_artifact["sha256"] if execution_artifact else None,
@@ -271,6 +277,11 @@ class Orchestrator:
                 "initial_bootstrap_timings_ms": bootstrap["timings_ms"],
                 "result": result,
                 "worker": worker,
+                **(
+                    {"pool_worker": {"state_dir": state_dir, "python": bootstrap["python"]}}
+                    if _pool_fill
+                    else {}
+                ),
             }
 
     def _invoke_worker(

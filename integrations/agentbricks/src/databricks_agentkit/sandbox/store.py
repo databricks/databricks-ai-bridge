@@ -118,7 +118,7 @@ class Registry:
 
     def runtime(self, session_id):
         """Read runtime state without reserving a sandbox or acquiring ownership."""
-        key = hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
+        key = self.session_key(session_id)
         with self.connect() as db:
             row = Session(db, self.namespace, key).get()
         return {
@@ -175,7 +175,7 @@ class Registry:
 
     @contextmanager
     def session(self, session_id: str):
-        key = hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
+        key = self.session_key(session_id)
         lock_id = int.from_bytes(bytes.fromhex(key[:16]), "big", signed=True)
         with self.connect() as db:
             if not db.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (lock_id,)).fetchone()[
@@ -186,6 +186,9 @@ class Registry:
                 yield Session(db, self.namespace, key)
             finally:
                 db.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+
+    def session_key(self, session_id):
+        return hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
 
 
 class Session:

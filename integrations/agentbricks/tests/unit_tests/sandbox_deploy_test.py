@@ -205,6 +205,8 @@ def test_cli_routes_sandbox_deploy_with_git_and_runtime_options(deployment, monk
             "runtime.sandbox_entry:invoke",
             "--instances",
             "2",
+            "--sandbox-warm-pool-size",
+            "2",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -218,6 +220,7 @@ def test_cli_routes_sandbox_deploy_with_git_and_runtime_options(deployment, monk
         assert "agentbricks -p test deployments logs agent-bricks-demo" in result.stdout
         assert result.stdout.rstrip().splitlines()[-1].startswith("Deployed in ")
     request = service.return_value.deploy.call_args.args[0]
+    assert request.sandbox_warm_pool_size == 2
     assert (request.name, request.source, request.git_revision, request.instances) == (
         "demo",
         d.source,
@@ -348,3 +351,39 @@ def test_idle_timeout_requires_sandbox_mode():
     result = CliRunner().invoke(agentbricks, ["deploy", "demo", "--sandbox-idle-timeout", "1800"])
     assert result.exit_code == 2
     assert "require --sandbox" in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize("size", [-1, 11])
+def test_invalid_pool_size_fails_before_publication(deployment, size):
+    d = deployment
+    with pytest.raises(AgentCliError, match="pool size"):
+        d.service.deploy(replace(d.request, sandbox_warm_pool_size=size))
+    assert not d.storage
+    d.deployer.assert_not_called()
+
+
+def test_pool_size_changes_runtime_policy_without_new_source_revision(deployment):
+    d = deployment
+    d.service.deploy(d.request)
+    path = d.deployer.call_args.args[1]
+    assert d.deployer.call_args.kwargs["sandbox_warm_pool_size"] == 0
+    d.service.deploy(replace(d.request, sandbox_warm_pool_size=2))
+    assert d.deployer.call_args.args[1] == path
+    assert d.deployer.call_args.kwargs["sandbox_warm_pool_size"] == 2
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--sandbox-warm-pool-size", "2"],
+        ["--sandbox-warm-pool-size", "0"],
+        ["--sandbox", "--sandbox-warm-pool-size", "11"],
+        ["--sandbox", "--sandbox-warm-pool-size", "-1"],
+    ],
+)
+def test_cli_rejects_invalid_warm_pool_options_before_workspace_access(monkeypatch, options):
+    client = MagicMock(side_effect=AssertionError("must not access workspace"))
+    monkeypatch.setattr("databricks_agentkit._api_client._workspace_client", client)
+    result = CliRunner().invoke(agentbricks, ["deploy", "demo", *options])
+    assert result.exit_code == 2, result.output
+    client.assert_not_called()
