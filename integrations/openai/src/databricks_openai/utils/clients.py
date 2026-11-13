@@ -111,10 +111,11 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
 
 
 def _split_reasoning_content(content: list) -> tuple[str | None, list[dict[str, Any]]]:
-    """Split AI Gateway Claude content parts into answer text and thinking blocks.
+    """Split AI Gateway reasoning content parts into answer text and thinking blocks.
 
-    Claude 5.x returns ``reasoning`` parts (summary text plus a ``signature``) before the answer's
-    ``text`` parts. The thinking blocks use the Anthropic shape the OpenAI Agents SDK reads.
+    Reasoning models (Claude 5.x, Qwen, Gemini, gpt-oss) return ``reasoning`` parts (summary text,
+    plus a ``signature`` on Claude) before the answer's ``text`` parts. The thinking blocks use the
+    Anthropic shape the OpenAI Agents SDK reads.
     """
     texts = []
     thinking_blocks: list[dict[str, Any]] = []
@@ -134,10 +135,26 @@ def _split_reasoning_content(content: list) -> tuple[str | None, list[dict[str, 
     return ("".join(texts) if texts else None), thinking_blocks
 
 
+def _is_reasoning_content(content: Any) -> bool:
+    """Return True for list content made only of text and reasoning parts, whatever the model.
+
+    Other lists (e.g. image parts) are left as the gateway sent them.
+    """
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and all(
+            isinstance(part, str)
+            or (isinstance(part, dict) and part.get("type") in ("text", "reasoning"))
+            for part in content
+        )
+    )
+
+
 def _split_reasoning_in_message(message: Any) -> None:
     """Move list content's reasoning onto ``thinking_blocks`` and leave the answer as a string."""
     content = getattr(message, "content", None)
-    if not isinstance(content, list):
+    if not isinstance(content, list) or not _is_reasoning_content(content):
         return
     text, thinking_blocks = _split_reasoning_content(content)
     message.content = text
@@ -155,7 +172,8 @@ def _split_reasoning_in_response(response: Any) -> None:
 def _restore_reasoning_in_messages(messages: Any) -> None:
     """Send assistant ``thinking_blocks`` back as the AI Gateway's ``reasoning`` content parts.
 
-    Claude requires each reasoning signature on the next turn, notably after a tool call.
+    Claude requires each reasoning signature on the next turn, notably after a tool call. Blocks
+    without a signature (Qwen, gpt-oss) have nothing to verify and are not sent back.
     """
     if not messages:
         return
@@ -172,13 +190,17 @@ def _restore_reasoning_in_messages(messages: Any) -> None:
                     {
                         "type": "summary_text",
                         "text": block.get("thinking") or "",
-                        "signature": block.get("signature") or "",
+                        "signature": block["signature"],
                     }
                 ],
             }
             for block in thinking_blocks
-            if isinstance(block, dict) and block.get("type") == "thinking"
+            if isinstance(block, dict)
+            and block.get("type") == "thinking"
+            and block.get("signature")
         ]
+        if not parts:
+            continue
         content = message.get("content")
         if isinstance(content, str) and content:
             parts.append({"type": "text", "text": content})
@@ -188,13 +210,26 @@ def _restore_reasoning_in_messages(messages: Any) -> None:
 
 
 class _ReasoningSplittingStream:
-    """Stream wrapper that splits each Claude chunk's reasoning out of ``delta.content``."""
+    """Stream wrapper that splits each chunk's reasoning out of ``delta.content``.
+
+    Chunks with string content pass through unchanged.
+    """
 
     def __init__(self, stream: Any):
         self._stream = stream
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
+
+    def __next__(self):
+        chunk = next(self._stream)
+        _split_reasoning_in_response(chunk)
+        return chunk
+
+    async def __anext__(self):
+        chunk = await self._stream.__anext__()
+        _split_reasoning_in_response(chunk)
+        return chunk
 
     def __iter__(self):
         for chunk in self._stream:
@@ -337,27 +372,15 @@ def _restore_gateway_messages(messages: Any) -> None:
 
 
 class _ModelAdapter:
-    """Model-family request and response handling. The default sends and returns as is.
+    """Model-family request and response handling.
 
-    Adapters are stateless; stream state lives in each adapted stream.
+    Every model gets reasoning list content split out and signed reasoning sent back, based on
+    the content's shape; string content passes through unchanged. Adapters are stateless; stream
+    state lives in each adapted stream.
     """
 
     def prepare_request(self, kwargs: dict) -> None:
-        pass
-
-    def adapt_response(self, response: Any) -> Any:
-        return response
-
-    def adapt_stream(self, stream: Any) -> Any:
-        return stream
-
-
-class _ClaudeAdapter(_ModelAdapter):
-    """Round-trips Claude's signed reasoning and avoids empty assistant content."""
-
-    def prepare_request(self, kwargs: dict) -> None:
         _restore_reasoning_in_messages(kwargs.get("messages"))
-        _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
 
     def adapt_response(self, response: Any) -> Any:
         _split_reasoning_in_response(response)
@@ -367,22 +390,31 @@ class _ClaudeAdapter(_ModelAdapter):
         return _ReasoningSplittingStream(stream)
 
 
-class _GeminiAdapter(_ModelAdapter):
-    """Round-trips Gemini's tool-call thought signatures and repeated tool-call ids."""
+class _ClaudeAdapter(_ModelAdapter):
+    """Also avoids empty assistant content, which Claude rejects."""
 
     def prepare_request(self, kwargs: dict) -> None:
+        super().prepare_request(kwargs)
+        _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
+
+
+class _GeminiAdapter(_ModelAdapter):
+    """Also round-trips Gemini's tool-call thought signatures and repeated tool-call ids."""
+
+    def prepare_request(self, kwargs: dict) -> None:
+        super().prepare_request(kwargs)
         _restore_gateway_messages(kwargs.get("messages"))
 
     def adapt_response(self, response: Any) -> Any:
         _adapt_gateway_response(response)
-        return response
+        return super().adapt_response(response)
 
     def adapt_stream(self, stream: Any) -> Any:
         if isinstance(stream, AsyncStream):
             _adapt_async_gateway_stream(stream)
         elif isinstance(stream, Stream):
             _adapt_gateway_stream(stream)
-        return stream
+        return super().adapt_stream(stream)
 
 
 _DEFAULT_ADAPTER = _ModelAdapter()
