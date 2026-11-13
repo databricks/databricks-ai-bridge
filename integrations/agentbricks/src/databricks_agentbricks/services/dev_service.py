@@ -21,6 +21,7 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.services.dev_preflight import run_dev_preflight
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import (
@@ -135,6 +136,22 @@ class DevService:
                 hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
             )
 
+        # One strict parse, shared by the preflight below and the local manifest: the preflight
+        # must read the command before anything starts.
+        manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
+
+        # Repeat runs reuse an existing environment; an explicit request overrides that
+        # auto-detection exactly as the old Click command did.  Resolved before anything starts
+        # because run-local's --prepare-environment builds the venv with uv too.
+        prepare_environment = request.prepare_environment
+        if prepare_environment is None:
+            prepare_environment = not (source_dir / ".venv").exists()
+
+        # Fail before starting tracing or writing the local manifest: without uv, the run would
+        # otherwise die later with run-local's generic "Could not start the agent locally." and no
+        # fix.
+        run_dev_preflight(source_dir, manifest.command_tokens(), prepare_environment)
+
         # Resource bindings are read only for the preview/presentation.  Dev is fully local and
         # deliberately does not provision, fetch, or otherwise contact any workspace resource.
         memory_store, session_store, trace_experiment = self._project_resolver.resource_bindings(
@@ -145,12 +162,6 @@ class DevService:
         tracing_server, tracing_env = tracing.server, tracing.environment
         entry_point: pathlib.Path | None = None
         try:
-            # Repeat runs reuse an existing environment; an explicit request overrides that
-            # auto-detection exactly as the old Click command did.
-            prepare_environment = request.prepare_environment
-            if prepare_environment is None:
-                prepare_environment = not (source_dir / ".venv").exists()
-
             local_env = dict(tracing_env)
             if memory_store:
                 # Display-only: lets the chat app say the bound store connects on deploy. Memory
@@ -160,6 +171,7 @@ class DevService:
                 app_yaml,
                 local_env or None,
                 allowed_origins=project.allowed_origins if project is not None else None,
+                manifest=manifest,
             )
             preview = DevPreview(
                 source_dir=source_dir,
@@ -219,14 +231,18 @@ def _dev_entry_point(
     extra_env: dict[str, str] | None = None,
     *,
     allowed_origins: tuple[str, ...] | None = None,
+    manifest: AppManifest | None = None,
 ) -> pathlib.Path:
     """Write the local-only manifest consumed by ``apps run-local``.
 
     The deployable ``app.yaml`` is never mutated.  This copy forces the Runtime Store into local
     mode, removes deploy-only package-index overrides and workspace resource env, and merges local
-    tracing settings supplied by the adapter.
+    tracing settings supplied by the adapter.  ``manifest`` is ``app_yaml`` already parsed (as
+    ``prepare`` does for its preflight); without it the file is parsed here, so the re-exported
+    ``(app_yaml, ...)`` signature keeps working for existing callers.
     """
-    manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
+    if manifest is None:
+        manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
     env = manifest.raw_env()
     filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
     filtered = [

@@ -102,6 +102,18 @@ class AppManifest:
         raw = self._doc.get("env")
         return raw if isinstance(raw, list) else []
 
+    def command_tokens(self) -> list[str]:
+        """The ``command`` as tokens: a list as-is, a string split on whitespace.
+
+        dev's preflight reads only the executable token; command validation stays with doctor.
+        """
+        command = self._doc.get("command")
+        if isinstance(command, str):
+            return command.split()
+        if isinstance(command, list):
+            return [str(part) for part in command]
+        return []
+
     def upsert_env(
         self,
         updates: Mapping[str, str],

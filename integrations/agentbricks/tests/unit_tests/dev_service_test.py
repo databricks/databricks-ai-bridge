@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 from types import SimpleNamespace
 from typing import cast
@@ -20,13 +22,14 @@ from databricks_agentbricks.clients.local_tracing_client import (
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.services import dev_preflight as dev_preflight_module
 from databricks_agentbricks.services import dev_service as dev_service_module
 from databricks_agentbricks.services.dev_service import DevRequest, DevService
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 
 
 @pytest.fixture
-def service_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
+def service_fixture(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Build a local service with all external ports replaced by test doubles."""
     (tmp_path / "app.yaml").write_text(
         """command: [python, app.py]
@@ -61,6 +64,10 @@ env:
 
     port_in_use = Mock(return_value=False)
     free_port = Mock(return_value=54321)
+
+    # Hermetic by default: the uv preflight is exercised by the preflight tests below, which route
+    # it through the real check with an injected ``which``.
+    monkeypatch.setattr(dev_service_module, "run_dev_preflight", Mock())
 
     service = DevService(
         project_resolver=resolver,
@@ -244,9 +251,11 @@ def test_run_failure_still_removes_manifest_and_stops_tracing(
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
 
 
-def test_manifest_setup_failure_still_stops_started_tracing(
+def test_malformed_manifest_fails_before_tracing_starts(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
+    # The manifest is parsed once, before tracing starts, so a malformed app.yaml fails without
+    # starting (and having to tear down) the local tracing server.
     (tmp_path / "app.yaml").write_text("env: not-a-list\n")
 
     with pytest.raises(AgentCliError, match="env must be a list"):
@@ -257,7 +266,8 @@ def test_manifest_setup_failure_still_stops_started_tracing(
 
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
     service_fixture.apps.run_local.assert_not_called()
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
+    service_fixture.tracing.start_dev.assert_not_called()
+    service_fixture.tracing.stop.assert_not_called()
 
 
 def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
@@ -379,3 +389,259 @@ def test_prepare_omits_the_bound_memory_store_note_when_none_is_bound(
         DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
     ) as plan:
         assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in _manifest_env(plan.entry_point)
+
+
+def _wire_real_preflight(monkeypatch: pytest.MonkeyPatch, *, which, os_name="posix") -> None:
+    """Route dev's preflight through the real check with an injected ``which``."""
+    real = dev_preflight_module.run_dev_preflight
+
+    def wired(source_dir, command_tokens, prepare_environment):
+        real(source_dir, command_tokens, prepare_environment, which=which, os_name=os_name)
+
+    monkeypatch.setattr(dev_service_module, "run_dev_preflight", wired)
+
+
+def _uv_app(tmp_path: pathlib.Path, command: str) -> None:
+    (tmp_path / "app.yaml").write_text(f"command: {command}\nenv: []\n")
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        (["uv", "run", "start-server"], True),
+        (["uv.exe", "run", "start-server"], True),
+        (["/opt/homebrew/bin/uv", "run", "start-server"], True),
+        (["UV", "run", "start-server"], True),
+        (["python", "app.py"], False),
+        (["uvicorn", "main:uv"], False),
+        ([], False),
+    ],
+)
+def test_uses_uv_only_inspects_the_executable_token(tokens, expected) -> None:
+    assert dev_preflight_module.uses_uv(tokens) is expected
+
+
+@pytest.mark.parametrize("command", ["[uv, run, start-server]", "uv run start-server"])
+def test_missing_uv_fails_before_tracing_or_local_manifest(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    _uv_app(tmp_path, command)
+    which = Mock(return_value=None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a missing uv must not yield a plan")
+
+    assert raised.value.message == (
+        "uv is required to run this agent locally, but uv was not found on PATH."
+    )
+    which.assert_called_once_with("uv")
+    service_fixture.tracing.start_dev.assert_not_called()
+    service_fixture.tracing.stop.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("os_name", "install_command"),
+    [
+        ("posix", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
+        (
+            "nt",
+            'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        ),
+    ],
+)
+def test_missing_uv_hint_names_install_verify_and_rerun(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    os_name: str,
+    install_command: str,
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    _wire_real_preflight(monkeypatch, which=Mock(return_value=None), os_name=os_name)
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a missing uv must not yield a plan")
+
+    # One line per step, no baked-in indentation (the renderer indents; `-o json` stays clean).
+    assert raised.value.hint == (
+        f"Install it: {install_command}\n"
+        "Then run `uv --version` to verify, and re-run `agentbricks dev`."
+    )
+
+
+def test_windows_uv_exe_command_triggers_the_uv_check(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _uv_app(tmp_path, '["uv.exe", "run", "start-server"]')
+    which = Mock(return_value=None)
+    _wire_real_preflight(monkeypatch, which=which, os_name="nt")
+
+    with pytest.raises(AgentCliError, match="uv was not found on PATH"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a missing uv.exe must not yield a plan")
+
+    which.assert_called_once_with("uv.exe")
+
+
+def test_uv_found_proceeds_as_before(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _uv_app(tmp_path, "[uv, run, start-server]")
+    events: list[str] = []
+
+    def which(name):
+        events.append(f"which {name}")
+        return "/usr/bin/uv"
+
+    _wire_real_preflight(monkeypatch, which=which)
+
+    def _start_dev(source_dir):
+        events.append("start_dev")
+        return service_fixture.tracing.start_dev.return_value
+
+    service_fixture.tracing.start_dev.side_effect = _start_dev
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=9000)
+    ) as plan:
+        assert plan.prepare_environment is False
+        service_fixture.service.run(plan)
+
+    # The check runs before anything starts, and a found uv ends it quietly.
+    assert events == ["which uv", "start_dev"]
+    service_fixture.apps.run_local.assert_called_once()
+
+
+@pytest.mark.parametrize("prepare_environment", [None, False])
+def test_non_uv_run_with_reused_venv_makes_no_uv_probes(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prepare_environment,
+) -> None:
+    if prepare_environment is None:
+        (tmp_path / ".venv").mkdir()  # auto-detection reuses it: prepare is False
+    which = Mock(return_value=None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=prepare_environment, app_port=None)
+    ) as plan:
+        assert plan.prepare_environment is False
+        service_fixture.service.run(plan)
+
+    which.assert_not_called()
+    service_fixture.apps.run_local.assert_called_once()
+
+
+def test_environment_prepare_triggers_the_uv_check_for_non_uv_commands(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # run-local's --prepare-environment (the default without a .venv) builds the venv with uv, so
+    # the uv check applies even though the app command itself does not use uv.
+    which = Mock(return_value=None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with pytest.raises(AgentCliError, match="uv was not found on PATH"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+        ):
+            pytest.fail("a missing uv must not yield a plan")
+
+    which.assert_called_once_with("uv")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bit")
+def test_project_relative_uv_resolves_against_the_source_dir(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # run-local starts the command from the project, so `./bin/uv` must be found there even when
+    # dev runs from another directory with --source.
+    project = tmp_path / "project"
+    (project / "bin").mkdir(parents=True)
+    vendored_uv = project / "bin" / "uv"
+    vendored_uv.write_text("#!/bin/sh\n")
+    vendored_uv.chmod(0o755)
+    _uv_app(project, '["./bin/uv", "run", "start-server"]')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    which = Mock(side_effect=shutil.which)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(project), prepare_environment=False, app_port=None)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    which.assert_called_once_with(str(project / "./bin/uv"))
+    service_fixture.apps.run_local.assert_called_once()
+
+
+def test_missing_project_relative_uv_fails_before_starting(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _uv_app(tmp_path, '["./bin/uv", "run", "start-server"]')
+    which = Mock(return_value=None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+        ):
+            pytest.fail("a missing project uv must not yield a plan")
+
+    # Installing uv globally wouldn't fix this command, so the error names the configured path.
+    assert raised.value.message == "app.yaml runs uv from ./bin/uv, but no executable uv is there."
+    assert raised.value.hint == (
+        "Restore ./bin/uv, or change the app.yaml command to run `uv` from PATH, "
+        "then re-run `agentbricks dev`."
+    )
+    which.assert_called_once_with(str(tmp_path / "./bin/uv"))
+    service_fixture.tracing.start_dev.assert_not_called()
+
+
+def test_environment_build_needs_path_uv_even_with_a_project_uv(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # run-local builds the environment with uv from PATH, so a project-local uv in the app command
+    # doesn't cover the build.
+    _uv_app(tmp_path, '["./bin/uv", "run", "start-server"]')
+    project_uv = str(tmp_path / "./bin/uv")
+    which = Mock(side_effect=lambda name: name if name == project_uv else None)
+    _wire_real_preflight(monkeypatch, which=which)
+
+    with pytest.raises(AgentCliError, match="uv was not found on PATH"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=True, app_port=None)
+        ):
+            pytest.fail("an environment build without PATH uv must not yield a plan")
+
+    assert [call.args[0] for call in which.call_args_list] == [project_uv, "uv"]
+    service_fixture.tracing.start_dev.assert_not_called()
