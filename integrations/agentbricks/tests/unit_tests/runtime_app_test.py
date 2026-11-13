@@ -26,6 +26,7 @@ from databricks_agentkit.runtime.types import (
     InvocationAttemptContext,
     InvocationEvent,
     InvocationStatus,
+    InvocationSuspension,
 )
 
 _ROUTING_KEY_HEADER = "x-routing-key"
@@ -67,6 +68,23 @@ async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
             return response.json()
         await asyncio.sleep(0.005)
     raise AssertionError("run did not finish")
+
+
+@pytest.mark.asyncio
+async def test_suspended_invocation_returns_accepted_and_closes_event_stream() -> None:
+    async def suspend(input, context):
+        return InvocationSuspension({"pending": ["call"]})
+
+    app = make_app(suspend)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+        assert response.status_code == 202
+        assert response.json()["status"] == "awaiting_resolution"
+        assert (await client.get(f"/api/invocations/{_RUN_1}")).json()[
+            "status"
+        ] == "awaiting_resolution"
+        events = await asyncio.wait_for(client.get(f"/api/invocations/{_RUN_1}/events"), 2)
+        assert "event: run.awaiting_resolution" in events.text
 
 
 @pytest.mark.asyncio

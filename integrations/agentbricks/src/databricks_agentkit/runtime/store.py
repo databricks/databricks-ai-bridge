@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
-from typing import Protocol
+from dataclasses import replace
+from typing import Protocol, runtime_checkable
 
 from databricks_agentkit.runtime.types import (
     Invocation,
@@ -120,6 +121,30 @@ class RuntimeStore(Protocol):
         ...
 
 
+@runtime_checkable
+class SuspensionRuntimeStore(Protocol):
+    """Optional atomic pause and resolution operations for stores supporting durable waits."""
+
+    async def suspend(self, invocation_id: str, attempt: int, continuation: JsonObject) -> bool:
+        """Release the active attempt, retaining its queue position.
+
+        A durable store may also return true for an exact retry of an already committed pause.
+        """
+        ...
+
+    async def resolve(
+        self, invocation_id: str, expected: JsonObject, continuation: JsonObject, *, resume: bool
+    ) -> Invocation | None:
+        """Compare-and-set waiting state, optionally making the invocation runnable.
+
+        Return None if execution is active or the expected continuation no longer matches,
+        except that a durable store may return the state for an exact retry of a committed
+        resolution. The host authenticates and validates resolutions and handles duplicate
+        submissions.
+        """
+        ...
+
+
 class InMemoryRuntimeStore(RuntimeStore):
     """Process-local Runtime Store for development and tests."""
 
@@ -187,7 +212,12 @@ class InMemoryRuntimeStore(RuntimeStore):
                     state
                     for state in self.states.values()
                     if state.session_id == session_id
-                    and state.status in {InvocationStatus.ACTIVE, InvocationStatus.QUEUED}
+                    and state.status
+                    in {
+                        InvocationStatus.ACTIVE,
+                        InvocationStatus.QUEUED,
+                        InvocationStatus.AWAITING_RESOLUTION,
+                    }
                 ]
                 state = min(
                     candidates,
@@ -211,7 +241,11 @@ class InMemoryRuntimeStore(RuntimeStore):
                     for candidate in self.states.values()
                     if candidate.session_id == state.session_id
                 ]
-                if any(candidate.status == InvocationStatus.ACTIVE for candidate in session_states):
+                if any(
+                    candidate.status
+                    in {InvocationStatus.ACTIVE, InvocationStatus.AWAITING_RESOLUTION}
+                    for candidate in session_states
+                ):
                     return None
                 queued = [
                     candidate
@@ -229,12 +263,46 @@ class InMemoryRuntimeStore(RuntimeStore):
                 attempt=state.attempt + 1,
                 request=copy.deepcopy(state.request),
                 response=None,
+                continuation=copy.deepcopy(state.continuation),
                 session_id=state.session_id,
                 session_sequence_number=state.session_sequence_number,
             )
             self.states[invocation_id] = claimed
             self._append_event(invocation_id, claimed.attempt, {"type": "run.started"})
             return copy.deepcopy(claimed)
+
+    async def suspend(self, invocation_id: str, attempt: int, continuation: JsonObject) -> bool:
+        async with self._lock:
+            state = self.states.get(invocation_id)
+            if state is None or not self._owns_attempt(state, attempt):
+                return False
+            self.states[invocation_id] = replace(
+                state,
+                status=InvocationStatus.AWAITING_RESOLUTION,
+                continuation=copy.deepcopy(continuation),
+                worker_id=None,
+            )
+            self._append_event(invocation_id, attempt, {"type": "run.awaiting_resolution"})
+            return True
+
+    async def resolve(
+        self, invocation_id: str, expected: JsonObject, continuation: JsonObject, *, resume: bool
+    ) -> Invocation | None:
+        async with self._lock:
+            state = self.states.get(invocation_id)
+            if (
+                state is None
+                or state.status != InvocationStatus.AWAITING_RESOLUTION
+                or state.continuation != expected
+            ):
+                return None
+            updated = replace(
+                state,
+                status=InvocationStatus.QUEUED if resume else InvocationStatus.AWAITING_RESOLUTION,
+                continuation=copy.deepcopy(continuation),
+            )
+            self.states[invocation_id] = updated
+            return copy.deepcopy(updated)
 
     async def complete(self, invocation_id: str, attempt: int, response: JsonValue) -> bool:
         async with self._lock:
@@ -247,6 +315,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 attempt=state.attempt,
                 request=state.request,
                 response=copy.deepcopy(response),
+                continuation=copy.deepcopy(state.continuation),
                 session_id=state.session_id,
                 session_sequence_number=state.session_sequence_number,
             )
@@ -264,6 +333,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 attempt=state.attempt,
                 request=state.request,
                 response=copy.deepcopy(response),
+                continuation=copy.deepcopy(state.continuation),
                 session_id=state.session_id,
                 session_sequence_number=state.session_sequence_number,
             )

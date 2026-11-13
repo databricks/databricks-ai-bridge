@@ -430,6 +430,14 @@ require it, and read `input.actor` to choose whose long-term memory to use (see
 The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
 while its record is retained; using the ID for a different request returns `409`.
 
+The lower-level Runtime SDK supports optional invocation suspension and atomic continuation
+resolution through a host-provided store adapter (or the local in-memory store). The built-in
+Lakebase store does not support suspension. A suspended invocation reports `awaiting_resolution`; synchronous POST returns `202`
+and its event stream ends after `run.awaiting_resolution`. Applications must provide their own
+authenticated approval or tool-result endpoint and validation before calling `Runtime.resolve()`.
+The managed server does not add an approval endpoint. See the
+[runtime guide](src/databricks_agentkit/runtime/README.md#sdk-suspension-capability).
+
 `agentbricks dev` keeps execution state in process and loses it on restart. For projects with
 `[agent].server = "agentbricks"`, `agentbricks deploy` provisions a persistent Runtime Store for requests,
 status, events, and results. Queued work is reserved for the worker that accepted it, so other

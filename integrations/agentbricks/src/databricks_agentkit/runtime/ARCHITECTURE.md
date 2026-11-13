@@ -50,6 +50,12 @@ Invocation and event reads can target either one invocation or one session; sess
 the active invocation, then the earliest queued
 invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
 
+The optional `SuspensionRuntimeStore` contract lets a host pause an invocation and atomically
+requeue it after validating a resolution. The SDK ends the current attempt without marking it
+complete and schedules the same invocation when it becomes queued again. Continuation data is
+opaque to the SDK; the host's store adapter owns its persistence. The in-memory store implements
+this contract for local development and tests. The built-in Lakebase store does not implement it.
+
 The HTTP server accepts an optional top-level `session_id` and passes it to Runtime in every
 execution mode. If it is omitted, the invocation remains sessionless. Request-user sessions are
 namespaced once before they enter Runtime. The session saved in the Runtime Store and propagated
