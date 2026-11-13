@@ -75,6 +75,8 @@ from databricks_agentbricks.services.deployment.tool_access_provisioner import T
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _auth_plan(
     *,
@@ -398,7 +400,6 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     assert result.env["RUNTIME_STORE_DATABASE"] == "db-id"
     assert result.session_grant_error == "grant denied"
     assert result.tool_access is not None and result.tool_access.app_resources == 1
-    assert result.created_app_yaml is True
     assert result.uses_runtime_api is True
 
 
@@ -718,7 +719,6 @@ env:
     }
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
-    assert result.created_app_yaml is False
     context = deployment_fixture.app.start_compute.call_args.args[0]
     deployment_fixture.app.start_compute.assert_called_once_with(context, None, 3)
     deployment_fixture.runtime.after_app_created.assert_called_once_with(
@@ -726,13 +726,73 @@ env:
     )
 
 
-def test_deploy_with_no_manifest_changes_does_not_scaffold_app_yaml(
+def _assert_no_workspace_call(f: SimpleNamespace) -> None:
+    f.provider.get.assert_not_called()
+    f.app.prepare_app_auth.assert_not_called()
+    f.apps.app_state.assert_not_called()
+    f.apps.exists.assert_not_called()
+    f.app.start_compute.assert_not_called()
+
+
+def test_deploy_outside_a_project_fails_before_any_workspace_call(
     deployment_fixture, tmp_path: pathlib.Path
 ):
-    result = deployment_fixture.service.deploy(_request(tmp_path))
+    (tmp_path / "app.yaml").unlink()
 
-    assert result.created_app_yaml is False
+    with pytest.raises(AgentCliError) as exc_info:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc_info.value.message == (
+        f"No Agent Bricks project in {tmp_path.resolve()} (no agent.toml or app.yaml)."
+    )
+    _assert_no_workspace_call(deployment_fixture)
     assert not (tmp_path / "app.yaml").exists()
+
+
+def test_deploy_of_a_project_without_app_yaml_names_the_expected_path(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    (tmp_path / "app.yaml").unlink()
+    deployment_fixture.resolver.load.return_value.write()
+
+    with pytest.raises(AgentCliError, match=f"No app.yaml in {tmp_path.resolve()}"):
+        deployment_fixture.service.prepare(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert not (tmp_path / "app.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "match"),
+    [
+        ("command: ['# TODO: set your run command']\n", "has a placeholder command"),
+        ("command: [unterminated", "Could not parse"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
+    ],
+)
+def test_deploy_rejects_an_unusable_app_yaml_before_any_workspace_call(
+    deployment_fixture, tmp_path: pathlib.Path, text: str, match: str
+):
+    (tmp_path / "app.yaml").write_text(text)
+
+    with pytest.raises(AgentCliError, match=match):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert (tmp_path / "app.yaml").read_text() == text
+
+
+def test_deploy_with_no_manifest_changes_leaves_app_yaml_alone(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.resolver.load.return_value = None
+    before = (tmp_path / "app.yaml").read_text()
+
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert (tmp_path / "app.yaml").read_text() == before
     deployment_fixture.provider.get.assert_called_once_with()
 
 
@@ -1160,6 +1220,40 @@ def test_failure_after_rollout_gets_no_partial_app_note(deployment_fixture, tmp_
 
     assert exc.value.hint is None
     deployment_fixture.app.roll_out.assert_called_once()
+
+
+@pytest.mark.parametrize("disabled", ["memory", "session"])
+def test_disabled_store_preview_fails_before_the_app_is_created(
+    deployment_fixture, tmp_path: pathlib.Path, disabled: str
+):
+    # An opted-out workspace must not be left with an App and no deployment: the store probe runs
+    # before the early create, so nothing is created and there is no partial-App note.
+    deployment_fixture.resolver.resource_bindings.return_value = ("memory", "sessions", None)
+    getattr(deployment_fixture, disabled).preflight.side_effect = AgentCliError(
+        "preview off", error_code="FEATURE_DISABLED", hint="enable it"
+    )
+
+    with pytest.raises(AgentCliError, match="preview off") as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint == "enable it"
+    deployment_fixture.app.start_compute.assert_not_called()
+    deployment_fixture.memory.reconcile.assert_not_called()
+    deployment_fixture.session.reconcile.assert_not_called()
+    deployment_fixture.runtime.reconcile.assert_not_called()
+    deployment_fixture.app.roll_out.assert_not_called()
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+def test_store_preflight_sees_the_bound_stores(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.resolver.resource_bindings.return_value = ("memory", "sessions", None)
+
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    (memory_ctx,) = deployment_fixture.memory.preflight.call_args.args
+    (session_ctx,) = deployment_fixture.session.preflight.call_args.args
+    assert (memory_ctx.memory_store, session_ctx.session_store) == ("memory", "sessions")
+    deployment_fixture.app.start_compute.assert_called_once()
 
 
 def test_create_failure_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
@@ -1647,6 +1741,30 @@ def _notes(fixture) -> list[str]:
     return [call.args[0] for call in fixture.reporter.note.call_args_list]
 
 
+@pytest.mark.parametrize("tracked", [False, True])
+@pytest.mark.parametrize("error_type", [AgentCliError, RuntimeError, KeyboardInterrupt])
+def test_rollout_outcome_resets_before_preparation(
+    deployment_fixture, tmp_path, tracked, error_type
+):
+    tracker = DeployStateTracker(result_payload=lambda result: {}) if tracked else None
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+    request = _request(tmp_path)
+    service.deploy(request)
+    assert service.rollout_outcome == deploy_state.SUCCEEDED
+
+    error = error_type("rollout failed")
+    deployment_fixture.app.roll_out.side_effect = error
+    with pytest.raises(error_type) as caught:
+        service.deploy(request)
+    assert caught.value is error
+    assert service.rollout_outcome == deploy_state.FAILED
+
+    deployment_fixture.app.prepare_app_auth.side_effect = AgentCliError("preparation failed")
+    with pytest.raises(AgentCliError, match="preparation failed"):
+        service.deploy(request)
+    assert service.rollout_outcome is None
+
+
 def test_deploy_records_success_through_the_state_tracker(
     deployment_fixture, tmp_path: pathlib.Path
 ):
@@ -1981,11 +2099,13 @@ def test_readiness_timeout_retains_observation_without_misreporting_network_fail
         assert diagnostics.failure_stage == FailureStage.READY
         assert diagnostics.readiness == Readiness.BOOTING
         assert diagnostics.probe_http_status == 502
+        assert service.rollout_outcome == deploy_state.FAILED
     else:
         assert service.deploy(_request(tmp_path)).ready is None
         assert diagnostics.failure_stage is None
         assert diagnostics.readiness == Readiness.UNREACHABLE
         assert diagnostics.probe_http_status is None
+        assert service.rollout_outcome == deploy_state.SUCCEEDED
     assert sum(clock.sleeps) == 300
 
 
@@ -2007,6 +2127,8 @@ def test_network_recovery_can_confirm_readiness(deployment_fixture, tmp_path):
     ("collaborator", "method", "stage"),
     [
         ("resolver", "load", FailureStage.PREFLIGHT),
+        ("memory", "preflight", FailureStage.PREFLIGHT),
+        ("session", "preflight", FailureStage.PREFLIGHT),
         ("app", "start_compute", FailureStage.APP_START),
         ("memory", "reconcile", FailureStage.RECONCILE),
         ("app", "roll_out", FailureStage.ROLLOUT),

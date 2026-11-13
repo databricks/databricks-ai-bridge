@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 
+from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment import deploy_state
 from databricks_agentbricks.services.deployment.deploy_state import (
@@ -101,6 +102,29 @@ def test_background_child_inherits_the_parents_record(tmp_path: pathlib.Path):
     assert state is not None
     assert state["started_at"] == deploy_state.timestamp(_T0)
     assert state["log"] == str(deploy_state.log_path(tmp_path, "agent-bricks-x"))
+
+
+def test_workspace_identity_survives_handoff_phases_and_completion(tmp_path: pathlib.Path):
+    workspace = WorkspaceIdentity("https://workspace.example", "123")
+    deploy_state.record_background_start(
+        tmp_path, "agent-bricks-x", pid=4242, now=_T0, workspace=workspace
+    )
+    tracker = _tracker(background=True, now=[_T0 + 5])
+    tracker.start(tmp_path, "agent-bricks-x")
+    tracker.phase("Reconciling Runtime Store…")
+    path = deploy_state.state_path(tmp_path, "agent-bricks-x")
+    state = deploy_state.read_state(path)
+    assert state is not None
+    assert state["workspace"] == {"host": workspace.host, "workspace_id": workspace.workspace_id}
+    tracker.set_workspace(None)
+    state = deploy_state.read_state(path)
+    assert state is not None
+    assert state["workspace"] is None
+    tracker.set_workspace(workspace)
+    tracker.succeeded("agent-bricks-x")
+    state = deploy_state.read_state(path)
+    assert state is not None
+    assert state["workspace"] == {"host": workspace.host, "workspace_id": workspace.workspace_id}
 
 
 def test_record_background_start_records_an_absolute_log_path(

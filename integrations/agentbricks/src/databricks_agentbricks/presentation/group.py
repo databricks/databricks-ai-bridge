@@ -20,10 +20,12 @@ from __future__ import annotations
 import difflib
 import inspect
 import time
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 import click
+from click.core import ParameterSource
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.agent_hint import workflow_hint
 from databricks_agentbricks.errors import AgentCliError
 
@@ -80,6 +82,10 @@ class AgentBricksGroup(_FlushEpilog, click.Group):
                     click.echo(message, err=True)
                 except Exception:
                     pass
+            # Usage errors can fire before any command callback runs, so record the raw line's
+            # `-o/--output` choice (if any) up front: the last value on the line decides how errors
+            # render, even when the bad option or unknown command comes before it.
+            errors.set_usage_output_mode(_scan_output(self, args))
         return super().make_context(info_name, args, parent=parent, **extra)
 
     def resolve_command(self, ctx: click.Context, args: list[str]):
@@ -162,6 +168,100 @@ class AgentBricksHelpFormatter(click.HelpFormatter):
         # `term_len` (ANSI-aware), so styling the description doesn't disturb alignment or wrapping.
         grayed = [(term, dim(desc) if desc else desc) for term, desc in rows]
         super().write_dl(grayed, col_max=col_max, col_spacing=col_spacing)
+
+
+_OUTPUT_CHOICES = ("text", "json")
+
+
+def _takes_value(command: click.Command) -> set[str]:
+    """Option spellings on `command` that consume the next token as their value."""
+    return {
+        opt
+        for param in command.params
+        if isinstance(param, click.Option) and not (param.is_flag or param.count)
+        for opt in param.opts
+    }
+
+
+def _short_cluster_output(token: str, tokens: Iterator[str], value_opts: set[str]) -> Optional[str]:
+    """Return the `-o` value inside a short-option cluster such as `-yojson`, consuming its value.
+
+    Like Click, flags are read until a value-taking option, which takes the rest of the token or else
+    the next token.
+    """
+    for i in range(1, len(token)):
+        opt, rest = f"-{token[i]}", token[i + 1 :]
+        if opt == "-o":
+            return rest or next(tokens, None)
+        if opt in value_opts:
+            if not rest:
+                next(tokens, None)
+            return None
+    return None
+
+
+def _scan_output(root: click.Group, args: list[str]) -> Optional[str]:
+    """Return the last valid `-o/--output` value in the raw line, before any `--`.
+
+    Walks the line with each command's own options, so a value like `--description --output=text`
+    is not read as an output choice.
+    """
+    found: Optional[str] = None
+    command: click.Command = root
+    value_opts = _takes_value(root)
+    tokens = iter(args)
+    for token in tokens:
+        if token == "--":
+            break
+        if token in ("-o", "--output"):
+            value = next(tokens, None)
+        elif token.startswith("--output="):
+            value = token.partition("=")[2]
+        elif token in value_opts:
+            next(tokens, None)
+            continue
+        elif token.startswith("-") and not token.startswith("--"):
+            value = _short_cluster_output(token, tokens, value_opts)
+        elif isinstance(command, click.Group) and token in command.commands:
+            command = command.commands[token]
+            value_opts = _takes_value(command)
+            continue
+        else:
+            continue
+        if value in _OUTPUT_CHOICES:
+            found = value
+    return found
+
+
+def _apply_output(ctx: click.Context, _param: click.Parameter, value: Optional[str]) -> None:
+    """Let a command's `-o/--output` override the root group's choice."""
+    if value is None:
+        return
+    errors.set_output_mode(value)
+    # Duck-typed: commands read the mode from the root's `CliContext` on `ctx.obj`.
+    if ctx.obj is not None and hasattr(ctx.obj, "output"):
+        ctx.obj.output = value
+    # Telemetry records each context's parsed params, and this option is `expose_value=False`, so
+    # mirror the effective choice onto the root's `--output` for the invocation record.
+    root = ctx
+    while root.parent is not None:
+        root = root.parent
+    if "output" in root.params:
+        root.params["output"] = value
+        root.set_parameter_source("output", ParameterSource.COMMANDLINE)
+
+
+def _output_option() -> click.Option:
+    """The per-command `-o/--output`; `None` means "keep the root's value"."""
+    return click.Option(
+        ["--output", "-o"],
+        type=click.Choice(list(_OUTPUT_CHOICES)),
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_apply_output,
+        help="Output format (default: text).",
+    )
 
 
 class AgentBricksCommand(_FlushEpilog, click.Command):
@@ -259,7 +359,7 @@ def _usage_error_show(self: click.exceptions.UsageError, file=None) -> None:
     invocation = self.ctx.command_path if self.ctx is not None else "agentbricks"
     message = self.format_message()
     hint = f"run `{invocation} --help` to see the available options and arguments"
-    if errors._OUTPUT_MODE == "json":
+    if errors.error_output_mode() == "json":
         import json
 
         click.echo(json.dumps({"error": {"message": message, "hint": hint}}, indent=2), err=True)
@@ -293,5 +393,10 @@ def _upgrade(command: click.Command) -> None:
             command.__class__ = AgentBricksGroup
         for child in command.commands.values():
             _upgrade(child)
-    elif not isinstance(command, AgentBricksCommand):
-        command.__class__ = AgentBricksCommand
+    else:
+        if not isinstance(command, AgentBricksCommand):
+            command.__class__ = AgentBricksCommand
+    # Accept `-o/--output` after any command or group name, unless it already defines the option.
+    taken = {opt for param in command.params for opt in param.opts}
+    if not taken & {"-o", "--output"}:
+        command.params.append(_output_option())
