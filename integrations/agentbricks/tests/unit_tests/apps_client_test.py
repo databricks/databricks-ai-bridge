@@ -260,28 +260,28 @@ def test_deploy_retries_while_the_app_is_busy_then_succeeds():
     assert all(kwargs.get("tee") is True for _, kwargs in runner.calls)
 
 
-@pytest.mark.parametrize("output_kind", ["pem", "long_line"])
+@pytest.mark.parametrize("output_kind", ["pem", "long_line", "ordinary_multiline"])
 @pytest.mark.parametrize("persistent", [False, True])
 def test_busy_retry_and_hint_survive_diagnostic_retention(output_kind, persistent, capsys):
     import sys
 
     from databricks_agentbricks.clients.databricks_cli import _run_tee
 
-    output = (
-        "-----BEGIN PRIVATE KEY-----\n"
+    output = {
+        "pem": "-----BEGIN PRIVATE KEY-----\n"
         + "synthetic-key-body\n" * 400
         + "-----END PRIVATE KEY-----\n"
-        + _BUSY
-        if output_kind == "pem"
-        else "x" * 10000 + _BUSY
-    )
+        + _BUSY,
+        "long_line": "x" * 10000 + _BUSY,
+        "ordinary_multiline": "Another operation is in progress\n" + "Build progress\n" * 400,
+    }[output_kind]
     results = []
     sleeps = []
 
     def runner(*args, **kwargs):
         assert kwargs["tee"]
         busy = persistent or not results
-        code = f"print({output if busy else ''!r}); raise SystemExit({int(busy)})"
+        code = f"print({output if busy else ''!r}); raise SystemExit({17 if busy else 0})"
         result = _run_tee([sys.executable, "-c", code], cwd=None, env=None)
         results.append(result)
         return result
@@ -291,14 +291,22 @@ def test_busy_retry_and_hint_survive_diagnostic_retention(output_kind, persisten
         with pytest.raises(AgentCliError) as raised:
             client.deploy("my-app", "/Workspace/x")
         assert "agentbricks deployments wait my-app" in (raised.value.hint or "")
-        assert "synthetic-key-body" not in (raised.value.failure_detail or "")
+        assert raised.value.failure_detail == "[REDACTED]"
+        assert raised.value.subprocess_exit_code == 17
         assert len(results) == 7
+        assert sleeps == [5, 10, 15, 20, 30, 30]
     else:
         client.deploy("my-app", "/Workspace/x")
         assert len(results) == 2
-    assert sleeps
-    assert all(_BUSY not in result.stdout for result in results)
-    assert _BUSY in capsys.readouterr().err
+        assert sleeps == [5]
+        assert results[-1].returncode == 0
+        assert not results[-1].app_busy
+    failures = results if persistent else results[:-1]
+    assert all(result.stdout == "[REDACTED]" for result in failures)
+    assert all(result.app_busy and result.returncode == 17 for result in failures)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (output + "\n") * len(failures) + ("" if persistent else "\n")
 
 
 def test_busy_match_is_case_insensitive():
