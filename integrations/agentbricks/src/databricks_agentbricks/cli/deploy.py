@@ -84,9 +84,9 @@ from databricks_agentbricks.services.deployment.provisioners import (
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 
-# `deployments wait` returns before a coding agent's usual 120 s command timeout, and exits with
+# `deployments wait` gives up when `deploy`'s own readiness wait does (5 minutes), and exits with
 # EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
-_WAIT_TIMEOUT_S = 100
+_WAIT_TIMEOUT_S = 300
 _EX_TEMPFAIL = 75
 _DEPLOYMENT_OUTCOMES: dict[str | None, telemetry.DeploymentOutcome] = {
     None: "DEPLOYMENT_OUTCOME_UNSPECIFIED",
@@ -409,7 +409,7 @@ def deployments_get(obj, name) -> None:
     type=click.IntRange(min=0),
     default=_WAIT_TIMEOUT_S,
     show_default=True,
-    help="Seconds to wait before returning exit 75.",
+    help="Seconds to wait before exit 75. Set your command timeout above this.",
 )
 @click.option(
     "--source",

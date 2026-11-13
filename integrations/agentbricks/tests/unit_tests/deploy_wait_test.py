@@ -614,7 +614,8 @@ def test_readme_and_cli_reference_list_no_wait_and_wait():
     assert "wait       [<name>] [--timeout SECONDS] [--source PATH]" in readme
     assert "| `--no-wait` | flag |" in reference
     assert "#### `agentbricks deployments wait`" in reference
-    assert "| `--timeout <TIMEOUT>` | integer range | `100` |" in reference
+    assert "| `--timeout <TIMEOUT>` | integer range | `300` |" in reference
+    assert "returns within 300 seconds" in note and "timeout: 360000" in note
     assert "background-child" not in readme + reference
 
 
@@ -623,7 +624,34 @@ def test_wait_help_lists_exit_codes_and_examples():
     assert result.exit_code == 0
     assert "75 still deploying" in result.output
     assert "0 deployed and answering" in result.output
-    assert "--timeout" in result.output and "100" in result.output
+    assert "Set your command timeout above this." in " ".join(result.output.split())
+    assert "default: 300" in result.output
+
+
+@pytest.mark.parametrize(("args", "expected"), [((), 300), (("--timeout", "42"), 42)])
+def test_wait_passes_the_timeout_to_the_service(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, args, expected
+):
+    seen: list[float] = []
+
+    def fake_wait(self, name, source_dir, timeout_s):
+        seen.append(timeout_s)
+        return deploy_service_mod.WaitResult(
+            deployment=_APP,
+            status=deploy_state.SUCCEEDED,
+            phase="Deployed",
+            elapsed_s=0,
+            url="https://agent.example",
+            error=None,
+            log_tail=[],
+            uses_runtime_api=False,
+            ready=True,
+        )
+
+    monkeypatch.setattr(deploy_service_mod.DeployService, "wait", fake_wait)
+    result = _wait(project, _APP, *args)
+    assert result.exit_code == 0, result.output
+    assert seen == [expected]
 
 
 # --- readiness: deploy and wait finish only once the App answers ---------------------------------
