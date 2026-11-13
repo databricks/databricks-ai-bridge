@@ -75,7 +75,7 @@ def ops(monkeypatch):
         ("stop_pidfile_process", None),
         ("live_worker", None),
         ("start_detached", 4242),
-        ("alive_with_log", (True, "")),
+        ("worker_progress", (True, True, "")),
         ("state_of", _ops.SandboxState.SANDBOX_STATE_RUNNING),
         ("delete_quietly", None),
         ("upload_text", None),
@@ -151,7 +151,7 @@ def test_start_command_clears_the_finishing_marker(ops):
     cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
     lc.launch(work())
     ((args, kwargs),) = ops["start_detached"]
-    assert f"rm -f {launcher_mod.WORKER_FINISHING}" in args[2]
+    assert f"rm -f {launcher_mod.WORKER_FINISHING} {launcher_mod.WORKER_READY}" in args[2]
     assert kwargs["envs"]["CMA_FINISHING_MARKER"] == launcher_mod.WORKER_FINISHING
 
 
@@ -169,7 +169,9 @@ def test_worker_keeps_sandbox_when_it_fails_before_attaching(monkeypatch, tmp_pa
 
 
 def test_launch_error_includes_the_worker_log(ops, monkeypatch):
-    monkeypatch.setattr(_ops, "alive_with_log", lambda *a, **k: (False, "RuntimeError: bad token"))
+    monkeypatch.setattr(
+        _ops, "worker_progress", lambda *a, **k: (False, False, "RuntimeError: bad token")
+    )
     lc = make_launcher()
     cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
     with pytest.raises(_ops.SandboxCommandError, match="bad token"):
@@ -181,20 +183,77 @@ def test_launch_explains_a_sandbox_deleted_during_startup(ops, monkeypatch):
     def gone(*a, **k):
         raise NotFound("gone")
 
-    monkeypatch.setattr(_ops, "alive_with_log", gone)
+    monkeypatch.setattr(_ops, "worker_progress", gone)
     lc = make_launcher()
     cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
     with pytest.raises(_ops.SandboxCommandError, match="deleted while its worker was starting"):
         lc.launch(work())
 
 
-def test_alive_with_log_uses_one_exec(monkeypatch):
+def test_worker_progress_uses_one_exec(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        _ops, "run", lambda *a, **k: calls.append(a) or SimpleNamespace(stdout="DEAD\nline1\nline2")
+        _ops,
+        "run",
+        lambda *a, **k: calls.append(a) or SimpleNamespace(stdout="ALIVE\nREADY\nline1\nline2"),
     )
-    assert _ops.alive_with_log(MagicMock(), "s", 7, "/l/w.log") == (False, "line1\nline2")
+    assert _ops.worker_progress(MagicMock(), "s", 7, "/l/w.log", "/l/ready") == (
+        True,
+        True,
+        "line1\nline2",
+    )
     assert len(calls) == 1
+
+
+def test_launch_waits_for_ready_instead_of_a_fixed_sleep(ops, monkeypatch):
+    states = iter([(True, False, ""), (True, False, ""), (True, True, "")])
+    seen = []
+    monkeypatch.setattr(_ops, "worker_progress", lambda *a, **k: seen.append(1) or next(states))
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
+    lc.launch(work())
+    assert len(seen) == 3  # polled until ready
+
+
+def test_worker_failing_after_the_first_check_is_still_reported(ops, monkeypatch):
+    states = iter([(True, False, ""), (False, False, "mcp: 403 Forbidden")])
+    monkeypatch.setattr(_ops, "worker_progress", lambda *a, **k: next(states))
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
+    with pytest.raises(_ops.SandboxCommandError, match="403"):
+        lc.launch(work())
+    assert len(ops["delete_quietly"]) == 1
+
+
+def test_finishing_worker_gets_a_long_grace_before_kill(ops, monkeypatch):
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.return_value = tagged()
+    monkeypatch.setattr(
+        _ops, "live_worker", lambda *a, **k: _ops.WorkerState(9, "", finishing=True)
+    )
+    lc.launch(work())
+    ((_, kwargs),) = ops["stop_pidfile_process"]
+    assert kwargs["grace_s"] == launcher_mod.FINISHING_GRACE_S
+
+
+def test_reuse_is_rechecked_before_trusting_it(ops, monkeypatch):
+    looks = iter([_ops.WorkerState(9, "sesn_A"), _ops.WorkerState(9, "", finishing=True)])
+    monkeypatch.setattr(_ops, "live_worker", lambda *a, **k: next(looks))
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.return_value = tagged()
+    result = lc.launch(work())
+    assert not result.reused and len(ops["start_detached"]) == 1  # started finishing: replaced
+
+
+def test_still_usable_handles_notfound_while_starting(monkeypatch):
+    lc = make_launcher()
+    monkeypatch.setattr(_ops, "state_of", lambda *a, **k: _ops.SandboxState.SANDBOX_STATE_STOPPING)
+
+    def gone(*a, **k):
+        raise NotFound("deleted")
+
+    monkeypatch.setattr(_ops, "ensure_running", gone)
+    assert lc._still_usable("sandboxes/x") is False
 
 
 # ---------------------------------------------------------------- 2. kept (export-failed) sandboxes
@@ -273,7 +332,10 @@ def test_health_recovers_once_a_run_stays_up(monkeypatch):
     service.run_started_at = clock["t"]
     assert not service.healthy
     clock["t"] += svc.RECOVERED_AFTER_S + 1
-    assert service.healthy and service.consecutive_crashes == 0
+    assert service.healthy
+    assert (
+        service.consecutive_crashes == svc.UNHEALTHY_AFTER_RESTARTS
+    )  # read-only: no reset from a probe
 
 
 # ---------------------------------------------------------------- 8. Genie payload shapes

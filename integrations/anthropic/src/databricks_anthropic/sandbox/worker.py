@@ -24,6 +24,8 @@ Environment (set by the launcher under ``env -i`` with an allowlist; no secrets)
                             worker runs and lets inactivity_timeout stop it if it dies
   CMA_ON_EXIT               "delete" (ephemeral, default) or "stop" (resumable): what to do with this
                             sandbox when the worker returns, after memory stores are flushed
+  CMA_READY_MARKER          written once the session is about to be served (credential and MCP tools ready);
+                            the launcher waits for it instead of a fixed sleep
   CMA_FINISHING_MARKER      written when this worker starts finishing (export, then delete or stop), so the
                             launcher replaces it instead of treating it as still serving the session
   CMA_REPLACING_MARKER      if this file exists on exit, a newer worker is replacing this one: skip the
@@ -122,6 +124,14 @@ def _export_outputs(session_id: str) -> bool:
 def _being_replaced() -> bool:
     marker = os.environ.get("CMA_REPLACING_MARKER")
     return bool(marker and os.path.exists(marker))
+
+
+def _mark_ready() -> None:
+    marker = os.environ.get("CMA_READY_MARKER")
+    if marker:
+        with contextlib.suppress(OSError):
+            with open(marker, "w") as f:
+                f.write(str(os.getpid()))
 
 
 def _mark_finishing() -> None:
@@ -332,9 +342,15 @@ async def _open_mcp_tools(
     config = _workspace_client().config
 
     class _DatabricksAuth(http_lib.Auth):
-        # The sandbox credential rotates hourly: resolve headers per request.
+        # The sandbox credential rotates hourly: resolve headers per request. The async flow resolves them
+        # in a thread, because a refresh does blocking I/O and this loop also runs heartbeats and tools.
         def auth_flow(self, request):
             request.headers.update(config.authenticate())
+            request.headers["User-Agent"] = config.user_agent
+            yield request
+
+        async def async_auth_flow(self, request):
+            request.headers.update(await asyncio.to_thread(config.authenticate))
             request.headers["User-Agent"] = config.user_agent
             yield request
 
@@ -450,6 +466,7 @@ async def main() -> None:
                 max_idle=float(os.environ.get("CMA_MAX_IDLE", "300")),
             )
             attached = True
+            _mark_ready()
             task = asyncio.create_task(
                 worker.handle_item(
                     work_id=os.environ["ANTHROPIC_WORK_ID"],

@@ -108,7 +108,7 @@ def ops(monkeypatch):
     record("stop_pidfile_process")
     record("live_worker", None)
     record("start_detached", 4242)
-    record("alive_with_log", (True, ""))
+    record("worker_progress", (True, True, ""))
     record("state_of", _ops.SandboxState.SANDBOX_STATE_RUNNING)
     record("delete_quietly")
     record("upload_text")
@@ -149,14 +149,14 @@ def test_create_deletes_sandbox_that_never_starts(ops, monkeypatch):
 
 def test_launch_deletes_sandbox_it_created_when_worker_dies(ops, monkeypatch):
     monkeypatch.setattr(_ops, "ensure_running", MagicMock(side_effect=NotFound("nope")))
-    monkeypatch.setattr(_ops, "alive_with_log", lambda *a, **k: (False, "boom"))
+    monkeypatch.setattr(_ops, "worker_progress", lambda *a, **k: (False, False, "boom"))
     with pytest.raises(_ops.SandboxCommandError):
         make_launcher().launch(work_item())
     assert len(ops["delete_quietly"]) == 1
 
 
 def test_launch_keeps_existing_sandbox_on_failure(ops, monkeypatch):
-    monkeypatch.setattr(_ops, "alive_with_log", lambda *a, **k: (False, "boom"))
+    monkeypatch.setattr(_ops, "worker_progress", lambda *a, **k: (False, False, "boom"))
     with pytest.raises(_ops.SandboxCommandError):
         make_launcher().launch(work_item())
     assert "delete_quietly" not in ops  # resumed session: never delete the user's sandbox

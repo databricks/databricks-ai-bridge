@@ -186,8 +186,29 @@ def test_upload_is_atomic_and_private(monkeypatch):
     scripts = []
     monkeypatch.setattr(_ops, "run", lambda w, n, s, **k: scripts.append(s))
     _ops.upload_text(MagicMock(), "sb", "/x/f", "secret", mode="600")
-    assert "umask 077" in scripts[0] and '"$DBX_PATH.part"' in scripts[0]
-    assert "chmod 600" in scripts[-1] and 'mv -f "$DBX_PATH.part" "$DBX_PATH"' in scripts[-1]
+    # One exec for a small file (secrets): a fresh mktemp file (O_EXCL, never a planted symlink), private
+    # umask from the first byte, then chmod and rename into place.
+    (script,) = scripts
+    assert "umask 077" in script and 'mktemp "$DBX_PATH.XXXXXXXX"' in script
+    assert ".part" not in script
+    assert (
+        script.index("mktemp") < script.index("chmod 600") < script.index('mv -f "$t" "$DBX_PATH"')
+    )
+
+
+def test_large_upload_appends_to_the_same_checked_temp_file(monkeypatch):
+    scripts, envs = [], []
+
+    def run(w, n, s, **k):
+        scripts.append(s)
+        envs.append(k.get("envs", {}))
+        return SimpleNamespace(stdout="/x/f.AbCdEfGh\n")
+
+    monkeypatch.setattr(_ops, "run", run)
+    _ops.upload_text(MagicMock(), "sb", "/x/f", "x" * (_ops._UPLOAD_B64_CHUNK * 2), mode="644")
+    assert len(scripts) >= 3 and "mktemp" in scripts[0]
+    assert all(e.get("t") == "/x/f.AbCdEfGh" for e in envs[1:])
+    assert all('[ ! -L "$t" ]' in s for s in scripts[1:])  # refuse if swapped for a symlink
 
 
 # ---------------------------------------------------------------- genie wait tool

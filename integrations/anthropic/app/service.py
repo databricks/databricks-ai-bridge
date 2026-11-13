@@ -141,12 +141,10 @@ class DispatcherService:
             return False
         if self.consecutive_crashes < UNHEALTHY_AFTER_RESTARTS:
             return True
-        # After a crash loop: healthy again once the current run has stayed up long enough.
+        # After a crash loop: healthy again once the current run has stayed up long enough. Read-only: the
+        # run loop resets the counter (and the backoff) when that run ends.
         running_for = time.monotonic() - self.run_started_at if self.run_started_at else 0.0
-        if running_for > RECOVERED_AFTER_S:
-            self.consecutive_crashes = 0
-            return True
-        return False
+        return running_for > RECOVERED_AFTER_S
 
     def sandbox_counts(self, max_age_s: float = 30) -> dict[str, int] | str:
         """This deployment's sandboxes by state (its prefix and tags only), cached briefly.

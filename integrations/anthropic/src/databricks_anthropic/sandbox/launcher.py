@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import hashlib
 import hmac
 import json
@@ -57,6 +58,11 @@ WORKER_REPLACING = f"{TOOLS_DIR}/worker.replacing"
 # Written by a worker when it starts finishing (export, then delete or stop): it will not serve another turn,
 # so a new turn for the session must replace it rather than reuse it. Cleared when a new worker starts.
 WORKER_FINISHING = f"{TOOLS_DIR}/worker.finishing"
+# Written by the worker once it is about to serve the session (MCP tools open, credential accepted): the
+# launcher waits for it instead of a fixed sleep. Cleared when a new worker starts.
+WORKER_READY = f"{TOOLS_DIR}/worker.ready"
+# A finishing worker being replaced may be exporting outputs: give it this long before KILL.
+FINISHING_GRACE_S = 120
 VENV_MARKER = f"{TOOLS_DIR}/venv.spec"
 DEFAULT_WORKDIR = f"{HOME_DIR}/agent-workspace"
 # EnvironmentWorker downloads attached memory stores to /mnt/memory/<store-name>/. `/` is an ephemeral
@@ -101,6 +107,13 @@ def sandbox_id_for_session(
     else:
         digest = hashlib.sha256(session_id.encode()).hexdigest()
     return prefix + digest[:24]
+
+
+@functools.lru_cache(maxsize=1)
+def _worker_source() -> tuple[str, str]:
+    """``worker.py`` and its SHA-256 (read once per process)."""
+    source = resources.files("databricks_anthropic.sandbox").joinpath("worker.py").read_text()
+    return source, hashlib.sha256(source.encode()).hexdigest()
 
 
 class SandboxOwnershipError(RuntimeError):
@@ -197,7 +210,9 @@ class DatabricksSandboxLauncher:
     sandbox_id_prefix: str = "cma-"
     # Secret for HMAC sandbox ids (see sandbox_id_for_session). Changing it orphans existing sandboxes.
     sandbox_id_key: str | bytes | None = field(default=None, repr=False)
-    confirm_s: float = 5
+    # Start-up: poll every confirm_s until the worker reports ready, exits, or start_timeout_s passes.
+    confirm_s: float = 2
+    start_timeout_s: float = 120
 
     def __post_init__(self) -> None:
         # The prefix scopes cleanup; an empty or odd prefix could match other sandboxes.
@@ -328,6 +343,7 @@ class DatabricksSandboxLauncher:
             "CMA_SECRETS_FILE": WORKER_SECRETS,
             "CMA_REPLACING_MARKER": WORKER_REPLACING,
             "CMA_FINISHING_MARKER": WORKER_FINISHING,
+            "CMA_READY_MARKER": WORKER_READY,
             "CMA_ANTHROPIC_BASE_URL": self.anthropic_base_url,
             "DBX_SANDBOX_NAME": sandbox_name,
             "CMA_WORKDIR": self.workdir,
@@ -355,6 +371,7 @@ class DatabricksSandboxLauncher:
         envs = self._worker_env(work, self.sandbox_name_for(session_id))
         self._check_no_environment_key(secrets, envs)
         name, created = self.ensure_sandbox(session_id)
+        live: _ops.WorkerState | None = None
         try:
             if not created:
                 live = _ops.live_worker(
@@ -366,13 +383,24 @@ class DatabricksSandboxLauncher:
                     finishing_path=WORKER_FINISHING,
                 )
                 # Work ids are per session, so a new turn arrives with the same id as the last one: a live,
-                # non-finishing worker for it is already serving the session.
-                if live is not None and live[1] == work.id:
+                # non-finishing worker for it is already serving the session. Look twice, a poll interval
+                # apart, so a worker that starts finishing right after the first look is not reused.
+                if live is not None and not live.finishing and live.work_id == work.id:
+                    time.sleep(self.confirm_s)
+                    live = _ops.live_worker(
+                        w,
+                        name,
+                        WORKER_PID,
+                        WORKER_WORK_ID,
+                        worker_path=WORKER_PATH,
+                        finishing_path=WORKER_FINISHING,
+                    )
+                if live is not None and not live.finishing and live.work_id == work.id:
                     # Re-delivered item whose worker is still running: never start a second one.
                     log.info("worker for work=%s already running in %s; leaving it", work.id, name)
                     return LaunchResult(
                         sandbox_name=name,
-                        pid=live[0],
+                        pid=live.pid,
                         created=False,
                         seconds=time.monotonic() - t0,
                         reused=True,
@@ -380,8 +408,15 @@ class DatabricksSandboxLauncher:
             self._prepare_memory_dir(name)
             worker_sha256 = self._bootstrap(name)
             # A resumed session may still have the previous item's worker (or one that is finishing); replace it.
+            # A finishing worker may be exporting; it keeps the sandbox once it sees the replace marker.
+            grace_s = FINISHING_GRACE_S if live is not None and live.finishing else 10
             _ops.stop_pidfile_process(
-                w, name, WORKER_PID, marker_path=WORKER_REPLACING, worker_path=WORKER_PATH
+                w,
+                name,
+                WORKER_PID,
+                marker_path=WORKER_REPLACING,
+                worker_path=WORKER_PATH,
+                grace_s=grace_s,
             )
             if not created and not self._still_usable(name):
                 # The previous worker deleted the sandbox as it finished, before it saw the replace marker.
@@ -395,25 +430,14 @@ class DatabricksSandboxLauncher:
                 name,
                 # Verify the worker file in the same exec that starts it, and record the work id it serves.
                 f"echo {worker_sha256}'  '{WORKER_PATH} | sha256sum -c --quiet - || exit 97; "
-                f'rm -f {WORKER_FINISHING}; printf %s "$ANTHROPIC_WORK_ID" > {WORKER_WORK_ID}; '
+                f'rm -f {WORKER_FINISHING} {WORKER_READY}; printf %s "$ANTHROPIC_WORK_ID" > {WORKER_WORK_ID}; '
                 f"mkdir -p {shlex.quote(self.workdir)} && cd {shlex.quote(self.workdir)} && "
                 f"exec {VENV_PYTHON} -I {WORKER_PATH}",
                 log_path=WORKER_LOG,
                 pid_path=WORKER_PID,
                 envs=envs,
             )
-            time.sleep(self.confirm_s)
-            # Liveness and the log tail in one call, so the reason survives even if the sandbox goes away next.
-            try:
-                alive, log_tail = _ops.alive_with_log(w, name, pid, WORKER_LOG)
-            except NotFound as e:
-                raise _ops.SandboxCommandError(
-                    f"{name} was deleted while its worker was starting; see the App or dispatcher log"
-                ) from e
-            if not alive:
-                raise _ops.SandboxCommandError(
-                    f"worker exited right after launch in {name}:\n{log_tail}"
-                )
+            self._wait_until_ready(name, pid)
         except BaseException:
             # Never leak a sandbox we just created if bring-up fails.
             if created:
@@ -434,14 +458,45 @@ class DatabricksSandboxLauncher:
         )
         return LaunchResult(sandbox_name=name, pid=pid, created=created, seconds=seconds)
 
+    def _wait_until_ready(self, name: str, pid: int) -> None:
+        """Wait for the worker's ready marker. Raise with its log if it exits first.
+
+        Liveness, readiness and the log tail come from one call each time, so the reason survives even if
+        the sandbox goes away. A worker that is still starting after ``start_timeout_s`` is left running.
+        """
+        deadline = time.monotonic() + self.start_timeout_s
+        while True:
+            time.sleep(self.confirm_s)
+            try:
+                alive, ready, log_tail = _ops.worker_progress(
+                    self.workspace_client, name, pid, WORKER_LOG, WORKER_READY
+                )
+            except NotFound as e:
+                raise _ops.SandboxCommandError(
+                    f"{name} was deleted while its worker was starting; see the App or dispatcher log"
+                ) from e
+            if ready:
+                return
+            if not alive:
+                raise _ops.SandboxCommandError(
+                    f"worker exited during start-up in {name}:\n{log_tail}"
+                )
+            if time.monotonic() > deadline:
+                log.warning(
+                    "worker in %s still starting after %.0fs; leaving it running",
+                    name,
+                    self.start_timeout_s,
+                )
+                return
+
     def _still_usable(self, name: str) -> bool:
         """False if the sandbox is gone; otherwise make sure it is running (a finishing worker may have stopped it)."""
         try:
             state = _ops.state_of(self.workspace_client, name)
-        except NotFound:
+            if state != _ops.SandboxState.SANDBOX_STATE_RUNNING:
+                _ops.ensure_running(self.workspace_client, name)
+        except NotFound:  # gone, or deleted while we waited for it
             return False
-        if state != _ops.SandboxState.SANDBOX_STATE_RUNNING:
-            _ops.ensure_running(self.workspace_client, name)
         return True
 
     def _prepare_memory_dir(self, name: str) -> None:
@@ -511,9 +566,9 @@ class DatabricksSandboxLauncher:
                 },
                 timeout_s=600,
             )
-        source = resources.files("databricks_anthropic.sandbox").joinpath("worker.py").read_text()
+        source, digest = _worker_source()
         _ops.upload_text(w, name, WORKER_PATH, source)
-        return hashlib.sha256(source.encode()).hexdigest()
+        return digest
 
     def stop_session_sandbox(self, session_id: str) -> None:
         """Stop a session's sandbox (home directory is kept for resume)."""

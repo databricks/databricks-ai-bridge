@@ -18,7 +18,7 @@ import os
 import re
 import shlex
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
@@ -171,8 +171,10 @@ def upload_text(
 ) -> None:
     """Write a file into the sandbox via chunked base64 over ``execute_command_sync``.
 
-    Chunks go to ``<path>.part`` with a private umask and are renamed into place, so readers never see a
-    partial file and restrictive modes (``600``) apply from the first byte.
+    The content goes to a fresh temporary file created with ``mktemp`` (``O_EXCL``: it never follows a
+    symlink the agent may have planted next to the target) under a private umask, and is renamed into
+    place, so readers never see a partial file and restrictive modes (``600``) apply from the first byte.
+    Content that fits in one chunk (secrets do) is written, chmod-ed and renamed in a single exec.
     """
     if not re.fullmatch(r"[0-7]{3,4}", mode):
         raise ValueError(f"mode must be an octal file mode like 600, not {mode!r}")
@@ -180,20 +182,32 @@ def upload_text(
     pieces = [
         encoded[i : i + _UPLOAD_B64_CHUNK] for i in range(0, len(encoded), _UPLOAD_B64_CHUNK)
     ] or [""]
-    for index, piece in enumerate(pieces):
-        redirect = ">" if index == 0 else ">>"
-        mkdir = 'mkdir -p "$(dirname "$DBX_PATH")"; ' if index == 0 else ""
+    start = (
+        'set -e -o pipefail; umask 077; mkdir -p "$(dirname "$DBX_PATH")"; '
+        't=$(mktemp "$DBX_PATH.XXXXXXXX"); printf %s "$DBX_B64" | base64 -d >> "$t"; '
+    )
+    finish = f'chmod {mode} "$t"; mv -f "$t" "$DBX_PATH"'
+    if len(pieces) == 1:
+        run(w, name, start + finish, envs={"DBX_PATH": path, "DBX_B64": pieces[0]})
+        return
+    tmp = (
+        run(w, name, start + 'echo "$t"', envs={"DBX_PATH": path, "DBX_B64": pieces[0]}).stdout
+        or ""
+    ).strip()
+    if not tmp.startswith(path + "."):
+        raise SandboxCommandError(f"unexpected temporary file {tmp!r} for {path}")
+    for piece in pieces[1:]:
         run(
             w,
             name,
-            f'set -e -o pipefail; umask 077; {mkdir}printf %s "$DBX_B64" | base64 -d {redirect} "$DBX_PATH.part"',
-            envs={"DBX_PATH": path, "DBX_B64": piece},
+            'set -e -o pipefail; [ -f "$t" ] && [ ! -L "$t" ]; printf %s "$DBX_B64" | base64 -d >> "$t"',
+            envs={"t": tmp, "DBX_B64": piece},
         )
     run(
         w,
         name,
-        f'set -e; chmod {mode} "$DBX_PATH.part"; mv -f "$DBX_PATH.part" "$DBX_PATH"',
-        envs={"DBX_PATH": path},
+        f'set -e; [ -f "$t" ] && [ ! -L "$t" ]; {finish}',
+        envs={"t": tmp, "DBX_PATH": path},
     )
 
 
@@ -245,6 +259,12 @@ def _is_our_worker(worker_path: str) -> str:
     )
 
 
+class WorkerState(NamedTuple):
+    pid: int
+    work_id: str
+    finishing: bool = False  # exporting or deleting its sandbox: will not serve another turn
+
+
 def live_worker(
     w: WorkspaceClient,
     name: str,
@@ -253,17 +273,16 @@ def live_worker(
     *,
     worker_path: str,
     finishing_path: str | None = None,
-) -> tuple[int, str] | None:
-    """(pid, work id) of a running worker that is still serving, else None.
+) -> WorkerState | None:
+    """The running worker recorded in ``pid_path``, or None.
 
     None when no process holds the recorded pid, when that pid isn't our worker (stale pidfile after a
-    restart: the stale files are removed), when no work id was recorded, or when the worker is already
-    finishing (``finishing_path`` exists: it is exporting or deleting its sandbox and will not serve a
-    new turn, so the caller must replace it).
+    restart: the stale files are removed), or when a serving worker recorded no work id. A worker whose
+    ``finishing_path`` exists is returned with ``finishing=True``: the caller must replace it, not reuse it.
     """
     pid, work_id = shlex.quote(pid_path), shlex.quote(work_id_path)
     finishing = (
-        f"if [ -e {shlex.quote(finishing_path)} ]; then echo finishing; else "
+        f'if [ -e {shlex.quote(finishing_path)} ]; then echo "finishing $p"; else '
         if finishing_path
         else "if false; then :; else "
     )
@@ -279,8 +298,10 @@ def live_worker(
         ).stdout
         or ""
     ).split()
+    if len(out) == 2 and out[0] == "finishing" and out[1].isdigit():
+        return WorkerState(int(out[1]), "", finishing=True)
     if len(out) == 2 and out[0].isdigit():
-        return int(out[0]), out[1]
+        return WorkerState(int(out[0]), out[1])
     return None
 
 
@@ -289,22 +310,24 @@ def is_alive(w: WorkspaceClient, name: str, pid: int) -> bool:
     return "ALIVE" in out
 
 
-def alive_with_log(
-    w: WorkspaceClient, name: str, pid: int, log_path: str, lines: int = 40
-) -> tuple[bool, str]:
-    """Whether ``pid`` runs, plus the tail of ``log_path``, from a single exec. Raises NotFound."""
+def worker_progress(
+    w: WorkspaceClient, name: str, pid: int, log_path: str, ready_path: str, lines: int = 40
+) -> tuple[bool, bool, str]:
+    """(running, ready, log tail) of a starting worker, from a single exec. Raises NotFound."""
     out = (
         run(
             w,
             name,
             f"ps -p {int(pid)} >/dev/null && echo ALIVE || echo DEAD; "
+            f"[ -e {shlex.quote(ready_path)} ] && echo READY || echo WAITING; "
             f"tail -n {int(lines)} {shlex.quote(log_path)} 2>&1",
             check=False,
         ).stdout
         or ""
     )
-    first, _, rest = out.partition("\n")
-    return first.strip() == "ALIVE", rest
+    alive, _, rest = out.partition("\n")
+    ready, _, tail = rest.partition("\n")
+    return alive.strip() == "ALIVE", ready.strip() == "READY", tail
 
 
 def stop_pidfile_process(
