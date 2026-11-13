@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,7 +92,8 @@ class PlanTest(unittest.TestCase):
     def test_comment_body_has_markers_tags_and_continuation_lines(self):
         body = inline.plan(REVIEW, DIFF, HEAD)[0][0]["body"]
         self.assertIn(inline.INLINE_MARKER, body)
-        self.assertIn("**[HIGH] [HIGH CONFIDENCE]** · Blocking issues", body)
+        self.assertIn("**Passing `min_score=0.0` with a negative-scored row**\n<sub>HIGH · high confidence · Blocking issues</sub>", body)
+        self.assertIn("the truthiness check disables filtering", body)
         self.assertIn(f"Verified-against: `{CODE}:78-173`.", body)
 
     def test_lines_outside_the_diff_fall_back_to_a_single_line(self):
@@ -221,6 +223,37 @@ class MainTest(unittest.TestCase):
         finally:
             inline.github = original
 
+    def run_findings(self, threads_pages, fail=()):
+        """main() with --findings; the fake API echoes posted comments back with URLs."""
+        posted = {}
+        original = inline.github
+
+        def github(args, data=None):
+            text = " ".join(args)
+            if any(word in text for word in fail):
+                raise RuntimeError("boom")
+            if "reviewThreads" in text:
+                return {"data": {"repository": {"pullRequest": {"reviewThreads": threads_pages.pop(0)}}}}
+            if args[0].endswith("/reviews") and data:
+                posted["comments"] = data["comments"]
+                return {"id": 5}
+            if "/reviews/5/comments" in text:
+                return [[{**c, "html_url": f"https://github.test/posted/{i}"} for i, c in enumerate(posted["comments"])]]
+            return {}
+
+        inline.github = github
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                review, diff_path, out = Path(tmp, "r.md"), Path(tmp, "d.txt"), Path(tmp, "f.json")
+                review.write_text(REVIEW)
+                diff_path.write_text(DIFF)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    inline.main(["--repo", "o/r", "--pr", "7", "--head", HEAD, "--review", str(review),
+                                 "--diff", str(diff_path), "--findings", str(out)])
+                return json.loads(out.read_text())
+        finally:
+            inline.github = original
+
     @staticmethod
     def thread(comment_body, line=163, minimized=False, resolved=False):
         return {"isOutdated": False, "isResolved": resolved, "comments": {"nodes": [{
@@ -256,11 +289,68 @@ class MainTest(unittest.TestCase):
         self.assertIn("## Non-blocking notes", summary)
         self.assertIn("- Left 1 inline comment on the changed lines.", summary)
 
+    def test_findings_file_links_reused_and_posted_comments(self):
+        pages = [{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [self.thread(self.bot_body())]}]
+        records = self.run_findings(pages)
+        self.assertEqual([(r["location"], r["inline"]) for r in records],
+                         [(f"{CODE}:163", True), ("docs/index.md:4", False), (f"{CODE}:161-164", True)])
+        self.assertEqual(records[0]["url"], "https://github.com/o/r/pull/7#discussion_r900")
+        self.assertEqual(records[2]["url"], "https://github.test/posted/0")
+        self.assertIsNone(records[1]["url"])
+        self.assertEqual(records[1]["file_url"], f"https://github.com/o/r/blob/{HEAD}/docs/index.md#L4")
+        self.assertEqual(records[2]["file_url"], f"https://github.com/o/r/blob/{HEAD}/{CODE}#L161-L164")
+
+    def test_findings_file_marks_failed_posts_as_not_inline(self):
+        records = self.run_findings([{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}],
+                                    fail=("/reviews",))
+        self.assertFalse(any(r["inline"] for r in records))
+
     def test_failed_post_still_counts_reused_comments(self):
         pages = [{"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [self.thread(self.bot_body())]}]
         summary, _ = self.run_main(pages, fail=("/reviews",))
         self.assertIn("## Blocking issues\n- Left 1 inline comment on the changed lines.", summary)
         self.assertIn("`" + CODE + ":161-164` — range", summary)
+
+
+
+NEW_FORMAT = f"""## Blocking issues
+- [HIGH] [HIGH CONFIDENCE] `{CODE}:163` — Zero `min_score` stops filtering negative scores
+  **Problem:** With `min_score=0.0`, rows scored below zero are returned.
+  **Fix:** Compare against `None` instead of relying on truthiness.
+  **Evidence:** Verified-against: `{CODE}:150-170`. Reproduced at the head commit.
+"""
+
+
+class FindingFormatTest(unittest.TestCase):
+    def test_new_format_splits_into_labeled_parts(self):
+        parts = inline.split_finding(inline.parse_findings(NEW_FORMAT)[0])
+        self.assertEqual(parts["severity"], "HIGH")
+        self.assertEqual(parts["confidence"], "HIGH CONFIDENCE")
+        self.assertEqual(parts["location"], f"{CODE}:163")
+        self.assertEqual(parts["title"], "Zero `min_score` stops filtering negative scores")
+        self.assertEqual(parts["problem"], "With `min_score=0.0`, rows scored below zero are returned.")
+        self.assertEqual(parts["fix"], "Compare against `None` instead of relying on truthiness.")
+        self.assertTrue(parts["evidence"].startswith("Verified-against:"))
+
+    def test_old_one_line_format_keeps_its_text_as_the_problem(self):
+        parts = inline.split_finding(inline.parse_findings(REVIEW)[0])
+        self.assertEqual(parts["title"], "Passing `min_score=0.0` with a negative-scored row")
+        self.assertIn("the truthiness check disables filtering", parts["problem"])
+        self.assertIn("Verified-against", parts["evidence"])
+
+    def test_long_titles_are_cut_at_a_word_with_balanced_code_spans(self):
+        finding = {"section": "Non-blocking notes", "text": "[LOW] `a.py:1` — " + "word `x` " * 40}
+        title = inline.split_finding(finding)["title"]
+        self.assertLessEqual(len(title), inline.TITLE_LIMIT + 1)
+        self.assertEqual(title.count("`") % 2, 0)
+
+    def test_inline_comment_leads_with_title_and_collapses_evidence(self):
+        body = inline.plan(NEW_FORMAT, DIFF, HEAD)[0][0]["body"]
+        self.assertIn("**Zero `min_score` stops filtering negative scores**\n"
+                      "<sub>HIGH · high confidence · Blocking issues</sub>", body)
+        self.assertIn("**Fix:** Compare against `None`", body)
+        self.assertIn("<details><summary>Evidence</summary>\n\nVerified-against:", body)
+        self.assertNotIn(f"`{CODE}:163`", body)
 
 
 if __name__ == "__main__":
