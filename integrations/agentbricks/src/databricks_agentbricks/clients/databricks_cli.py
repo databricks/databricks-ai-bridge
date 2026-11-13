@@ -86,7 +86,8 @@ def _databricks(
             action or "A Databricks CLI command failed.",
             hint=detail,
             subprocess_exit_code=result.returncode,
-            failure_detail=(result.stderr or result.stdout or "").strip() or None,
+            # A legacy tee tail may have discarded the context needed for credential scrubbing.
+            failure_detail=detail if not tee else None,
         )
     return result
 
