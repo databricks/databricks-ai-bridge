@@ -1,0 +1,9 @@
+# Exact pins. The connector wheel is built from the package next to app/ by scripts/build_wheel.sh.
+./wheels/databricks_anthropic-0.1.0-py3-none-any.whl
+anthropic==2.3.0
+databricks-sdk[sandbox]==0.159.0
+mcp==2.3.0
+brotli==1.2.1
+protobuf==7.36.2
+fastapi==0.162.2
+uvicorn==0.54.0

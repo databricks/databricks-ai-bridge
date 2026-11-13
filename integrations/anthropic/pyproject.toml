@@ -1,0 +1,89 @@
+[project]
+name = "databricks-anthropic"
+version = "0.1.0"
+description = "Run Claude Managed Agents self-hosted sessions in Databricks Sandbox"
+authors = [
+    { name="Databricks", email="agent-feedback@databricks.com" },
+]
+readme = "README.md"
+license = { text="Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    # Sandbox CRUD + execute_command_sync; SandboxMetadata (custom tags) first ships in 0.157.0
+    "databricks-sdk[sandbox]>=0.157.0",
+    # client.beta.environments.work.poller / EnvironmentWorker. The sandbox worker imports
+    # anthropic.lib.* (not public API), so stay within one major version.
+    "anthropic>=2.3,<3",
+    # anthropic 2.x's HTTP client (httpx2) passes output_buffer_limit to brotli's decompressor,
+    # which brotli < 1.2 rejects; an older copy (e.g. from a conda base env) breaks every response.
+    "brotli>=1.2",
+    # Imported directly for google.protobuf Duration (also required by databricks-sdk).
+    "protobuf>=4.25.8,<8",
+]
+
+[project.optional-dependencies]
+# Declare Databricks managed MCP servers (e.g. Genie One) as agent custom tools.
+mcp = [
+    # Brings the HTTP client its transport is built on: httpx for mcp 1.x, httpx2 for 2.x.
+    "mcp>=1.24",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.14.10",
+    "ty==0.0.23",
+    { include-group = "tests" },
+]
+
+tests = [
+    "pytest==9.0.2",
+    "pytest-asyncio==1.3.0",
+    "pytest-timeout==2.3.1",
+    "pytest-cov==4.1.0",
+    # The dispatcher App's routes (app/, not part of the wheel) are tested with FastAPI's TestClient
+    # (Starlette's TestClient uses httpx2, which anthropic already brings).
+    "fastapi==0.162.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/databricks_anthropic/*"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_anthropic"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py", "app/**/*.py"]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.per-file-ignores]
+# The App's operator scripts report to the terminal; the live tests print the session's reply and usage
+# so a failing run can be diagnosed from the test log.
+"app/scripts/**" = ["T201"]
+"tests/integration_tests/**" = ["T201"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_anthropic",
+    "default::Warning:tests",
+]
+
+[tool.coverage.run]
+source = ["databricks_anthropic"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ty.environment]
+# app/ holds the Databricks App's modules (imported as top-level `app` and `service`, as the Apps runtime does).
+root = ["./src", "./tests", "./app"]
+
+[tool.ty.src]
+include = ["./src", "./tests", "./app"]
