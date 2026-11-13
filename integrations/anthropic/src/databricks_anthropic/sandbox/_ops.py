@@ -141,6 +141,37 @@ def delete_quietly(w: WorkspaceClient, name: str) -> None:
         pass
 
 
+# The SDK's HTTP client times out after 60 s by default and retries a timed-out request by sending it again,
+# so an exec that runs longer than that would run again (measured live: a 75 s command ran 5 times). Commands
+# whose execution timeout exceeds the client's HTTP timeout go through a copy of the client with a longer one.
+_HTTP_MARGIN_S = 60
+_LONG_CLIENTS_ATTR = "_cma_long_timeout_clients"
+
+
+def _client_for(w: WorkspaceClient, timeout_s: int) -> WorkspaceClient:
+    """``w``, or a cached copy whose HTTP timeout outlasts a command that may run ``timeout_s`` seconds."""
+    current = getattr(w.config, "http_timeout_seconds", None)
+    current = current if isinstance(current, (int, float)) and current > 0 else 60
+    if timeout_s + _HTTP_MARGIN_S <= current:
+        return w
+    needed = int(timeout_s + _HTTP_MARGIN_S)
+    by_timeout: dict[int, WorkspaceClient] = getattr(w, _LONG_CLIENTS_ATTR, None) or {}
+    if not by_timeout:
+        try:
+            setattr(w, _LONG_CLIENTS_ATTR, by_timeout)  # cache on the caller's client
+        except AttributeError:
+            pass
+    if needed not in by_timeout:
+        cfg = w.config.copy()  # shares the credential provider; keeps the User-Agent info
+        # Config.copy() is shallow: attribute values live in a shared dict, so setting the timeout on the
+        # copy would change the caller's config too. Give the copy its own.
+        if isinstance(getattr(cfg, "_inner", None), dict):
+            cfg._inner = dict(cfg._inner)
+        cfg.http_timeout_seconds = needed
+        by_timeout[needed] = WorkspaceClient(config=cfg)
+    return by_timeout[needed]
+
+
 def run(
     w: WorkspaceClient,
     name: str,
@@ -150,7 +181,7 @@ def run(
     timeout_s: int = 120,
     check: bool = True,
 ) -> ExecuteCommandSyncResponse:
-    response = w.sandbox.execute_command_sync(
+    response = _client_for(w, timeout_s).sandbox.execute_command_sync(
         name,
         _SHELL,
         args=[*_SHELL_ARGS, script],

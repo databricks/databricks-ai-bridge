@@ -153,6 +153,7 @@ def test_worker_and_launcher_decode_secrets_alike():
 
 def test_run_never_uses_a_login_or_interactive_shell():
     w = MagicMock()
+    w.config.http_timeout_seconds = 1000  # long enough: the call goes through w itself
     w.sandbox.execute_command_sync.return_value = MagicMock()
     _ops.run(w, "sandboxes/x", "true", check=False)
     args = w.sandbox.execute_command_sync.call_args.kwargs["args"]

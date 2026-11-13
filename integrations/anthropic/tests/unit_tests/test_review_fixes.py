@@ -432,3 +432,152 @@ def test_extra_packages_are_installed_after_the_lock(ops, monkeypatch):
     make_launcher(extra_packages=("polars==1.0.0",))._bootstrap("sandboxes/x")
     script = next(c for c in calls if "--require-hashes" in c)
     assert script.index("--require-hashes") < script.index("polars==1.0.0")
+
+
+# ---------------------------------------------------------------- round 3, P1-a: long commands are not re-sent
+
+
+@pytest.fixture(autouse=False)
+def offline_config(monkeypatch, tmp_path):
+    """Real SDK Config objects without network calls or ambient profiles."""
+    import os
+
+    from databricks.sdk.core import Config
+
+    for key in [k for k in os.environ if k.startswith("DATABRICKS_") and "UPSTREAM" not in k]:
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(tmp_path / "none.cfg"))
+    monkeypatch.setattr(Config, "_resolve_host_metadata", lambda self: None, raising=False)
+
+
+def _real_client(http_timeout=None):
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.core import Config
+
+    cfg = Config(host="https://example.cloud.databricks.com", token="t", auth_type="pat")
+    if http_timeout is not None:
+        cfg.http_timeout_seconds = http_timeout
+    return WorkspaceClient(config=cfg)
+
+
+def test_short_commands_use_the_callers_client(offline_config):
+    w = _real_client(http_timeout=600)
+    assert _ops._client_for(w, 120) is w
+
+
+def test_long_commands_use_a_client_whose_http_timeout_outlasts_them(offline_config):
+    w = _real_client()  # SDK default: 60 s, retried on timeout
+    original_timeout = w.config.http_timeout_seconds
+    long = _ops._client_for(w, 600)
+    assert w.config.http_timeout_seconds == original_timeout  # the caller's client is untouched
+    assert long is not w and long.config.http_timeout_seconds >= 600 + _ops._HTTP_MARGIN_S
+    assert _ops._client_for(w, 600) is long  # cached
+    assert long.config.host == w.config.host and long.config.token == w.config.token
+    assert long.config.user_agent == w.config.user_agent
+
+
+def test_run_routes_by_timeout(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        _ops,
+        "_client_for",
+        lambda w, t: (
+            seen.append(t)
+            or SimpleNamespace(
+                sandbox=SimpleNamespace(
+                    execute_command_sync=lambda *a, **k: SimpleNamespace(
+                        status=_ops.ExecuteCommandStatus.EXECUTE_COMMAND_STATUS_COMPLETED,
+                        exit_code=0,
+                        stdout="",
+                        stderr="",
+                    )
+                )
+            )
+        ),
+    )
+    _ops.run(MagicMock(), "s", "true", timeout_s=600)
+    assert seen == [600]
+
+
+# ---------------------------------------------------------------- round 3, P1-b / P2-c: replace before bootstrap
+
+
+@pytest.mark.parametrize(
+    "previous",
+    [_ops.WorkerState(9, "", finishing=True), _ops.WorkerState(9, "other-session")],
+)
+def test_previous_worker_is_stopped_before_bootstrap(ops, monkeypatch, previous):
+    order = []
+    monkeypatch.setattr(_ops, "live_worker", lambda *a, **k: previous)
+    monkeypatch.setattr(_ops, "stop_pidfile_process", lambda *a, **k: order.append("stop"))
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.return_value = tagged()
+    monkeypatch.setattr(lc, "_prepare_memory_dir", lambda name: order.append("prepare"))
+    monkeypatch.setattr(lc, "_bootstrap", lambda name: order.append("bootstrap") or "sha")
+    lc.launch(work())
+    assert order == ["stop", "prepare", "bootstrap"]
+
+
+# ---------------------------------------------------------------- round 3, P1-c: retry transient launch errors
+
+
+class _FakeClient:
+    def __init__(self, items):
+        self.items, self.stopped = items, []
+
+        async def stop(work_id, **kw):
+            self.stopped.append(work_id)
+
+        self.beta = SimpleNamespace(
+            environments=SimpleNamespace(work=SimpleNamespace(poller=self.poller, stop=stop))
+        )
+
+    async def poller(self, **kwargs):
+        for item in self.items:
+            yield item
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _run_dispatcher(monkeypatch, outcomes):
+    from databricks_anthropic.sandbox.launcher import LaunchResult
+
+    calls = []
+
+    def launch(w):
+        calls.append(1)
+        outcome = outcomes[min(len(calls), len(outcomes)) - 1]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return LaunchResult(sandbox_name="sandboxes/x", pid=1, created=True, seconds=0.1)
+
+    lc = make_launcher()
+    monkeypatch.setattr(lc, "launch", launch)
+    fake = _FakeClient([work()])
+    d = DatabricksSandboxDispatcher(lc, drain=True, retry_delays_s=(0, 0))
+    monkeypatch.setattr(d, "_client", lambda: fake)
+    asyncio.run(d.run())
+    return d, fake, calls
+
+
+def test_transient_error_is_retried_and_the_turn_is_served(monkeypatch):
+    from databricks.sdk.errors import TemporarilyUnavailable
+
+    d, fake, calls = _run_dispatcher(monkeypatch, [TemporarilyUnavailable("503"), "ok"])
+    assert len(calls) == 2 and not fake.stopped and d.status.launched == 1 and d.status.retries == 1
+
+
+def test_permanent_error_is_not_retried(monkeypatch):
+    from databricks_anthropic.sandbox.launcher import SandboxOwnershipError
+
+    d, fake, calls = _run_dispatcher(monkeypatch, [SandboxOwnershipError("squatted")])
+    assert len(calls) == 1 and fake.stopped == ["sesn_A"] and d.status.retries == 0
+
+
+def test_persistent_transient_error_stops_after_the_retries(monkeypatch):
+    d, fake, calls = _run_dispatcher(monkeypatch, [TimeoutError("slow")])
+    assert len(calls) == 3 and fake.stopped == ["sesn_A"] and d.status.failed == 1

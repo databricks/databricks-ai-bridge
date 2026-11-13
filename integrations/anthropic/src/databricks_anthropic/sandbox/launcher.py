@@ -405,10 +405,9 @@ class DatabricksSandboxLauncher:
                         seconds=time.monotonic() - t0,
                         reused=True,
                     )
-            self._prepare_memory_dir(name)
-            worker_sha256 = self._bootstrap(name)
-            # A resumed session may still have the previous item's worker (or one that is finishing); replace it.
-            # A finishing worker may be exporting; it keeps the sandbox once it sees the replace marker.
+            # Replace any previous worker *before* touching the sandbox: the replace marker must be set before a
+            # finishing worker can delete or stop the sandbox, and the venv must not be reinstalled under a
+            # running worker. A finishing worker may be exporting; it keeps the sandbox once it sees the marker.
             grace_s = FINISHING_GRACE_S if live is not None and live.finishing else 10
             _ops.stop_pidfile_process(
                 w,
@@ -422,8 +421,8 @@ class DatabricksSandboxLauncher:
                 # The previous worker deleted the sandbox as it finished, before it saw the replace marker.
                 log.warning("%s was deleted by its previous worker; recreating it", name)
                 name, created = self.ensure_sandbox(session_id)
-                self._prepare_memory_dir(name)
-                worker_sha256 = self._bootstrap(name)
+            self._prepare_memory_dir(name)
+            worker_sha256 = self._bootstrap(name)
             _ops.upload_text(w, name, WORKER_SECRETS, json.dumps(secrets), mode="600")
             pid = _ops.start_detached(
                 w,

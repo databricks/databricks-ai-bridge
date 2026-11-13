@@ -59,6 +59,7 @@ class DispatcherStatus:
     reused: int = 0
     failed: int = 0
     skipped: int = 0
+    retries: int = 0
     inflight: int = 0
     last_error: str | None = None
 
@@ -94,6 +95,8 @@ class DatabricksSandboxDispatcher:
     accept: Callable[[BetaSelfHostedWork], bool] | None = None
     sweep_interval_s: float | None = 3600
     sessions_api: anthropic.Anthropic | None = None  # with an API key, for session-gone cleanup
+    # Back-off before each retry of a launch that failed with a transient error (then the item is stopped).
+    retry_delays_s: tuple[float, ...] = (5.0, 15.0)
     results: list[LaunchResult] = field(default_factory=list, init=False)
     failures: list[tuple[str, str]] = field(default_factory=list, init=False)
     status: DispatcherStatus = field(default_factory=DispatcherStatus, init=False)
@@ -121,7 +124,7 @@ class DatabricksSandboxDispatcher:
             async with semaphore:
                 status.inflight += 1
                 try:
-                    result = await loop.run_in_executor(pool, self.launcher.launch, work)
+                    result = await self._launch_with_retries(loop, pool, work)
                     self.results.append(result)
                     del self.results[:-MAX_RECORDED]  # bounded history in poll mode
                     if getattr(result, "reused", False):
@@ -191,6 +194,31 @@ class DatabricksSandboxDispatcher:
                     await asyncio.gather(*pending, return_exceptions=True)
                 pool.shutdown(wait=False)
         return self.results
+
+    async def _launch_with_retries(
+        self, loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor, work: BetaSelfHostedWork
+    ) -> LaunchResult:
+        """Launch, retrying clearly transient failures (the launch is idempotent) before giving up.
+
+        A failed launch force-stops the work item, and a stopped item is not re-delivered, so a passing
+        503 or timeout would otherwise drop the user's turn. Permanent errors are raised at once.
+        """
+        for attempt, delay in enumerate((*self.retry_delays_s, None)):
+            try:
+                return await loop.run_in_executor(pool, self.launcher.launch, work)
+            except Exception as e:
+                if delay is None or not _is_transient(e):
+                    raise
+                self.status.retries += 1
+                log.warning(
+                    "launch attempt %d for session=%s hit a transient error (%s); retrying in %.0fs",
+                    attempt + 1,
+                    work.data.id,
+                    type(e).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def _stop_work(self, work: BetaSelfHostedWork) -> None:
         """Release a work item we could not serve, so the poller does not relaunch it every few seconds."""
@@ -337,6 +365,24 @@ class DatabricksSandboxDispatcher:
                         e,
                     )
         return plan
+
+
+def _is_transient(error: BaseException) -> bool:
+    """Errors worth retrying: timeouts, dropped connections and the service's own retry-later responses."""
+    import requests
+    from databricks.sdk import errors
+
+    transient = (
+        TimeoutError,
+        requests.ConnectionError,
+        requests.Timeout,
+        errors.TemporarilyUnavailable,
+        errors.InternalError,
+        errors.DeadlineExceeded,
+        errors.ResourceExhausted,
+        errors.TooManyRequests,
+    )
+    return isinstance(error, transient)
 
 
 def _seconds(timestamp: Any) -> float:
