@@ -191,8 +191,8 @@ service codes directly to the existing centralized `error_category`. `AgentCliEr
 and `subprocess_exit_code` preserve child output and status without changing the displayed message
 or process exit code. The CLI-independent scrubber lives in `telemetry/scrub.py`; Click context
 handling and upload orchestration remain in `cli/telemetry.py`.
-Workflow stages, readiness, child exit codes, and operation IDs
-are not part of the log schema. The only new wire field is top-level `failure_message`, which carries
+Workflow stages, readiness, child exit codes, and local deployment operation UUIDs
+are not part of the log schema. The top-level `failure_message` field carries
 up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
 credential, path, and email scrubbing; this remains sensitive, labeled
 `DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
@@ -312,3 +312,28 @@ series starts with a new release branch from `main`. Tagging does not publish th
 secure public registry release and its approval to publish to PyPI. The gate runs the unit and framework tests and the E2E suites
 against the fake workspace (`--workspace fake`) from the built wheels. The live workspace E2E suites
 run separately in the private integration runner and are not included in this gate.
+
+## Interpreting command and deployment outcomes
+
+Completion events retain the existing command path, exit code, error category, and bounded option
+values. Deployment commands also record observed state in `deployment_outcome`, using
+`DEPLOYMENT_OUTCOME_UNSPECIFIED`, `DEPLOYMENT_OUTCOME_RUNNING`, `DEPLOYMENT_OUTCOME_SUCCEEDED`, or
+`DEPLOYMENT_OUTCOME_FAILED`. For command-result analysis, interpret an interrupted category first,
+then `deployments wait` with exit 75 as pending, then `deploy` with exit 0 and an explicitly true
+no-wait option as submitted, then exit 0 as succeeded, and other exits as failed.
+Exclude interruptions, pending waits, and background submissions from a product failure-rate
+denominator and report them separately. Missing events are unknown coverage, not success.
+
+Deployment operation UUIDs remain in local state and the background worker; they are not uploaded.
+The uploaded `invocation_id` is generated separately for each command and joins details-link
+arrivals to that command. It is independent of the local deployment operation UUID connecting
+launcher, worker, and waits. Use the FrontendLog event ID to deduplicate uploads. These logs measure
+command invocations, not unique deployment attempts: repeated `deployments wait` rows must not be
+added to the deployment failure-rate denominator. The current schema cannot correlate a launcher
+with its worker or waits.
+
+For startup analysis, segment `dev` invocations by error category, platform, and package version,
+and inspect regional `failure_message` where retained. Startup milestones, child exit codes,
+and workflow phases remain internal to the CLI. Completion-only telemetry cannot observe abrupt
+process termination or failed/unauthenticated uploads, so account for event coverage alongside
+failure rates. Deploy the schema before releasing failure-text collection.

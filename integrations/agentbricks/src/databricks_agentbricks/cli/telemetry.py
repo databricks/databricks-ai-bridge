@@ -468,6 +468,13 @@ def _build_log(
         command_exit_code = 1
     category = _bounded_error_category(error_category) if command_exit_code else None
     is_failure = bool(command_exit_code) and category != "ERROR_CATEGORY_INTERRUPTED"
+    if (
+        is_failure
+        and invocation.command_path == "agentbricks deployments wait"
+        and command_exit_code == 75
+    ):
+        category = None
+        is_failure = False
     return _AgentBricksCliLog(
         command_path=invocation.command_path,
         package_version=_package_version(),
