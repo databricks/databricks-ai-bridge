@@ -84,6 +84,9 @@ class StreamRelay:
                     while view and forward and not self._stop.is_set():
                         try:
                             view = view[os.write(destination, view) :]
+                        except BlockingIOError:
+                            # A full nonblocking pipe can recover when its reader resumes.
+                            self._stop.wait(0.01)
                         except OSError:
                             # Keep draining so a closed destination cannot block the child.
                             forward = False
