@@ -198,10 +198,10 @@ agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 local runtime so local behavior matches a deployment.
 
 Memory and session stores are off by default in `agentbricks dev`, even when a store is bound in
-`agent.toml`: the chat app shows "Not connected" for memory, and conversation state stays in
-process. They connect after `agentbricks deploy`. To use real stores locally, set
-`AGENT_MEMORY_STORE` (the Store ID) and `AGENT_SESSION_STORE` (the store name) in the project's
-`.env`.
+`agent.toml`: the chat app labels a bound memory store "Bound · active after deploy", and
+conversation state stays in process. They connect after `agentbricks deploy`. To use real stores
+locally, set `AGENT_MEMORY_STORE` (the Store ID) and `AGENT_SESSION_STORE` (the store name) in the
+project's `.env`.
 
 `agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
 project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
@@ -1587,8 +1587,8 @@ agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 (`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
-and does not inject it, so the chat app shows "Not connected" for memory until you deploy. The id is
-not persisted in `agent.toml`.)
+and does not inject it, so the chat app shows the bound store as "Bound · active after deploy" until
+you deploy. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, sends it as the
 invocation's top-level `session_id`, sends the signed-in user as `input.actor`, and creates a fresh
