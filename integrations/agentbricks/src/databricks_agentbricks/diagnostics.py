@@ -62,6 +62,7 @@ class CommandDiagnostics:
     outcome: Outcome | None = None
     operation_id: str | None = None
     app_listened: bool | None = None
+    parent_interrupted: bool | None = None
     time_to_listen_ms: int | None = None
     prepare_environment: bool | None = None
     subprocess_exit_code: int | None = None
@@ -71,6 +72,7 @@ class CommandDiagnostics:
 
     def starting_local_agent(self) -> None:
         self.app_listened = False
+        self.parent_interrupted = False
         self._run_started = time.monotonic()
 
     def local_agent_listened(self) -> None:

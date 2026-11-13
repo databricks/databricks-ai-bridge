@@ -63,6 +63,7 @@ def run(
     probe: Callable[[], bool],
     on_ready: Optional[Callable[[], None]],
     quiet_status: Callable[[float], str],
+    on_exit: Optional[Callable[[int], None]] = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` on a pseudo-terminal, relaying its output to ours unchanged.
 
@@ -129,6 +130,8 @@ def run(
         signal.signal(signal.SIGWINCH, previous_winch)
         os.close(master)
         proc.wait()
+        if on_exit is not None:
+            on_exit(proc.returncode)
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout=relay.tail.text())
 
 
