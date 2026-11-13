@@ -102,6 +102,38 @@ def test_url_none_when_empty_string():
     assert client.get_app_url("agent-bricks-myapp") is None
 
 
+def test_app_url_returns_the_url():
+    client = AppsClient("prof", runner=_runner([], stdout='{"url": "https://myapp.example"}'))
+    assert client.app_url("agent-bricks-myapp") == "https://myapp.example"
+
+
+@pytest.mark.parametrize(
+    "profile,where", [("prof", "profile 'prof'"), (None, "Databricks SDK's default authentication")]
+)
+def test_app_url_names_the_profile_when_the_app_is_missing(profile, where):
+    # A missing app is most often one deployed to another workspace, so say which one was searched.
+    stderr = "Error: App with name agent-bricks-myapp does not exist or is deleted."
+    client = AppsClient(profile, runner=_runner([], returncode=1, stderr=stderr))
+    with pytest.raises(AgentCliError, match="No Databricks App named 'agent-bricks-myapp'") as exc:
+        client.app_url("agent-bricks-myapp")
+    assert where in str(exc.value)
+    assert "agentbricks -p <profile>" in (exc.value.hint or "")
+
+
+def test_app_url_keeps_the_cli_error_for_other_failures():
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr="Error: invalid token"))
+    with pytest.raises(AgentCliError, match="Could not check whether deployment") as exc:
+        client.app_url("agent-bricks-myapp")
+    assert "invalid token" in (exc.value.hint or "")
+
+
+@pytest.mark.parametrize("payload", ["{}", '{"url": ""}'])
+def test_app_url_says_when_the_app_has_no_url_yet(payload):
+    client = AppsClient("prof", runner=_runner([], stdout=payload))
+    with pytest.raises(AgentCliError, match="has no URL yet"):
+        client.app_url("agent-bricks-myapp")
+
+
 def test_compute_state_parses_nested_field():
     client = AppsClient(
         "prof", runner=_runner([], stdout='{"compute_status": {"state": "ACTIVE"}}')
