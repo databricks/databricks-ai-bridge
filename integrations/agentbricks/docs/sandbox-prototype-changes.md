@@ -142,3 +142,11 @@ remain outside this prototype.
 Current rollout: `01f1df29996b1c868c474280ddfb5d63`, runtime wheel
 `0.10.0.dev0+sandbox.b1e30159b428a98c`, includes the final runtime documentation
 correction. Executable Python/JavaScript is unchanged from the live checks above.
+
+The subsequent [matched browser latency investigation](sandbox-streaming-latency.md)
+measured App gRPC-to-SSE delivery at 68 → 13 ms and approximate runner-to-DOM
+delivery at 166 → 91 ms. Warm first text remained about 2.6 s in five prompt pairs.
+Model output already had roughly half-second gaps before runner writes; stream
+discovery and final-status polling also remain. The report includes the small-sample
+limits, fixed-rate controls, completion outlier and next steps. Its diagnostic App
+and test sandboxes were stopped; the main workbench was unchanged.
