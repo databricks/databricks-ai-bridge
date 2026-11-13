@@ -8,6 +8,7 @@ If you are using LangChain/LangGraph or the OpenAI SDK, we provide these integra
 
 - [`databricks-langchain`](./integrations/langchain/README.md) - For LangChain/LangGraph users
 - [`databricks-openai`](./integrations/openai/README.md) - For OpenAI SDK users
+- [`databricks-mcp`](./databricks_mcp/README.md) - For clients of Databricks-hosted MCP servers
 
 ## Installation
 
