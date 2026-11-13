@@ -129,6 +129,7 @@ command path, package version, operating system, duration, and process outcome (
 nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
 error text in `failure_message`. Error text includes exception messages and fully captured
 failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
+Combined failure text over 65,536 characters is also omitted before scrubbing.
 Credential assignments, auth headers, credential options, and encoded text cause the remaining
 captured text to be omitted; preceding diagnostic text is retained. This avoids parsing arbitrary
 JSON, YAML, or Python values. Recognizable standalone tokens and private keys are also masked.
