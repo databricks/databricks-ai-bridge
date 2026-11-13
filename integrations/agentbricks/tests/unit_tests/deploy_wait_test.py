@@ -23,6 +23,8 @@ from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deployment import deploy_state
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 _APP = "agent-bricks-demo"
 # Larger than Linux's maximum pid, so no process can have it.
 _DEAD_PID = 2**22 + 1
@@ -344,6 +346,27 @@ def test_no_wait_bad_name_fails_synchronously_and_spawns_nothing(
     assert "No deployment name given" in result.output
     assert popen.calls == [] and events == []
     assert not (tmp_path / ".agentbricks").exists()
+
+
+@pytest.mark.parametrize("extra", [[], ["--no-wait"]])
+def test_deploy_outside_a_project_fails_fast_and_writes_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen, extra: list[str]
+):
+    (tmp_path / "app.yaml").unlink()
+    monkeypatch.chdir(tmp_path)
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["demo", *extra], obj=_real_deploy_context(_DeployApi(events))
+    )
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1
+    assert f"No Agent Bricks project in {tmp_path.resolve()}" in output
+    assert "--source <dir>" in output and "agentbricks init" in output
+    assert popen.calls == [] and events == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_no_wait_auth_failure_fails_synchronously_and_spawns_nothing(
