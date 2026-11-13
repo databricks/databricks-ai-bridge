@@ -52,6 +52,17 @@ def test_url_credentials_are_scrubbed_for_any_scheme(scheme, password):
     assert "[REDACTED]" in result
 
 
+@pytest.mark.parametrize("escape", [r"\u0031", r"\x31", r"\\"])
+def test_url_credentials_are_masked_before_encoded_text_is_omitted(escape):
+    value = (
+        f"Connection failed: https://user:synthetic-prefix{escape}synthetic-tail@host/db; "
+        "retry later"
+    )
+    assert scrub_failure_text(value) == (
+        "Connection failed: https://[REDACTED]@host/db; retry later"
+    )
+
+
 @pytest.mark.parametrize(
     "name", ["secretKey", "tokenValue", "access_token_value", "apiKeyValue", "private-token-value"]
 )
@@ -283,6 +294,19 @@ def test_bound_does_not_leave_partial_assignment_secret():
     result = scrub_failure_text("token=" + "x" * 100000)
     assert "xxx" not in result
     assert len(result.encode()) <= MAX_FAILURE_BYTES
+
+
+@pytest.mark.parametrize("length", [65535, 65536, 65537])
+@pytest.mark.parametrize("character", ["x", "界"])
+def test_input_budget_omits_oversized_text_without_cutting_it(length, character):
+    prefix = "Request failed: "
+    value = prefix + character * (length - len(prefix))
+    result = scrub_failure_text(value)
+    if length > 65536:
+        assert result == ""
+    else:
+        assert result.startswith(prefix)
+        assert len(result.encode("utf-8")) <= MAX_FAILURE_BYTES
 
 
 def test_control_sequences_are_removed():
