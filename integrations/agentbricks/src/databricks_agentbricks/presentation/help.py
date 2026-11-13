@@ -585,6 +585,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks tools add sandbox --auth app",
             "run sandbox code as the App service principal",
         ),
+        (
+            "agentbricks tools add sandbox --image-uri main.images.sandbox:v1",
+            "run sandbox code in a Unity Catalog custom image",
+        ),
     ),
     ("tools", "add", "mcp"): (
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
