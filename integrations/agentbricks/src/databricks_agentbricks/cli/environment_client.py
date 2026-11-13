@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from urllib.parse import urlsplit
 
 from databricks_agentbricks.errors import AgentCliError, wrap_api_error
@@ -72,3 +73,47 @@ class LauncherClient:
                 hint="Select the sandbox launcher App. For an authenticated --url, add --auth.",
             )
         return response.body
+
+    def watch(self, run_id, *, routing_key, timeout):
+        """Consume snapshots as SSE arrives; never retain a list of token snapshots."""
+        import requests
+
+        from databricks_agentbricks.services.invoke.transport import iter_sse
+
+        headers = {"Accept": "text/event-stream", "X-Routing-Key": routing_key}
+        if self.authenticate:
+            headers["Authorization"] = WorkspaceOAuthAuthenticator(
+                self.profile
+            ).authorization_header()
+        deadline = time.monotonic() + timeout
+        try:
+            with requests.get(
+                self.url + f"/api/runs/{run_id}/events",
+                headers=headers,
+                stream=True,
+                timeout=(min(timeout, 30), min(timeout, 30)),
+                allow_redirects=False,
+            ) as response:
+                if response.status_code != 200 or not response.headers.get(
+                    "Content-Type", ""
+                ).startswith("text/event-stream"):
+                    raise AgentCliError(
+                        f"Sandbox stream returned HTTP {response.status_code} without SSE."
+                    )
+
+                def lines():
+                    for line in response.iter_lines(chunk_size=1):
+                        if time.monotonic() >= deadline:
+                            raise AgentCliError(
+                                f"Timed out waiting for run {run_id}; it may still be running."
+                            )
+                        yield line
+
+                for event in iter_sse(lines(), on_event=None):
+                    if event.get("event") == "run" and isinstance(event.get("data"), dict):
+                        yield event["data"]
+        except requests.RequestException as exc:
+            raise AgentCliError(
+                f"Sandbox stream disconnected for run {run_id}; the invocation continues.",
+                hint="Repeat with the same session and invocation ID to reconnect.",
+            ) from exc

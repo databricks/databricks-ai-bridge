@@ -10,6 +10,7 @@ import json
 import logging
 import shlex
 import threading
+import time
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ class StreamDecoder:
         self.emit = emit
         self.pending = b""
         self.ended = threading.Event()
+        self.first_delta_at = None
 
     def feed(self, data):
         if self.ended.is_set() and data:
@@ -41,6 +43,8 @@ class StreamDecoder:
             if not isinstance(record, dict):
                 raise ValueError("Invalid sandbox stream record")
             if record.get("type") == "delta" and isinstance(record.get("delta"), str):
+                if self.first_delta_at is None:
+                    self.first_delta_at = record.get("at")
                 self.emit(record["delta"])
             elif record.get("type") == "end" and record.get("status") in {"completed", "failed"}:
                 if self.pending:
@@ -146,6 +150,8 @@ class FileFollower:
                         return
                 elif kind == "end":
                     raise RuntimeError("Sandbox tail exited before the attempt ended")
+            if not self.decoder.ended.is_set():
+                raise RuntimeError("Sandbox tail disconnected before the attempt ended")
         except Exception as exc:
             self.error = exc
 
@@ -203,3 +209,49 @@ class FileFollower:
             )
         except Exception:
             LOG.warning("Could not stop sandbox tail; its remote timeout remains active")
+
+
+class LivePreview:
+    """Bounded, subscriber-local preview rebuilt from an immutable attempt file.
+
+    SQL contains only the descriptor. Slow clients coalesce snapshots in memory;
+    disconnecting closes their tail process without touching agent execution.
+    """
+
+    def __init__(self, remote, source, attempt):
+        self.source, self.attempt = source, attempt
+        self.condition = threading.Condition()
+        self.text, self.sequence = "", 0
+        self.follower = FileFollower(remote, source["path"], self.emit)
+
+    def emit(self, delta):
+        with self.condition:
+            self.text += delta[: max(0, 256 * 1024 - len(self.text))]
+            self.sequence += 1
+            self.condition.notify_all()
+
+    def __enter__(self):
+        self.follower.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        self.follower.__exit__(*exc)
+
+    def snapshot(self):
+        with self.condition:
+            first = self.follower.decoder.first_delta_at
+            started = self.source.get("started_at")
+            return {
+                "attempt": self.attempt,
+                "text": self.text,
+                "sequence": self.sequence,
+                "first_token_ms": round(max(0, first - started) * 1000, 2)
+                if isinstance(first, (int, float)) and isinstance(started, (int, float))
+                else None,
+            }
+
+    def wait(self, sequence, timeout):
+        with self.condition:
+            self.condition.wait_for(lambda: self.sequence != sequence, timeout=timeout)
+        # Coalesce bursts without putting database writes on the text path.
+        time.sleep(0.02)

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from types import ModuleType
+from unittest.mock import ANY
 
 import pytest
 
@@ -34,7 +35,7 @@ def test_runner_calls_agent_and_keeps_logs_out_of_stream(tmp_path, asynchronous,
     if streaming:
         assert path.stat().st_mode & 0o777 == 0o600
         assert [json.loads(line) for line in path.read_text().splitlines()] == [
-            {"type": "delta", "delta": "Hello 🌍\n"},
+            {"type": "delta", "delta": "Hello 🌍\n", "at": ANY},
             {"type": "end", "status": "completed"},
         ]
 
@@ -132,7 +133,7 @@ def test_call_handler_reuses_loop_and_imports_without_crossing_attempt_streams(
     for index, path in enumerate(paths):
         assert path.stat().st_mode & 0o777 == 0o600
         assert [json.loads(line) for line in path.read_text().splitlines()] == [
-            {"type": "delta", "delta": f"turn {index}"},
+            {"type": "delta", "delta": f"turn {index}", "at": ANY},
             {"type": "end", "status": "completed"},
         ]
 
@@ -185,7 +186,7 @@ def test_call_handler_records_failure_closes_stream_and_allows_next_call(
 
     assert asyncio.run(exercise()) == {"reply": "recovered"}
     assert [json.loads(line) for line in path.read_text().splitlines()] == [
-        {"type": "delta", "delta": "partial"},
+        {"type": "delta", "delta": "partial", "at": ANY},
         {"type": "end", "status": "failed"},
     ]
     assert json.loads((tmp_path / "next.jsonl").read_text()) == {

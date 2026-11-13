@@ -1577,3 +1577,23 @@ def test_reduced_motion_streaming_renders_received_text_immediately(ui):
     }""")
         == "Received text"
     )
+
+
+def test_stream_transport_reconnects_without_submitting_another_invocation(ui):
+    runtime, page, open_page = ui
+    active = runtime.run("reconnect", text="Hello")
+    runtime.events = [copy.deepcopy(active)]
+    runtime.event_stream = True
+    page.add_init_script("localStorage.setItem('sandbox-chat:session:agent-one', 'reconnect')")
+    open_page()
+    playwright.expect(page.locator("#chat-log .message.assistant")).to_contain_text("Hello")
+    # The finite first SSE response closes. Next connection replays a full
+    # snapshot and completes; history/status polling alone cannot see this answer.
+    final = copy.deepcopy(active)
+    runtime.complete(final, "Hello after reconnect")
+    runtime.events = [final]
+    playwright.expect(page.locator("#chat-log .message.assistant")).to_contain_text(
+        "Hello after reconnect", timeout=6000
+    )
+    assert runtime.posts == []
+    playwright.expect(page.locator("#chat-log .message.assistant")).to_have_count(1)

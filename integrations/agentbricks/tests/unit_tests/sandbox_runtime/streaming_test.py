@@ -1,75 +1,129 @@
-"""The preview writer must flush even when no further token arrives."""
+"""Direct subscribers reconstruct previews without persisting token events."""
 
-import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from databricks_agentkit.sandbox.jobs import PartialText
+import pytest
+
+from databricks_agentkit.runtime.store import InMemoryRuntimeStore
+from databricks_agentkit.sandbox.control import ControlStore
+from databricks_agentkit.sandbox.streaming import LivePreview
 
 
-def test_quiet_last_fragment_is_published_before_invocation_exit():
-    published = queue.Queue()
-    db = MagicMock()
-    db.side_effect = lambda event: published.put(event["delta"])
-    with PartialText(db) as stream:
-        stream.emit("Hello")
-        assert published.get(timeout=1) == "Hello"
-        stream.emit(" world")
-        # No further emit and no context exit. The independent timer must wake.
-        assert published.get(timeout=1) == " world"
-        assert stream.thread.is_alive()
-    assert not stream.thread.is_alive()
+@pytest.fixture
+def live(monkeypatch):
+    readers, content = [], ["hello"]
+
+    class Reader:
+        def __init__(self, remote, path, emit):
+            self.emit, self.closed, self.error = emit, False, None
+            self.decoder = SimpleNamespace(first_delta_at=12, ended=threading.Event())
+            readers.append(self)
+
+        def __enter__(self):
+            for text in content:
+                self.emit(text)
+            return self
+
+        def __exit__(self, *exc):
+            self.closed = True
+
+    monkeypatch.setattr("databricks_agentkit.sandbox.streaming.FileFollower", Reader)
+    registry = SimpleNamespace(namespace="test")
+    factory = MagicMock(side_effect=lambda source, attempt: LivePreview(None, source, attempt))
+    control = ControlStore(
+        registry, MagicMock(), runtime_store=InMemoryRuntimeStore(), preview_factory=factory
+    )
+    control.initialize()
+    row = control.create_run("agent", "session", "call", {})
+    state = control.call(control.runtime_store.claim(row["id"]))
+    control.call(
+        control.runtime_store.append_event(
+            row["id"],
+            state.attempt,
+            {
+                "type": "sandbox.stream.ready",
+                "source": {"sandbox_id": "sandbox", "path": "/file", "started_at": 10},
+            },
+        )
+    )
+    yield control, row["id"], state.attempt, readers, content, factory
+    control.close()
 
 
-def test_close_flushes_pending_text_without_waiting_for_batch_deadline():
-    published = queue.Queue()
-    db = MagicMock()
-    db.side_effect = lambda event: published.put(event["delta"])
-    with PartialText(db, interval=60) as stream:
-        stream.emit("First")
-        assert published.get(timeout=1) == "First"
-        stream.emit(" last")
-    assert published.get_nowait() == " last"
-    count = db.call_count
-    stream.emit(" after close")
-    assert db.call_count == count
-    assert not stream.thread.is_alive()
+def test_reconnect_replays_file_and_disconnect_only_closes_reader(live):
+    control, run_id, attempt, readers, content, _ = live
+    watch = control.watch(run_id)
+    first = next(watch)
+    assert first["stream"]["text"] == "hello"
+    assert first["stream"]["first_token_ms"] == 2000
+    watch.close()
+    assert readers[0].closed
+    assert control.run(run_id)["status"] == "running"
+    assert control.run(run_id)["stream"] is None
+    content.append(" world")
+    watch = control.watch(run_id)
+    try:
+        assert next(watch)["stream"]["text"] == "hello world"
+        assert control.call(
+            control.runtime_store.complete(run_id, attempt, {"result": {"reply": "hello world"}})
+        )
+        readers[-1].decoder.ended.set()
+        assert next(watch)["status"] == "succeeded"
+    finally:
+        watch.close()
+    events = control.call(control.runtime_store.events(run_id))
+    assert not any(item.event["type"] == "sandbox.text.delta" for item in events)
+    count = len(readers)
+    assert list(control.watch(run_id))[0]["result"]["result"]["reply"] == "hello world"
+    assert len(readers) == count  # Completed runs need no sandbox access.
 
 
-def test_slow_database_does_not_block_reader_and_pending_text_is_bounded():
-    started, release = threading.Event(), threading.Event()
-    published = []
-    db = MagicMock()
-
-    def write(event):
-        if not published:
-            started.set()
-            assert release.wait(2)
-        published.append(event["delta"])
-
-    db.side_effect = write
-    with PartialText(db) as stream:
-        stream.emit("first")
-        try:
-            assert started.wait(1)
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(stream.emit, "a" * 300_000).result(timeout=1)
-            assert len(stream.text) == 256 * 1024
-        finally:
-            release.set()
-    assert published == ["first", "a" * (256 * 1024 - 5)]
-    assert not stream.thread.is_alive()
+def test_live_deltas_do_not_poll_sql_or_block_on_slow_consumers(live, monkeypatch):
+    control, run_id, _, readers, _, _ = live
+    reads = MagicMock(wraps=control._state)
+    monkeypatch.setattr(control, "_state", reads)
+    watch = control.watch(run_id)
+    try:
+        next(watch)
+        for _ in range(4):
+            readers[-1].emit("a" * 300_000)
+            row = next(watch)
+        assert len(row["stream"]["text"]) == 256 * 1024
+        assert reads.call_count == 1
+    finally:
+        watch.close()
 
 
-def test_preview_failure_does_not_override_agent_result_and_stops_writer(caplog):
-    db = MagicMock()
-    db.side_effect = RuntimeError("database unavailable")
-    with PartialText(db) as stream:
-        stream.emit("answer")
-        stream.thread.join(timeout=1)
-        assert isinstance(stream.error, RuntimeError)
-        stream.emit("ignored after preview failure")
-    assert db.call_count == 1
-    assert not stream.thread.is_alive()
-    assert "final result will carry the answer" in caplog.text
+def test_lost_sandbox_preview_does_not_change_execution_state(live):
+    control, run_id, attempt, _, _, factory = live
+    factory.side_effect = RuntimeError("sandbox disappeared")
+    watch = control.watch(run_id)
+    try:
+        row = next(watch)
+        assert row["status"] == "running"
+        assert "unavailable" in row["stream_error"]
+        assert control.call(control.runtime_store.fail(run_id, attempt, {"error": "worker lost"}))
+        assert next(watch)["status"] == "failed"
+    finally:
+        watch.close()
+
+
+def test_attempt_change_discards_previous_preview_and_closes_reader(live, monkeypatch):
+    from dataclasses import replace
+
+    control, run_id, attempt, readers, _, _ = live
+    watch = control.watch(run_id)
+    try:
+        assert next(watch)["stream"]["text"] == "hello"
+        state = control._state(run_id)
+        monkeypatch.setattr(control, "_state", lambda _: replace(state, attempt=attempt + 1))
+        readers[0].decoder.ended.set()  # Wake the state check, without sleeping a second.
+        row = next(watch)
+        assert row["attempt_id"] == attempt + 1
+        assert row["stream"] is None
+        assert row["stream_source"] is None
+        assert readers[0].closed
+    finally:
+        watch.close()

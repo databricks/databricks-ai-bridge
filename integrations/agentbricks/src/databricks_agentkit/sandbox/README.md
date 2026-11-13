@@ -30,8 +30,9 @@ The shared store's optional `list_invocations` read API supports workbench histo
 **Schema impact:** no columns, constraints, indexes or status values change in the
 existing Runtime Store `invocations` or `invocation_events` tables. The default schema
 is `databricks_agentkit_runtime`. Agent revision, client session/invocation IDs and input
-use the existing request JSON. Progress, lifecycle timing and text deltas use the existing
-event JSON, with types `sandbox.stage`, `sandbox.lifecycle` and `sandbox.text.delta`.
+use the existing request JSON. Progress, lifecycle timing and the attempt-file descriptor
+use existing event JSON: `sandbox.stage`, `sandbox.lifecycle` and `sandbox.stream.ready`.
+Historical `sandbox.text.delta` events remain readable; new tokens stay on sandbox disk.
 Runtime IDs hash deployment/revision/client IDs; the Runtime Store session ID scopes FIFO
 to that deployment and revision. Recovery uses the existing `recovery_affinity` column.
 
@@ -168,26 +169,26 @@ sequenceDiagram
         A->>W: Read verified source archive
         A->>S: Upload source, install and validate
     end
+    A->>D: Store attempt descriptor (sandbox ID + file path)
+    C->>A: Subscribe / reconnect to run SSE
     A->>S: ExecuteCommand(tail -c +1 -F attempt.jsonl)
     A->>S: Start/reuse session worker; submit through local socket
     loop Model text deltas
         S->>S: Append + flush JSONL delta
         S-->>A: gRPC stdout bytes from tail
-        A->>D: Append batched text delta to invocation_events
-        A->>D: Read events after cursor (50 ms poll)
-        D-->>A: Ordered events; project chat snapshot
-        A-->>C: SSE snapshot / CLI status response
+        A-->>C: SSE chat snapshot (no SQL on the text path)
     end
     S->>S: Flush end record
     S-->>A: Final result from foreground command
-    A->>S: Terminate only the tail reader
     A->>D: Persist final result and status
+    A-->>C: Final result snapshot
+    A->>S: Terminate only this subscriber's tail reader
 ```
 
 The stdlib runner writes to
 `<session-state>/streams/<invocation-hash>.<attempt-uuid>.jsonl`. It exclusively
 creates the private file, so attempts cannot truncate each other. Each text
-record is `{"type":"delta","delta":"..."}`; terminal records are
+record is `{"type":"delta","delta":"...","at":<unix-seconds>}`; terminal records are
 `{"type":"end","status":"completed"}` or `"failed"`. Persistent workers
 write agent logs to `worker.log`; the client returns the final JSON on stdout.
 Oneshot execution keeps agent logs on ordinary stdout/stderr. A terminal `completed` record means
@@ -197,9 +198,11 @@ Conversation Store commit. A killed worker can leave an incomplete file.
 `FileFollower` uses streaming gRPC `ExecuteCommand` with a bounded GNU
 `tail -c +1 -F -s 0.05` process. It decodes complete JSONL records across arbitrary
 byte and UTF-8 boundaries. It never polls the live file through exec-sync.
-If the stream disconnects, the agent continues; after the foreground command
-finishes, one catch-up read from the last received byte offset supplies remaining
-records. The current implementation does not reconnect the live gRPC stream.
+Each SSE subscriber owns an independent reader, so any App replica can serve it.
+A browser reconnect reads the active attempt file from byte zero and rebuilds its
+text preview. A broken gRPC reader leaves execution running; reconnecting SSE opens
+a new reader. Subscriptions never allocate/resume sandboxes or hold session locks.
+A terminal invocation is read entirely from Runtime Store, even if its sandbox is gone.
 
 Reader teardown cancels gRPC **and** signals the remote reader: canceling the
 RPC alone leaves the sandbox process alive. The PID is checked against the
@@ -224,21 +227,28 @@ App. Buffered exec-sync still performs uploads, installation and the foreground
 agent command, with its existing 240-second ceiling. SSH execution also uses
 gRPC for following the attempt file.
 
-An App-side writer coalesces text into attempt-fenced delta events on a 50 ms timer,
-even when no further token arrives. The tail reader does not wait for database writes.
-Preview output is bounded to 256 Ki characters per attempt. SSE readers poll shared state
-and events after a cursor every 50 ms and project the existing chat snapshot response;
-reconnects replay persisted events. No separate snapshot column or LISTEN/NOTIFY path remains.
-The browser retains its 80 ms display buffer and immediately flushes final responses.
-Preview publication failures retain the final invocation result as authoritative.
+The shared runtime stores one `sandbox.stream.ready` event per attempt with the
+sandbox ID, unique file path and invocation start time. It still stores lifecycle
+updates and final results. **New text deltas are not written to `invocation_events`.**
+Existing stored text events remain readable for historical runs; table schemas do
+not change. Each subscriber checks durable state/events once per second to catch
+completion, failure or attempt changes; decoded text wakes SSE independently.
 
-This adopts MAR's **file + ExecuteCommand(tail -F)** transport. Ordered durable events
-now replace the prototype text snapshot table, but the wire API still uses chat snapshots,
-not MAR StreamItems/Conversation Store commit/discard. CLI `--stream` polls status.
-Polling, per-subscriber replay and event retention need load testing before scaling;
-this change does not claim a latency improvement. Shared invocation session ordering
-queues overlapping turns; preparation/stop conflicts can still return busy. SQLite
-history/checkpoints survive worker processes, not loss of sandbox disk.
+Preview output is bounded to 256 Ki characters per subscriber and coalesced in memory.
+Slow clients do not block the worker. Runner timestamps preserve time-to-first-text
+when replaying current files; old files without timestamps omit that metric.
+The browser retains its display buffer, reconnects SSE after transport errors and
+immediately flushes final responses. CLI `--stream` consumes the same SSE endpoint;
+ordinary status polling returns durable metadata/results, not new partial text.
+
+This follows MAR's **sandbox file → ExecuteCommand(tail -F) → App → SSE** path.
+The wire API remains run-scoped chat snapshots, without MAR StreamItems cursors,
+committed Session Store items or commit/discard records. Reconnect progressively
+reconstructs a preview rather than emitting MAR's explicit replay-at-EOF snapshot.
+Final invocation results are durable; default SQLite conversation history and
+uncommitted previews are lost with sandbox disk. Arbitrary code is never automatically
+replayed. Per-subscriber tail processes, state polling, file retention, quotas and
+browser token cadence still require load testing before production use.
 
 `deploy --sandbox` creates/reuses the App-owned managed Runtime Store through the existing
 API. The immutable manifest names the store and owning App; deployment receives the

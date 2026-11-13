@@ -6,6 +6,7 @@ import importlib
 import inspect
 import json
 import os
+import time
 from pathlib import Path
 
 _preparation = None
@@ -57,7 +58,7 @@ async def call_handler(request, state_dir: Path, entrypoint: str, stream_path=No
             raise TypeError("emit expects a text delta")
         # Split large deltas so every UTF-8 JSONL record stays below 1 MiB.
         for offset in range(0, len(delta), 65536):
-            write_record({"type": "delta", "delta": delta[offset:offset + 65536]})
+            write_record({"type": "delta", "delta": delta[offset:offset + 65536], "at": time.time()})
 
     try:
         handler = load_handler(entrypoint)

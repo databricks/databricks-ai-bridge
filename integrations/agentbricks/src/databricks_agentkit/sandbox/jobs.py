@@ -1,16 +1,12 @@
 """Sandbox execution adapter for the shared AgentKit invocation runtime."""
 
 import asyncio
-import logging
-import threading
 import time
 from datetime import datetime, timezone
 
 from databricks_agentkit.runtime.runtime import Runtime
 from databricks_agentkit.sandbox.bundle import Bundle
-from databricks_agentkit.sandbox.control import STREAM_FLUSH_SECONDS, scoped_session
-
-LOG = logging.getLogger(__name__)
+from databricks_agentkit.sandbox.control import RUNTIME_POLL_SECONDS, scoped_session
 
 
 class RunManager:
@@ -19,7 +15,7 @@ class RunManager:
         self.runtime = Runtime.from_store(
             self.execute,
             runtime_store=control.runtime_store,
-            poll_seconds=STREAM_FLUSH_SECONDS,
+            poll_seconds=RUNTIME_POLL_SECONDS,
         )
         self.capacity = asyncio.Semaphore(2)
 
@@ -53,87 +49,25 @@ class RunManager:
             )
 
         emit({"type": "sandbox.stage", "stage": "Starting"})
-        with PartialText(emit) as stream:
-            result = self.orchestrator.invoke(
-                request["session_id"],
-                request["invocation_id"],
-                request["input"],
-                bundle=bundle,
-                execution_artifact=agent.get("execution_artifact"),
-                entrypoint=agent["entrypoint"],
-                source_revision=agent["id"],
-                registry_session_id=scoped_session(agent["id"], request["session_id"]),
-                progress=lambda stage: emit({"type": "sandbox.stage", "stage": stage}),
-                emit=stream.emit,
-                lifecycle=lambda value: emit({"type": "sandbox.lifecycle", "lifecycle": value}),
-            )
+        started_at = time.time()
+        result = self.orchestrator.invoke(
+            request["session_id"],
+            request["invocation_id"],
+            request["input"],
+            bundle=bundle,
+            execution_artifact=agent.get("execution_artifact"),
+            entrypoint=agent["entrypoint"],
+            source_revision=agent["id"],
+            registry_session_id=scoped_session(agent["id"], request["session_id"]),
+            progress=lambda stage: emit({"type": "sandbox.stage", "stage": stage}),
+            stream_ready=lambda source: emit(
+                {
+                    "type": "sandbox.stream.ready",
+                    "source": {**source, "started_at": started_at},
+                }
+            ),
+            lifecycle=lambda value: emit({"type": "sandbox.lifecycle", "lifecycle": value}),
+        )
         result["session_id"] = request["session_id"]
         result["agent_id"] = agent["id"]
         return result
-
-
-class PartialText:
-    """Coalesce text into bounded, attempt-fenced events without blocking the tail reader."""
-
-    def __init__(self, publish, *, interval=STREAM_FLUSH_SECONDS):
-        self.publish, self.interval = publish, interval
-        self.started = time.monotonic()
-        self.text, self.first_token_ms, self.dirty = "", None, False
-        self.condition = threading.Condition()
-        self.closed = False
-        self.error = None
-        self.thread = threading.Thread(target=self._write, name="sandbox-text-writer", daemon=True)
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def emit(self, delta):
-        with self.condition:
-            if self.closed or self.error or not delta or len(self.text) >= 256 * 1024:
-                return
-            if self.first_token_ms is None:
-                self.first_token_ms = round((time.monotonic() - self.started) * 1000, 2)
-            self.text += delta[: 256 * 1024 - len(self.text)]
-            self.dirty = True
-            self.condition.notify()
-
-    def _write(self):
-        flushed, offset = None, 0
-        try:
-            while True:
-                with self.condition:
-                    while not self.dirty and not self.closed:
-                        self.condition.wait()
-                    if not self.dirty:
-                        return
-                    if not self.closed and flushed is not None:
-                        remaining = flushed + self.interval - time.monotonic()
-                        if remaining > 0:
-                            self.condition.wait(remaining)
-                            continue
-                    text, first_token_ms = self.text, self.first_token_ms
-                    self.dirty = False
-                self.publish(
-                    {
-                        "type": "sandbox.text.delta",
-                        "delta": text[offset:],
-                        "first_token_ms": first_token_ms,
-                    }
-                )
-                offset = len(text)
-                flushed = time.monotonic()
-        except Exception as exc:
-            with self.condition:
-                self.error = exc
-            LOG.warning(
-                "Live text publication failed; final result will carry the answer", exc_info=True
-            )
-
-    def __exit__(self, *exc):
-        with self.condition:
-            self.closed = True
-            self.condition.notify()
-        self.thread.join(timeout=6)
-        if self.thread.is_alive():
-            LOG.warning("Live text publication timed out during shutdown")

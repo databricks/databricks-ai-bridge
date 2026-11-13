@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 
@@ -121,7 +122,7 @@ def test_reuses_process_imports_and_loop_but_isolates_streams_and_context(worker
     for invocation, result in [("first", first), ("second", second)]:
         records = [json.loads(line) for line in result[3].read_text().splitlines()]
         assert records == [
-            {"type": "delta", "delta": invocation},
+            {"type": "delta", "delta": invocation, "at": ANY},
             {"type": "end", "status": "completed"},
         ]
 

@@ -62,7 +62,8 @@ shared durable invocation state/events; the source catalog stays in Workspace.
 - App APIs, UI and orchestration: `databricks_agentkit/sandbox/app.py`,
   `orchestrator.py`, `session_client.py`, `preparation.py` and `store.py`.
 - Sandbox execution: `bootstrap.py`, `persistent.py`, `runner.py`, `adapters/`;
-  file streaming uses ExecuteCommand and timed delta publication into shared runtime events.
+  file streaming uses ExecuteCommand and direct App-to-client SSE. Runtime events store
+  one attempt-file descriptor plus lifecycle updates; tokens bypass SQL.
 - The separate import/MLflow dependency experiment is not required by this runtime.
   Earlier standalone examples and internal measurements are archived separately.
 
@@ -83,8 +84,8 @@ Sandbox invocations now use the existing `Runtime`, durable executor and
 `SessionSandboxClient` still owns compute. Chat status/history are read projections.
 
 There are **no changes to existing Runtime Store table columns, indexes, constraints,
-or status values**. Sandbox request metadata uses `request` JSON; progress/timing/text
-use `invocation_events.event` JSON. Additive code APIs provide history listing and
+or status values**. Sandbox request metadata uses `request` JSON; progress, timing and
+attempt-file descriptors use `invocation_events.event` JSON. Additive code APIs provide history listing and
 allow the Apps connection factory to receive the existing recovery affinity option.
 
 The old deployment-schema `invocations` table remains untouched and unused. Its
@@ -93,8 +94,8 @@ Deploy initializes the standard runtime schema when absent. Failed runs stay ter
 explicit retry creates a new invocation, while reconnect preserves identity. Recovery
 claims stale work but does not automatically replay sandbox code or side effects.
 
-The SSE adapter now polls ordered events at 50 ms intervals instead of using the old
-snapshot/NOTIFY implementation. The runner's file transport and browser smoothing remain.
+The SSE adapter relays attempt-file text directly to clients. It checks durable state
+and lifecycle events once per second; text delivery does not wait for those checks.
 This needs load testing and is not a claim of improved latency.
 
 ## Validation for this draft
@@ -103,3 +104,35 @@ The initial draft passed 621 focused checks and a wheel build. The deduplication
 follow-up is checked with runtime, sandbox, browser and real local PostgreSQL tests;
 see the PR for the executed results. These are local checks, without a fresh live
 Databricks deployment or a minimum-version dependency matrix.
+
+## Direct streaming validation (Nov 13)
+
+The workbench uses `sandbox file → ExecuteCommand(tail -F) → App → SSE` for
+live text. Invocation claims, lifecycle events and final results stay in the
+shared Runtime Store. One attempt-file descriptor replaces per-token events;
+existing table schemas are unchanged. The [diagram](diagrams/sandbox-direct-streaming.png)
+has [editable SVG source](diagrams/sandbox-direct-streaming.svg).
+
+Focused unit and offline Chromium checks cover replay, subscriber cancellation,
+attempt changes, bounded preview buffering, SQL-free live delivery, CLI SSE and
+browser reconnect/fallback. Existing sandbox/adapter checks also passed.
+
+Live validation on `agent-bricks-sb-workbench-1109`, deployment
+`01f1df28e9221a4ab309692960f38bad`, runtime wheel
+`0.10.0.dev0+sandbox.1e00de4664dd487e`, with pinned source revision
+`95ebfb0fdf8723d9` and `system.ai.gpt-5-mini`:
+
+- Prepared a new dedicated sandbox; disconnected during a response and rebuilt
+  the preview through a second SSE subscription to the same run.
+- Observed live text while the durable status endpoint contained no preview;
+  completed result matched the SSE final result. Unit checks verify no token
+  events are written. Repeating the submission returned the original run.
+- CLI `--stream` delivered the next response on the same resident worker, with
+  conversation memory retained. Stop was confirmed; completed SSE replay still
+  returned the answer with the sandbox stopped.
+
+One response delivered 20 snapshots after reconnect, with 0.38 s between the
+last changed preview and final status. This is a functional spot check, not a
+controlled latency comparison or a browser rendering benchmark. Full MAR
+StreamItems/Session Store commit-discard, subscriber fan-out and file retention
+remain outside this prototype.

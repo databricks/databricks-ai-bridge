@@ -435,7 +435,7 @@ def run_events(run_id: str):
             close = getattr(watch, "close", None)
             if close:
                 # Client disconnect cancels the response task; still release its
-                # Lakebase connection after the in-flight read finishes.
+                # tail reader after the in-flight snapshot read finishes.
                 with CancelScope(shield=True):
                     await run_in_threadpool(close)
 

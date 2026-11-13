@@ -66,7 +66,7 @@ def test_job_uses_shared_runtime_and_saved_revision(job):
     def invoke(*args, **kwargs):
         kwargs["progress"]("Installing")
         kwargs["lifecycle"]({"steps": []})
-        kwargs["emit"]("hello")
+        kwargs["stream_ready"]({"sandbox_id": "sandbox-a", "path": "/attempt.jsonl"})
         return {"result": {"reply": "hello"}}
 
     orchestrator.invoke.side_effect = invoke
@@ -78,8 +78,10 @@ def test_job_uses_shared_runtime_and_saved_revision(job):
     assert kwargs["bundle"] == bundle
     assert kwargs["entrypoint"] == "custom.agent:invoke"
     assert result["status"] == "succeeded"
-    assert result["stream"]["text"] == "hello"
+    assert result["stream"] is None
+    assert result["stream_source"]["sandbox_id"] == "sandbox-a"
     events = control.call(control.runtime_store.events(row["id"]))
+    assert not any(event.event["type"] == "sandbox.text.delta" for event in events)
     assert events[0].event == {"type": "run.started"}
     assert events[-1].event == {"type": "run.completed"}
     assert any(event.event.get("stage") == "Installing" for event in events)
@@ -138,50 +140,6 @@ def test_recovery_does_not_replay_arbitrary_agent_code(job):
     with pytest.raises(RuntimeError, match="Automatic replay is disabled"):
         control.call(manager.execute(request, InvocationAttemptContext("run", 2)))
     orchestrator.invoke.assert_not_called()
-
-
-def test_stale_events_rejected_and_reconnect_replays_current_attempt(job):
-    _, control, orchestrator, *_ = job
-    emitted, release = threading.Event(), threading.Event()
-
-    def invoke(*args, **kwargs):
-        kwargs["emit"]("hello")
-        emitted.set()
-        assert release.wait(3)
-        kwargs["emit"](" world")
-        return {"result": {"reply": "hello world"}}
-
-    orchestrator.invoke.side_effect = invoke
-    row = submit(job)
-    watch = control.watch(row["id"])
-    try:
-        assert emitted.wait(1)
-        deadline = time.monotonic() + 2
-        while (partial := next(watch)).get("stream") is None:
-            assert time.monotonic() < deadline
-        assert partial["stream"]["text"] == "hello"
-        assert (
-            control.call(
-                control.runtime_store.append_event(
-                    row["id"], 99, {"type": "sandbox.text.delta", "delta": "wrong"}
-                )
-            )
-            is None
-        )
-    finally:
-        release.set()
-        watch.close()
-    result = terminal(control, row["id"])
-    assert result["stream"]["text"] == "hello world"
-    assert list(control.watch(row["id"])) == [result]
-    assert (
-        control.call(
-            control.runtime_store.append_event(
-                row["id"], 1, {"type": "sandbox.text.delta", "delta": "late"}
-            )
-        )
-        is None
-    )
 
 
 def test_watch_does_not_skip_events_when_claim_happens_between_reads(job, monkeypatch):

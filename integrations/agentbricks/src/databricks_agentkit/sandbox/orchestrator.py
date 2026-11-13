@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -74,6 +75,7 @@ class Orchestrator:
         registry_session_id=None,
         source_revision=None,
         emit=None,
+        stream_ready=None,
         lifecycle=None,
         _prepare_only=False,
         _warm_worker=False,
@@ -238,6 +240,7 @@ class Orchestrator:
                                 request,
                                 emit,
                                 metrics,
+                                stream_ready=stream_ready,
                             )
                             timeline.complete(
                                 details=result.get("worker_timings_ms")
@@ -254,7 +257,7 @@ class Orchestrator:
                 "sandbox_id": sandbox_id,
                 "sandbox_scope": self.sandbox_scope,
                 "execution_transport": self.lakebox.transport,
-                "stream_transport": "ExecuteCommand(tail -F)" if emit else None,
+                "stream_transport": "ExecuteCommand(tail -F)" if emit or stream_ready else None,
                 "sandbox_created": created,
                 "sandbox_replaced": replaced,
                 "environment_reused": bootstrap_reused,
@@ -282,6 +285,7 @@ class Orchestrator:
         metrics,
         *,
         prepare=False,
+        stream_ready=None,
     ):
         with timed(metrics, "worker_process_and_execution"):
             command = (
@@ -300,13 +304,18 @@ class Orchestrator:
             if prepare:
                 command += " --prepare"
             data = json.dumps(request).encode()
-            if emit:
+            if emit or stream_ready:
                 invocation = hashlib.sha256(request["invocation_id"].encode()).hexdigest()
                 directory = state_dir + "/streams"
                 # A fresh attempt file is never truncated or reused after retry.
                 path = f"{directory}/{invocation}.{uuid4().hex}.jsonl"
                 remote.run(f"mkdir -p -m 700 -- {shlex.quote(directory)}")
-                with FileFollower(remote, path, emit) as follower:
+                if stream_ready:
+                    # Publish once before execution. Subscribers can independently
+                    # follow this attempt; their lifetime never owns the worker.
+                    stream_ready({"sandbox_id": remote.sandbox_id, "path": path})
+                reader = FileFollower(remote, path, emit) if emit else nullcontext()
+                with reader as follower:
                     try:
                         output = remote.run(
                             command + f" --stream-file {shlex.quote(path)}", data, timeout=300
@@ -315,11 +324,13 @@ class Orchestrator:
                         # Preserve the original worker error if a crash also left
                         # an incomplete file. Reader failure never cancels the agent.
                         try:
-                            follower.finish()
+                            if follower:
+                                follower.finish()
                         except Exception:
                             pass
                         raise
-                    follower.finish()
+                    if follower:
+                        follower.finish()
             else:
                 output = remote.run(command, data, timeout=300)
             result = json.loads(output.strip().splitlines()[-1])

@@ -108,3 +108,12 @@ Store table schemas are unchanged. The old sandbox-specific invocation table is 
 for inspection; its historical runs do not appear in the new chat history. Sandbox
 mappings and installed session files are retained. Failed-message retries create a
 new invocation ID; reconnecting an uncertain submission retains its existing ID.
+
+### Streaming and reconnects
+
+The browser and CLI `--stream` receive live text directly through App SSE from a
+sandbox `tail -F` reader. Refresh the browser mid-response to rebuild its preview
+from the active attempt file. Closing a tab does not stop the worker. Completed
+answers remain in Runtime Store and load without contacting the sandbox. Token
+deltas are not stored in Lakebase; ordinary run-status polling returns lifecycle
+and final results. No existing Runtime Store table schema changes are required.

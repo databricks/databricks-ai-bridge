@@ -333,3 +333,19 @@ def test_streamed_text_uses_an_attempt_file_and_follows_before_execution(setup, 
     assert "/streams/" in first_path and first_path.endswith(".jsonl")
     orchestrator.invoke("session", "call", {}, emit=chunks.append)
     assert paths[1] != first_path
+
+
+def test_app_execution_publishes_descriptor_without_owning_a_tail_reader(setup, monkeypatch):
+    orchestrator, _, _, remote = setup
+    remote.sandbox_id = "sandbox-one"
+    follower = MagicMock(side_effect=AssertionError("execution must not own a subscriber"))
+    monkeypatch.setattr("databricks_agentkit.sandbox.orchestrator.FileFollower", follower)
+    descriptors = []
+    result = orchestrator.invoke("session", "call", {}, stream_ready=descriptors.append)
+    assert result["result"] == {"reply": "hello"}
+    assert descriptors[0]["sandbox_id"] == "sandbox-one"
+    command = next(c.args[0] for c in remote.run.call_args_list if " --stream-file " in c.args[0])
+    assert command.endswith(descriptors[0]["path"])
+    follower.assert_not_called()
+    orchestrator.invoke("session", "call", {}, stream_ready=descriptors.append)
+    assert descriptors[0]["path"] != descriptors[1]["path"]

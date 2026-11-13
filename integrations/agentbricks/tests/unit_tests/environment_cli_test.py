@@ -237,3 +237,48 @@ def test_environment_create_is_removed_without_contacting_workspace(setup_cli):
     help_result = run("--help")
     assert "deploy --sandbox" in help_result.output
     assert "create" not in agentbricks.commands["environment"].commands
+
+
+@pytest.mark.parametrize("completed", [True, False])
+def test_stream_consumes_sse_and_preserves_identity_on_disconnect(
+    setup_cli, monkeypatch, completed
+):
+    import requests as http
+
+    _, _, requests, _ = setup_cli
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.status_code = 200
+    response.headers = {"Content-Type": "text/event-stream"}
+    partial = {"id": "run", "status": "running", "stream": {"text": "hello"}}
+    final = {"id": "run", "status": "succeeded", "result": {"reply": "hello"}}
+    rows = [partial, final] if completed else [partial]
+    response.iter_lines.return_value = iter(
+        line for row in rows for line in (b"event: run", b"data: " + json.dumps(row).encode(), b"")
+    )
+    get = MagicMock(return_value=response)
+    monkeypatch.setattr(http, "get", get)
+    result = run(
+        "invoke",
+        "demo",
+        "--app",
+        "launcher",
+        "--session-id",
+        "s",
+        "--invocation-id",
+        "i",
+        "--json",
+        "{}",
+        "--stream",
+    )
+    assert (result.exit_code == 0) is completed, result.output
+    assert "hello" in result.stderr
+    assert len(requests) == 1  # Submission only; no status polling for text.
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer oauth"
+    assert get.call_args.kwargs["headers"]["X-Routing-Key"] == "s"
+    assert get.call_args.kwargs["stream"] is True
+    response.__exit__.assert_called_once()
+    if completed:
+        assert json.loads(result.stdout)["result"]["reply"] == "hello"
+    else:
+        assert "--invocation-id i" in result.output

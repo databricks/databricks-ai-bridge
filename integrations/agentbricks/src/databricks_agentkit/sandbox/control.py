@@ -6,26 +6,28 @@ import json
 import os
 import threading
 import time
+from contextlib import ExitStack
 
 from databricks_agentkit.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA, RUNTIME_STORE_SCHEMA_ENV
 from databricks_agentkit.runtime.types import InvocationStatus
 from databricks_agentkit.sandbox.bundle import Bundle
 from databricks_agentkit.sandbox.catalog import WorkspaceCatalog
 
-STREAM_FLUSH_SECONDS = 0.05
-STREAM_RESYNC_SECONDS = 0.05
+RUNTIME_POLL_SECONDS = 0.05
+STREAM_RESYNC_SECONDS = 1.0
 
 
 class ControlStore:
     """Adapt synchronous App/Workspace APIs to one shared async Runtime Store loop."""
 
-    def __init__(self, registry, catalog=None, *, runtime_store=None):
+    def __init__(self, registry, catalog=None, *, runtime_store=None, preview_factory=None):
         self.registry = registry
         self.namespace = registry.namespace
         self.catalog = catalog or WorkspaceCatalog(
             registry.workspace, f"/Shared/agentbricks-runtime/{self.namespace}"
         )
         self.runtime_store = runtime_store
+        self.preview_factory = preview_factory or self._preview
         self.loop = None
         self.thread = None
 
@@ -166,20 +168,68 @@ class ControlStore:
         return snapshot(state, events)
 
     def watch(self, run_id):
+        """Relay attempt-file previews, checking durable state at a bounded rate."""
         cursor = None
         row = None
-        while True:
-            state = self._state(run_id)
-            new = self.call(self.runtime_store.events(run_id, after_sequence=cursor))
-            # A claim can commit between the state and event reads; consume it next time.
-            new = [event for event in new if event.attempt <= state.attempt]
-            if new:
-                cursor = new[-1].sequence_number
-            row = snapshot(state, new, previous=row)
-            yield row
-            if state.is_terminal:
-                return
-            time.sleep(STREAM_RESYNC_SECONDS)
+        preview, identity = None, None
+        next_check, observed_end = 0, False
+        with ExitStack() as readers:
+            while True:
+                if time.monotonic() >= next_check:
+                    state = self._state(run_id)
+                    new = self.call(self.runtime_store.events(run_id, after_sequence=cursor))
+                    # A claim can commit between reads; consume its events next time.
+                    new = [event for event in new if event.attempt <= state.attempt]
+                    if new:
+                        cursor = new[-1].sequence_number
+                    row = snapshot(state, new, previous=row)
+                    next_check = time.monotonic() + STREAM_RESYNC_SECONDS
+                    source = row.get("stream_source")
+                    current = (state.attempt, source) if source else None
+                    if current != identity:
+                        readers.close()
+                        preview, identity, observed_end = None, current, False
+                        if source and not state.is_terminal:
+                            try:
+                                preview = readers.enter_context(
+                                    self.preview_factory(source, state.attempt)
+                                )
+                            except Exception:
+                                # A preview failure must not fail or replay the agent.
+                                row["stream_error"] = (
+                                    "Live preview unavailable; waiting for result."
+                                )
+                    if state.is_terminal:
+                        # Deliver completion before reader cleanup; no extra tail drain
+                        # or database flush is required to make the answer visible.
+                        yield row
+                        return
+                if preview:
+                    row = {**row, "stream": preview.snapshot()}
+                    if preview.follower.error:
+                        row["stream_error"] = (
+                            "Live preview disconnected; reconnect or wait for result."
+                        )
+                yield row
+                if preview:
+                    preview.wait(
+                        row["stream"]["sequence"], min(0.25, max(0, next_check - time.monotonic()))
+                    )
+                    if preview.follower.decoder.ended.is_set() and not observed_end:
+                        observed_end = True
+                        next_check = 0
+                else:
+                    time.sleep(max(0, next_check - time.monotonic()))
+
+    def _preview(self, source, attempt):
+        from databricks_agentkit.sandbox.lakebox import HttpsRemote
+        from databricks_agentkit.sandbox.streaming import LivePreview
+
+        # Observe the stored sandbox directly. Never allocate, resume, or hold
+        # session locks in a subscriber, even when the sandbox has disappeared.
+        return LivePreview(
+            HttpsRemote(self.registry.workspace, source["sandbox_id"]), source, attempt
+        )
 
     def history(self, agent_id, session_id):
         states = self.call(
@@ -256,11 +306,12 @@ def snapshot(state, events, *, previous=None):
         "error": None,
         "lifecycle": None,
         "stream": None,
+        "stream_source": None,
         "created_at": None,
         "updated_at": None,
     }
     if previous and previous["attempt_id"] == state.attempt:
-        for key in ("created_at", "updated_at", "lifecycle", "stream"):
+        for key in ("created_at", "updated_at", "lifecycle", "stream", "stream_source"):
             row[key] = previous[key]
         if not state.is_terminal:
             row["stage"] = previous["stage"]
@@ -277,6 +328,8 @@ def snapshot(state, events, *, previous=None):
             row["stage"] = event["stage"]
         elif kind == "sandbox.lifecycle":
             row["lifecycle"] = event["lifecycle"]
+        elif kind == "sandbox.stream.ready":
+            row["stream_source"] = event["source"]
         elif kind == "sandbox.text.delta":
             stream = (
                 dict(row["stream"])

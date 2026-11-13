@@ -2070,7 +2070,7 @@ local testing if you intend to deploy an App under a different identity.
 | `--invocation-id` | string | generated UUID | no | Stable retry identifier; reuse with the same input to retrieve the original run. |
 | `--json` | JSON object | - | yes | Agent input as a JSON object. |
 | `--retry` | flag | off | no | Reattach to an existing invocation; requires its original ID. Failed runs require a new ID. |
-| `--stream` | flag | off | no | Print incremental text on stderr while waiting; stdout retains final run JSON. |
+| `--stream` | flag | off | no | Consume App SSE and print incremental text on stderr while waiting; stdout retains final run JSON. |
 | `--wait` / `--no-wait` | flag | wait | no | Poll until the invocation finishes, or immediately return the queued run record. |
 | `--timeout` | seconds, at least 0.1 | 300 | no | Maximum polling time; timing out does not cancel the run. Individual launcher HTTP requests have a 60-second timeout. |
 
@@ -2168,7 +2168,7 @@ agentbricks invoke support --session-id demo --json '{"message":"Hello"}' --stre
 | `--invocation-id` | string | generated UUID | no | Stable retry identity. |
 | `--json` | JSON object | - | yes | Agent input. The generated OpenAI sandbox adapter accepts message. |
 | `--retry` | flag | off | no | Reattach using the original ID; failed runs require a new ID. |
-| `--stream` | flag | off | no | Print incremental text on stderr while waiting. |
+| `--stream` | flag | off | no | Consume App SSE and print incremental text on stderr while waiting. |
 | `--timeout` | seconds, at least 0.1 | 300 | no | Maximum wait; timeout does not cancel the run. |
 
 ### `agentbricks tools`

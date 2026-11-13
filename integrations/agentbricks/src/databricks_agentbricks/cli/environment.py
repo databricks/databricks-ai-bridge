@@ -207,11 +207,30 @@ def invoke(
     deadline = time.monotonic() + timeout
     stage = None
     printed = ""
-    while wait and run["status"] in {"queued", "running"}:
-        text = (run.get("stream") or {}).get("text", "")
-        if stream and text.startswith(printed):
-            click.echo(text[len(printed) :], nl=False, err=True)
-            printed = text
+    if wait and stream:
+        updates = launcher.watch(run["id"], routing_key=session_id, timeout=timeout)
+        try:
+            for update in updates:
+                run = update
+                text = run.get("display_text", (run.get("stream") or {}).get("text", ""))
+                if text.startswith(printed):
+                    click.echo(text[len(printed) :], nl=False, err=True)
+                    printed = text
+                if run["status"] not in {"queued", "running"}:
+                    break
+            else:
+                raise AgentCliError(
+                    f"Stream ended before run {run['id']} completed; it may still be running.",
+                    hint=f"Repeat with --invocation-id {invocation_id} and the same input to reconnect.",
+                )
+        except AgentCliError as exc:
+            exc.hint = (
+                f"Repeat with --invocation-id {invocation_id} and the same input to reconnect."
+            )
+            raise
+        finally:
+            updates.close()
+    while wait and not stream and run["status"] in {"queued", "running"}:
         if obj.output == "text" and run["stage"] != stage:
             stage = run["stage"]
             click.echo(f"{run['id']}: {stage}", err=True)
@@ -224,9 +243,8 @@ def invoke(
         run = request_run(
             launcher, "GET", f"/api/runs/{run['id']}", invocation_id, routing_key=session_id
         )
-    text = (run.get("stream") or {}).get("text", "")
-    if stream and text.startswith(printed):
-        click.echo(text[len(printed) :], err=True)
+    if stream:
+        click.echo(err=True)
     if wait and run["status"] in {"failed", "interrupted"}:
         raise AgentCliError(
             f"Run {run['id']} {run['status']}: {run.get('error') or 'no diagnostic'}",

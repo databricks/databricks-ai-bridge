@@ -401,6 +401,10 @@ function renderTranscript() {
 function latestRun() { return state.runs[state.runs.length - 1]; }
 function mergeRun(row) {
   const index = state.runs.findIndex(item => item.id === row.id);
+  const previous = state.runs[index];
+  if (previous && previous.attempt_id === row.attempt_id && !row.stream && ACTIVE.has(row.status)) {
+    row = { ...row, stream: previous.stream, display_text: previous.display_text };
+  }
   if (index < 0) state.runs.push(row);
   else state.runs[index] = row;
   const nearBottom = elements.chatLog.scrollHeight - elements.chatLog.scrollTop - elements.chatLog.clientHeight < 100;
@@ -788,7 +792,7 @@ async function terminal(row, ctx) {
   const results = await Promise.allSettled([refreshSessions(ctx), refreshSandbox(ctx)]);
   if (current(ctx) && results[0].status === "rejected") notice(`Session list unavailable: ${results[0].reason.message}`, "reload");
 }
-function watchRun(row, ctx) {
+function watchRun(row, ctx, reconnects = 0) {
   if (!current(ctx)) return;
   closeWatch(); setBusy(true); mergeRun(row);
   if (!ACTIVE.has(row.status)) { void terminal(row, ctx); return; }
@@ -798,6 +802,7 @@ function watchRun(row, ctx) {
     if (!current(ctx) || state.source !== source) return;
     try {
       const snapshot = JSON.parse(event.data);
+      reconnects = 0;
       if (snapshot.id !== row.id || snapshot.agent_id !== ctx.agentId || snapshot.session_id !== ctx.sessionId) throw new Error("Unexpected run snapshot");
       mergeRun(snapshot);
       if (!ACTIVE.has(snapshot.status)) void terminal(snapshot, ctx);
@@ -806,20 +811,27 @@ function watchRun(row, ctx) {
     }
   });
   source.onerror = () => {
-    if (current(ctx) && state.source === source) { closeWatch(); void pollRun(row.id, ctx); }
+    // Check completion immediately, then reconnect to the same run. Replaying
+    // its file never submits another invocation. Bound repeated transport errors.
+    if (current(ctx) && state.source === source) {
+      closeWatch(); void pollRun(row.id, ctx, 0, reconnects + 1);
+    }
   };
 }
-async function pollRun(runId, ctx, failures = 0) {
+async function pollRun(runId, ctx, failures = 0, reconnects = 0) {
   if (!current(ctx)) return;
   try {
     const row = await api(`/api/runs/${encodeURIComponent(runId)}`, undefined, ctx);
     if (!current(ctx)) return;
     mergeRun(row);
     if (!ACTIVE.has(row.status)) { await terminal(row, ctx); return; }
-    state.pollTimer = setTimeout(() => { void pollRun(runId, ctx); }, 1500);
+    state.pollTimer = setTimeout(() => {
+      if (reconnects > 0 && reconnects <= 3) watchRun(row, ctx, reconnects);
+      else void pollRun(runId, ctx);
+    }, 1000);
   } catch (error) {
     if (!current(ctx)) return;
-    if (failures < 2) state.pollTimer = setTimeout(() => { void pollRun(runId, ctx, failures + 1); }, 1500 * (failures + 1));
+    if (failures < 2) state.pollTimer = setTimeout(() => { void pollRun(runId, ctx, failures + 1, reconnects); }, 1500 * (failures + 1));
     else notice(`Connection lost. The invocation may still be running: ${error.message}`, "monitor");
   }
 }

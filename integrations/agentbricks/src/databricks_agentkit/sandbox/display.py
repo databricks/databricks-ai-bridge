@@ -55,6 +55,7 @@ def chat_snapshot(row: dict) -> dict:
     Generic JSON results keep their existing renderer. The raw payload stays
     available for debugging; the override is never written back to Lakebase.
     """
+    row = {key: value for key, value in row.items() if key != "stream_source"}
     result = (row.get("result") or {}).get("result")
     reply = result.get("reply") if isinstance(result, dict) else None
     if isinstance(reply, str):
