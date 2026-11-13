@@ -76,6 +76,21 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
 | `mcp` | `genie-one` | Serve Genie One from the sandbox; empty to turn it off |
 | `export_volume` | empty | UC Volume folder that receives each session's `outputs/` |
 
+### App settings (`config.env` in `databricks.yml`)
+
+| Variable | Set to | Meaning |
+|---|---|---|
+| `ANTHROPIC_ENVIRONMENT_ID` | `${var.environment_id}` | The environment the App serves |
+| `ANTHROPIC_ENVIRONMENT_KEY` | secret resource `env-s-key` | Its environment key; stays in the App |
+| `CMA_SANDBOX_ID_KEY` | secret resource `sandbox-id-hmac-key` | HMAC key for sandbox names |
+| `CMA_SANDBOX_PREFIX` | `cmaapp-` | Sandbox id prefix; scopes the App's cleanup |
+| `CMA_MCP` | `${var.mcp}` | `genie-one` or empty |
+| `CMA_LIFECYCLE` | `ephemeral` | `ephemeral` or `resumable` |
+| `CMA_EXPORT_VOLUME` | `${var.export_volume}` | Optional Volume folder for `outputs/` |
+| `CMA_MAX_CONCURRENT_LAUNCHES` | 8 (default) | Concurrent sandbox launches |
+| `CMA_MAX_IDLE` | 300 (default) | Seconds a worker waits idle before it finishes the session's sandbox |
+| `ANTHROPIC_BASE_URL_OVERRIDE` | unset | Alternative Anthropic API URL; must be `https` |
+
 ## Operate
 
 | Route | Purpose |

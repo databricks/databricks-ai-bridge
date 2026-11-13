@@ -117,6 +117,7 @@ asyncio.run(DatabricksSandboxDispatcher(launcher).run())
 ```
 
 ```sh
+# After the package is released (until then, install from this folder: pip install '.[mcp]')
 pip install databricks-anthropic           # dispatcher + launcher
 pip install 'databricks-anthropic[mcp]'    # also serve Databricks MCP servers (Genie One) as custom tools
 ```

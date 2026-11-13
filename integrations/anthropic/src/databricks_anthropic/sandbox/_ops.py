@@ -3,8 +3,9 @@
 Everything here uses sandbox CRUD plus ``execute_command_sync``. Facts these rely on
 (verified against a live workspace):
 
-- ``execute_command_sync`` is direct exec (no shell, no PATH), so commands run through
-  ``/bin/bash -lc``. Variable data travels in ``envs``, never in the script text.
+- ``execute_command_sync`` is direct exec (no shell), so commands run through
+  ``/bin/bash --noprofile --norc -c`` (never a login shell: the agent can write start-up files in its
+  persistent home). Variable data travels in ``envs``, never in the script text.
 - ``start_sandbox`` is rejected while STOPPING; wait for STOPPED first.
 - Auto-stop is driven by exec API calls, not by processes running in the sandbox.
 - A process daemonized with ``setsid nohup ... &`` outlives the RPC that started it.
