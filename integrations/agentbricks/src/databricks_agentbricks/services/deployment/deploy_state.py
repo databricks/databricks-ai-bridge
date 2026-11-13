@@ -30,15 +30,15 @@ from collections import deque
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 from databricks_agentbricks.reporting import Reporter, phase_name
 
 STATE_DIR = ".agentbricks"
 RUNNING = "running"
-SUCCEEDED = "succeeded"
-FAILED = "failed"
+SUCCEEDED: Literal["succeeded"] = "succeeded"
+FAILED: Literal["failed"] = "failed"
 # The phase a deploy reports before its first provisioning step.
 STARTING_PHASE = "Starting the deploy"
 # The phase after rollout while the App's server starts and the Apps proxy still returns 502.
