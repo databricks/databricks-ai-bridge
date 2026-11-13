@@ -30,6 +30,7 @@ from typing import Any, Optional
 from agents import SQLiteSession, TResponseInputItem
 from agents.memory import SessionABC
 
+from databricks_agentkit._actors import check_actor
 from databricks_agentkit.runtime.session_store_client import Session as _StoreSession
 from databricks_agentkit.runtime.session_store_client import SessionStoreClient
 
@@ -50,13 +51,15 @@ def session_store(
     is configured. The store name resolves ``store`` arg → ``AGENT_SESSION_STORE`` env → the
     ``[session_store]`` binding in agent.toml (`agentbricks sessions bind`) → none. ``actor`` partitions the
     durable store — the caller supplies it (typically the signed-in user), so each user's transcripts
-    stay separate; it defaults to ``session_id`` and is ignored by the in-memory store.
+    stay separate; it defaults to ``session_id`` and is ignored by the in-memory store. An actor ending
+    with ``:langgraph`` is refused: the LangGraph memory store keeps each user's entries under that id.
     """
     from databricks_agentkit.runtime.tool_manifest import resolve_session_store
 
+    actor_id = check_actor(actor or session_id)
     store = resolve_session_store(store)
     if store:
-        return DatabricksSessionStore(session_id, store, actor_id=actor or session_id)
+        return DatabricksSessionStore(session_id, store, actor_id=actor_id)
     cached = _local_sessions.get(session_id)
     if cached is None:
         cached = SQLiteSession(session_id)  # ":memory:" — process-local, non-durable

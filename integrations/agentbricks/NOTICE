@@ -6,6 +6,10 @@ This Software is the property of Databricks, Inc. ("Databricks") and no license,
 
 This Software contains code from the following open source projects, licensed under the MIT license (https://opensource.org/licenses/MIT).
 
+Package: langgraph
+Project URL: https://github.com/langchain-ai/langgraph
+Copyright: 2024 LangChain, Inc.
+
 Package: PyYAML
 Project URL: https://github.com/yaml/pyyaml
 Copyright: 2017-2021 Ingy döt Net, 2006-2016 Kirill Simonov
