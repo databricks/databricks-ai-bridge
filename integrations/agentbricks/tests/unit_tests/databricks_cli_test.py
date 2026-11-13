@@ -143,6 +143,23 @@ def test_databricks_with_ready_probe_uses_the_readiness_runner(monkeypatch):
     assert seen["probe"] is probe and seen["on_ready"] is on_ready
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("retained", ["Missing dependency\n", "[REDACTED]"])
+def test_readiness_failure_detail_is_forwarded_without_repeating_output(
+    monkeypatch, stream, retained
+):
+    def failed_child(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 17, **{stream: retained})
+
+    monkeypatch.setattr(dc, "_run_until_ready", failed_child)
+    with pytest.raises(dc.AgentCliError) as raised:
+        dc._databricks(["apps", "run-local"], None, ready_probe=lambda: False)
+
+    assert raised.value.failure_detail == retained.strip()
+    assert raised.value.subprocess_exit_code == 17
+    assert raised.value.hint is None
+
+
 @pytest.mark.parametrize(
     "failure_output, retained",
     [

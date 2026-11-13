@@ -48,9 +48,8 @@ def _databricks(
     """Run one ``databricks`` command.
 
     ``capture`` collects stdout/stderr instead of showing them. ``tee`` relays the command's merged
-    output live to *our* stderr, line by line, and also returns its tail as ``stdout``: the user
-    still sees a long ``sync``/``apps deploy`` as it runs, stdout stays clean for ``-o json``, and the
-    caller can still match the failure text (for example, a busy App).
+    output live to *our* stderr, line by line, so users see a long ``sync``/``apps deploy`` as it
+    runs while stdout stays clean for ``-o json``.
 
     ``ready_probe`` is for a long-running server command such as ``apps run-local``: its output
     streams as usual, the probe is polled while the command runs, and ``on_ready`` is called once
@@ -89,7 +88,10 @@ def _databricks(
             action or "A Databricks CLI command failed.",
             hint=detail,
             subprocess_exit_code=result.returncode,
-            failure_detail=(result.stderr or result.stdout or "").strip() or None,
+            # A legacy tee tail may have discarded the context needed for credential scrubbing.
+            failure_detail=(result.stderr or result.stdout or "").strip() or None
+            if not tee
+            else None,
         )
     return result
 
