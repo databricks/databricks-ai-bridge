@@ -2,6 +2,7 @@
 
 import io
 import json
+import shutil
 import subprocess
 from dataclasses import replace
 from types import SimpleNamespace
@@ -157,15 +158,15 @@ def test_retry_rejects_changed_publication_metadata(deployment):
     d.deployer.assert_not_called()
 
 
-@pytest.mark.parametrize("problem", ["user-auth", "missing-lock", "missing-entrypoint", "name"])
+@pytest.mark.parametrize("problem", ["user-auth", "missing-project", "missing-entrypoint", "name"])
 def test_invalid_input_fails_before_publication(deployment, problem):
     d = deployment
     if problem == "user-auth":
         (d.source / "agent.toml").write_text(
             '[agent]\ndeployment_name="demo"\n[[tools]]\nauth="user"'
         )
-    elif problem == "missing-lock":
-        (d.source / "uv.lock").unlink()
+    elif problem == "missing-project":
+        (d.source / "pyproject.toml").unlink()
     elif problem == "missing-entrypoint":
         (d.source / "runtime/sandbox_entry.py").unlink()
     else:
@@ -174,6 +175,88 @@ def test_invalid_input_fails_before_publication(deployment, problem):
         d.service.deploy(d.request)
     assert not d.storage
     assert not d.workspace.postgres.mock_calls
+    d.deployer.assert_not_called()
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="requires uv")
+def test_missing_lock_is_generated_and_published_without_local_install(deployment, monkeypatch):
+    d = deployment
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    (d.source / "uv.lock").unlink()
+    original_project = (d.source / "pyproject.toml").read_bytes()
+    d.service.deploy(d.request)
+    manifest = json.loads(d.storage[d.deployer.call_args.args[1]])
+    generated = (d.source / "uv.lock").read_bytes()
+    assert b'name = "test"' in generated
+    assert d.storage[manifest["source_path"] + "/uv.lock"] == generated
+    assert (d.source / "pyproject.toml").read_bytes() == original_project
+    assert not (d.source / ".venv").exists()
+
+
+def test_existing_lock_is_preserved_even_without_uv(deployment, monkeypatch):
+    d = deployment
+    monkeypatch.setattr(
+        "databricks_agentbricks.projects.sandbox_dependencies.shutil.which", lambda _: None
+    )
+    original = (d.source / "uv.lock").read_bytes()
+    d.service.deploy(d.request)
+    manifest = json.loads(d.storage[d.deployer.call_args.args[1]])
+    assert (d.source / "uv.lock").read_bytes() == original
+    assert d.storage[manifest["source_path"] + "/uv.lock"] == original
+
+
+@pytest.mark.parametrize("failure", ["missing-uv", "resolution", "timeout"])
+def test_lock_generation_failure_does_not_publish(deployment, monkeypatch, failure):
+    d = deployment
+    (d.source / "uv.lock").unlink()
+    module = "databricks_agentbricks.projects.sandbox_dependencies"
+    monkeypatch.setattr(
+        f"{module}.shutil.which", lambda _: None if failure == "missing-uv" else "uv"
+    )
+    error = (
+        subprocess.TimeoutExpired("uv", 300)
+        if failure == "timeout"
+        else subprocess.CalledProcessError(1, "uv", stderr="No solution found")
+    )
+    monkeypatch.setattr(f"{module}.subprocess.run", MagicMock(side_effect=error))
+    with pytest.raises(AgentCliError, match="uv.lock"):
+        d.service.deploy(d.request)
+    assert not d.storage
+    d.deployer.assert_not_called()
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="requires uv")
+def test_cli_lock_generation_keeps_json_stdout_clean(deployment, monkeypatch):
+    d = deployment
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    (d.source / "uv.lock").unlink()
+    monkeypatch.setattr("databricks_agentkit._api_client._workspace_client", lambda p: d.workspace)
+    monkeypatch.setattr("databricks_agentbricks.cli.prepared_deploy.deploy_prepared", d.deployer)
+    result = CliRunner().invoke(
+        agentbricks,
+        ["--output", "json", "deploy", "demo", "--sandbox", "--source", str(d.source)],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == d.outcome
+    assert "Generating uv.lock" in result.stderr
+    assert "Created uv.lock" in result.stderr
+
+
+def test_git_revision_without_lock_does_not_use_working_copy_lock(deployment):
+    d = deployment
+    (d.source / "uv.lock").unlink()
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(d.source), *args], check=True, capture_output=True)
+
+    git("init")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "no lock")
+    (d.source / "uv.lock").write_text("uncommitted lock")
+    with pytest.raises(AgentCliError, match="Git revision must include uv.lock"):
+        d.service.deploy(replace(d.request, git_revision="HEAD"))
+    assert not d.storage
+    assert (d.source / "uv.lock").read_text() == "uncommitted lock"
     d.deployer.assert_not_called()
 
 

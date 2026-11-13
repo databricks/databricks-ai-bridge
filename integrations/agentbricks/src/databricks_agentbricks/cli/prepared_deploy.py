@@ -206,7 +206,7 @@ def deploy_prepared(
             _allow_install=False,
         )
     features = source_features(bundle_contents(bundle.data).get("agent.toml"))
-    click.echo(f"Deploying orchestrator {name} for environment {manifest['name']}", err=True)
+    click.echo(f"Deploying agent {name} to agentbricks runtime", err=True)
     resources = list(app.resources or [] if app else [])
     if not managed:
         resource = apps.AppResource(

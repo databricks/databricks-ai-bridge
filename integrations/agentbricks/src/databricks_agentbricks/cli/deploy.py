@@ -228,8 +228,8 @@ def _ignore_hangup() -> None:
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local project directory (app.yaml for App execution; pyproject.toml and uv.lock "
-    "for --sandbox). Defaults to the current directory.",
+    help="Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, "
+    "which generates uv.lock if missing). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",
@@ -330,6 +330,8 @@ def deploy(
 
     With --sandbox, deploy uploads a frozen source revision and publishes the generic App
     orchestrator in one command. No environment create step or agent image build is required.
+    If uv.lock is missing, deploy runs uv lock with Python 3.12 before uploading source;
+    existing lockfiles are preserved. --git-revision requires a committed lockfile.
     Deploy provisions an App-owned Runtime Store automatically; the workspace must
     support managed Runtime Store provisioning.
     The App installs one sandbox per session during explicit session preparation or first invocation.
@@ -365,7 +367,7 @@ def deploy(
 
         started = time.monotonic()
         result = SandboxDeployService(
-            _workspace_client(obj.profile), partial(deploy_prepared, obj)
+            _workspace_client(obj.profile), partial(deploy_prepared, obj), reporter=ClickReporter()
         ).deploy(
             SandboxDeployRequest(
                 name=name,

@@ -1683,6 +1683,13 @@ sandbox during explicit session preparation (UI New Chat) or on first invocation
 Text output ends with the agent URL, a Next steps panel, and total deployment duration.
 Use `agentbricks --output json deploy ...` to emit the publication/deployment metadata as
 one JSON document on stdout; progress remains on stderr.
+For local source, a missing `uv.lock` is generated with `uv lock --python 3.12` before
+upload. This resolves dependencies without installing a local agent environment. Existing
+lockfiles are preserved; `--git-revision` requires a lockfile in the selected commit.
+Configure private package indexes in the project's `pyproject.toml` or `uv.toml` so the
+sandbox can use the same configuration with `uv sync --locked`.
+Progress identifies the agent: `Deploying agent <app-name> to agentbricks runtime`.
+
 `--sandbox-idle-timeout SECONDS` defaults to 900 (range 60–86400), and applies to new
 sandboxes and existing ones on their next prepare/invoke after redeploy. It does not
 change the source revision or impose a worker idle timer. `--git-revision` selects committed source. NAME falls back to
@@ -1754,7 +1761,7 @@ _Options_
 | `--sandbox-warm-pool-size <N>` | integer, 0–10 | 0 (disabled) | no | Maximum unassigned prepared sandboxes; requires `--sandbox`. |
 | `--git-revision <REV>` | string | working tree | no | Local Git commit, tag or branch; requires `--sandbox`. |
 | `--entrypoint <CALLABLE>` | string | template adapter | no | Installed module:function; requires `--sandbox`. |
-| `--source <SOURCE>` | path | `.` | no | Local project; sandbox mode requires pyproject.toml and uv.lock. |
+| `--source <SOURCE>` | path | `.` | no | Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, which generates uv.lock if missing). Defaults to the current directory. |
 | `--environment <ENVIRONMENT>` | string | - | no | Published environment name or manifest path; deploy its orchestrator, install on first invocation. |
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | per-user path | no | Workspace destination; sandbox mode uses it as the root for revisions and App files. |

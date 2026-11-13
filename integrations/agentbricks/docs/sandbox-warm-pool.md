@@ -17,8 +17,11 @@ agentbricks -p DEFAULT deploy my-agent --sandbox --source /path/to/agent \
   --sandbox-idle-timeout 1800 --sandbox-warm-pool-size 2
 ```
 
-Use the existing OpenAI or LangGraph project containing `pyproject.toml`, `uv.lock`,
-`agent.toml` and its sandbox adapter. This prototype requires an editable CLI install
+Use an OpenAI or LangGraph project containing `pyproject.toml`, `agent.toml` and its
+sandbox adapter. Deploy generates `uv.lock` if missing and preserves existing locks.
+With `--git-revision`, commit the lockfile first. Configure custom package indexes in
+the project so resolution and sandbox installation use the same index.
+This prototype requires an editable CLI install
 so deploy can build the orchestrator wheel. Source installation inside each spare uses
 that project's pinned dependencies, including its SDK version; the App ships the worker
 control scripts. Changing an adapter inside the installed agent requires updating the

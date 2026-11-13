@@ -20,6 +20,8 @@ from databricks_agentbricks.environment_source import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.prepared_environment import read_manifest
+from databricks_agentbricks.projects.sandbox_dependencies import ensure_lockfile
+from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment.names import (
     DeploymentName,
     _prefixed_name,
@@ -45,9 +47,10 @@ class SandboxDeployRequest:
 
 
 class SandboxDeployService:
-    def __init__(self, workspace, deployer: Callable):
+    def __init__(self, workspace, deployer: Callable, *, reporter: Reporter | None = None):
         self.workspace = workspace
         self.deployer = deployer
+        self.reporter = reporter
 
     def deploy(self, request: SandboxDeployRequest):
         """Freeze one source revision, then deploy only the generic orchestrator."""
@@ -61,7 +64,7 @@ class SandboxDeployService:
                 raise AgentCliError("--git-revision must name a local commit, tag, or branch.")
             files, git_source = git_project_files(request.source, request.git_revision)
         else:
-            files = project_files(request.source)
+            files = project_files(request.source, require_lock=False)
         project = tomli.loads(files.get("agent.toml", b"").decode())
         name = request.name or project.get("agent", {}).get("deployment_name")
         if not name:
@@ -80,6 +83,9 @@ class SandboxDeployService:
         if not entrypoint:
             raise AgentCliError("Provide --entrypoint module:function or use a sandbox template.")
         entrypoint = entrypoint_name(entrypoint)
+        if request.git_revision is None and "uv.lock" not in files:
+            ensure_lockfile(request.source, note=self.reporter.note if self.reporter else None)
+            files = project_files(request.source)
         workspace = self.workspace
         root = (
             workspace_path(request.workspace_path)

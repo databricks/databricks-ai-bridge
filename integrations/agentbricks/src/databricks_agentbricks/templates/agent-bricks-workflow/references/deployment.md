@@ -66,7 +66,12 @@ the agreed checks pass, or report the concrete failure and remaining limitation.
 
 Use `agentbricks deploy APP --sandbox --source PROJECT` to upload
 source and deploy the generic App orchestrator in one command. No `environment create`
-step is required. Optional `--git-revision` selects committed source. Deploy provisions the
+step is required. Deploy generates a missing `uv.lock` using Python 3.12 before source
+upload, without installing the agent locally; existing locks are preserved. Optional
+`--git-revision` selects committed source and requires the lockfile in that commit.
+Record custom package indexes in the project's `pyproject.toml` or `uv.toml` so
+sandbox installation can use the same configuration with `uv sync --locked`.
+Deploy provisions the
 App-owned managed Runtime Store; only the App connects to SQL and initializes runtime tables.
 The workspace must support managed Runtime Store provisioning; there is no manual Lakebase
 configuration path. Historical state is retained without migration.

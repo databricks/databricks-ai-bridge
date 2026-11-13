@@ -128,7 +128,7 @@ def workspace_path(value: str) -> str:
     return value
 
 
-def project_files(source: Path) -> dict[str, bytes]:
+def project_files(source: Path, *, require_lock: bool = True) -> dict[str, bytes]:
     """Read a source snapshot before making any remote changes."""
     files: dict[str, bytes] = {}
     size = 0
@@ -148,7 +148,7 @@ def project_files(source: Path) -> dict[str, bytes]:
             if size > MAX_BYTES or len(files) >= MAX_FILES:
                 raise AgentCliError("Environment source is limited to 20 MiB and 1000 files.")
             files[path.relative_to(source).as_posix()] = contents
-    for required in ("pyproject.toml", "uv.lock"):
+    for required in ("pyproject.toml", "uv.lock") if require_lock else ("pyproject.toml",):
         if required not in files:
             raise AgentCliError(f"Agent source must include {required}.")
     return files

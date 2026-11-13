@@ -1,6 +1,6 @@
 # Run the sandbox prototype demo
 
-Use the **sandbox runtime PR alone**; the import/MLflow experiment is optional.
+Use the **sandbox warm-pool prototype branch** below; the import/MLflow experiment is optional.
 Prerequisites: Git, `uv`, the Databricks CLI, and a workspace with Apps, sandbox
 preview and managed Runtime Store APIs enabled. Model/tool access runs as the
 App service principal. Authentication and provisioning use your selected profile.
@@ -10,7 +10,7 @@ App service principal. Authentication and provisioning use your selected profile
 Use a fresh directory so this does not change an existing checkout:
 
 ```sh
-git clone --branch codex/agentbricks-sandbox-runtime-prototype \
+git clone --branch codex/agentbricks-sandbox-warm-pool \
   https://github.com/databricks/databricks-ai-bridge.git agentbricks-sandbox-demo
 cd agentbricks-sandbox-demo
 agentbricks_repo="$PWD"
@@ -61,6 +61,15 @@ the sandbox disk. Existing accessible Session Store bindings can be used instead
 
 ## 3. Deploy and invoke
 
+Deploy creates a missing `uv.lock` with Python 3.12 before source upload; existing
+locks are preserved. This resolves dependencies without installing them locally.
+The `uv add` step above also creates the lock as part of pinning the prototype SDK;
+deploy does not automatically replace your SDK dependency with an unreleased wheel.
+For `--git-revision`, commit the lockfile first. Private indexes belong in the
+project's `pyproject.toml` or `uv.toml`, which are copied into the sandbox. For the
+internal Databricks mirror, add `--default-index https://pypi-proxy.cloud.databricks.com/simple`
+to the `uv add` command above; that records the index in the project.
+
 Choose an unused deployment name if `sb-demo` already belongs to someone else:
 
 ```sh
@@ -75,6 +84,8 @@ The spinner stays visible until ready. Send another message to reuse the worker;
 create another chat to see a separate sandbox. The Sandbox panel shows phase
 timings, source link, sandbox ID and Stop/Resume controls. The model selector can
 switch to another available workspace model if the default is rate-limited.
+Deploy progress reads `Deploying agent <app-name> to agentbricks runtime`;
+there is no separate environment resource to create in this journey.
 
 For local source development before deploying, `uv sync --locked --python 3.12`
 installs the agent locally and `agentbricks -p DEFAULT dev` starts its ordinary
