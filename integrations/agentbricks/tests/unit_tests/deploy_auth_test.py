@@ -52,6 +52,8 @@ from databricks_agentbricks.services.deployment.provisioners import (
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _project(root, *, auth="user", legacy=False):
     project = AgentProject.create(root, framework="langgraph", server="agentbricks")

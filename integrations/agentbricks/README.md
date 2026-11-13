@@ -121,7 +121,8 @@ credentials.
 
 If Databricks SDK default authentication is already configured, you can skip `agentbricks login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
+`agentbricks --profile <profile> tools list`. Use `--output json` (before or after the command) for
+scripting.
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
@@ -168,6 +169,25 @@ thread, returning sooner if the worker finishes. This is not a delivery guarante
 uploads can be lost when the process exits after the allowance expires. Missing credentials or a
 failed upload never change the command result.
 
+Deploy and `deployments wait` telemetry includes a random invocation UUID, whether a gated
+agent-details link was printed, the observed deployment state, and whether the process is an
+internal background child. Details links carry the invocation UUID so browser arrivals can be
+joined to the command that printed them. The UUID contains no agent name or authentication data.
+Rollout outcomes are recorded independently of link availability, including failed rollouts;
+preparation failures leave the deployment outcome unspecified.
+`AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
+`deployments get` and `deployments list` also attach a per-command UUID to details links.
+All rows from one list share one UUID and one command event; their deployment outcome stays
+unspecified because these commands only read state. List links count as emitted only when JSON
+output or terminal hyperlink rendering preserves their targets. Plain redirected output and
+terminal modes that strip hyperlink targets keep `details_link_emitted=false`; use `--output json`
+to capture the URLs. Group arrivals by the joined event's
+`command_path` to distinguish deploy, wait, get, and list. Count distinct invocation IDs, rather
+than list rows or repeated page loads, for command conversion percentages.
+A wait command has its own invocation ID; it is not another deploy. Exclude background children
+from user-invoked command counts. Link arrivals measure browser opens, including copied links,
+not terminal mouse clicks or proof that the deployer and viewer are the same person.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
@@ -202,6 +222,18 @@ it yourself, or `agentbricks deploy <name>` to change it later.
 The app's compute starts first and boots while the other resources are provisioned. If a first
 deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
 it with `agentbricks deployments delete agent-bricks-my-agent`.
+
+When the workspace has both the Agent Memory Sessions beta and the new Agents UI enabled,
+deploy output also includes an **Agent details** link to the workspace management page. This
+applies to first deploys, redeploys, `--no-wait`, and `deployments wait`.
+`deployments get` shows the same link alongside the app URL; `deployments list` links agent
+names to their details pages and keeps a separate **Open app** link. JSON output adds
+`details_url` when available and retains `url` for the deployed agent. The optional flag lookup
+waits at most two seconds per command, including lists; unavailable or disabled flags omit the
+link without affecting the command.
+When following a local deploy record, `deployments wait` also requires its recorded workspace
+host and ID to match the selected profile. Older records or records without a workspace ID omit
+the management link; the recorded deployment status and invocation URL are still available.
 
 ### Deploying from a coding agent
 
@@ -690,8 +722,8 @@ agentbricks memory stores permissions revoke memory-stores/<id> \
 
 Session stores accept their configured name or `session-stores/<name>`. Memory stores accept an ID
 or `memory-stores/<id>`; permission Get also accepts the display-name lookup supported by store Get
-and rejects ambiguous matches. The global `--profile` and `--output json` options go before
-`sessions` or `memory`. List follows the existing CLI pagination convention: one JSON/piped page
+and rejects ambiguous matches. The global `--profile` option goes before `sessions` or `memory`;
+`--output json` goes before or after the command. List follows the existing CLI pagination convention: one JSON/piped page
 with `next_page_token`, interactive text pages, or every page with `--all`.
 
 Get always returns the authenticated caller's effective permission, including
@@ -1103,7 +1135,7 @@ requests. By default, each App user's `X-Routing-Key` matches its generated user
 
 The final summary includes counts, throughput including drain, successful-only and all-completed
 latency percentiles, answer-text TTFT, token usage, coverage, incomplete attempts, and generator CPU
-warnings. With `--output json` before `endpoint`, stdout contains one Agent Bricks summary object;
+warnings. With `--output json`, stdout contains one Agent Bricks summary object;
 progress stays on stderr. This is the same object saved as `summary.json`.
 Locust's rounded histogram buckets are used for percentiles; all-completed timings include failures.
 These bounded tests measure the selected workload and do not establish sustainable capacity or answer quality.
@@ -1489,9 +1521,8 @@ agentbricks tools remove genie_agent
 to `user`; choose `--auth app` deliberately for App service-principal execution. Existing manifests
 without `auth` preserve App/default identity. Both add commands and `remove` accept `--source PATH`
 to select a project instead of the current directory. Discovery needs no project; read that
-project's `agent.toml` to inspect configured bindings. For scripted output, put the global
-`-o json` option before `tools`, as in
-`agentbricks -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+project's `agent.toml` to inspect configured bindings. For scripted output, add `-o json`, as in
+`agentbricks tools add genie-one --source ./my-agent -o json`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml
