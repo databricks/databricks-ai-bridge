@@ -91,6 +91,8 @@ show_missing = true
 
 [tool.ty.environment]
 root = ["./src", "./tests"]
+# Match the Python 3.12 dependency environment used by .github/workflows/ty.yml.
+python-version = "3.12"
 
 [tool.ty.src]
 include = ["./src", "./tests"]
