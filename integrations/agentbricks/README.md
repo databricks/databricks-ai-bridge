@@ -1592,6 +1592,7 @@ observations do not validate model or tool behavior.
 Command outcomes can be interpreted from the existing command path, exit code, error category,
 and options. Pending waits (`deployments wait` exit 75) and background submissions
 (`deploy --no-wait`) should not be counted as deployment failures. Deployment operation UUIDs
-stay in local state and the background worker; they are not uploaded.
+stay in local state and the background worker; they are not uploaded. The separate uploaded
+`invocation_id` identifies one command and joins details-link arrivals to it.
 See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
 failure-rate denominators and coverage limits.
