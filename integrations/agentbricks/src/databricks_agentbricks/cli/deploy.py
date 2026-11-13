@@ -371,12 +371,16 @@ def deployments_list(obj) -> None:
     items = build_deploy_service(obj).list_deployments()
     names = [item["name"] for item in items if item.get("name")]
     details_urls = AgentDetailsClient(obj.api_client_provider).get_urls(names)
+    console = render.console()
+    # Rich omits hyperlink targets without ANSI styles or with legacy Windows rendering.
+    if obj.output == "json" or (console.color_system is not None and not console.legacy_windows):
+        details_urls = {
+            name: telemetry.deployment_details_url(url) or url for name, url in details_urls.items()
+        }
     present_deployments_list(
         items,
         output=obj.output,
-        details_urls={
-            name: telemetry.deployment_details_url(url) or url for name, url in details_urls.items()
-        },
+        details_urls=details_urls,
     )
 
 

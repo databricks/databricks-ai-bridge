@@ -160,7 +160,10 @@ preparation failures leave the deployment outcome unspecified.
 `AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
 `deployments get` and `deployments list` also attach a per-command UUID to details links.
 All rows from one list share one UUID and one command event; their deployment outcome stays
-unspecified because these commands only read state. Group arrivals by the joined event's
+unspecified because these commands only read state. List links count as emitted only when JSON
+output or terminal hyperlink rendering preserves their targets. Plain redirected output and
+terminal modes that strip hyperlink targets keep `details_link_emitted=false`; use `--output json`
+to capture the URLs. Group arrivals by the joined event's
 `command_path` to distinguish deploy, wait, get, and list. Count distinct invocation IDs, rather
 than list rows or repeated page loads, for command conversion percentages.
 A wait command has its own invocation ID; it is not another deploy. Exclude background children

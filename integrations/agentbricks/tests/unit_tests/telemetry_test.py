@@ -16,11 +16,13 @@ import pytest
 from click.core import ParameterSource
 from click.testing import CliRunner
 from deploy_test import _DeployApi, _DeployRunner
+from rich.console import Console
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.group import AgentBricksCommand
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services.deployment import deploy_state
@@ -990,8 +992,34 @@ def test_outcome_setter_failure_preserves_command_exception(monkeypatch):
 
 @pytest.mark.parametrize("command", ["get", "list"])
 @pytest.mark.parametrize("enabled,opt_out", [(True, False), (False, False), (True, True)])
-def test_read_command_links_join_one_command_event(monkeypatch, command, enabled, opt_out):
+@pytest.mark.parametrize(
+    "output,console_options,list_link_visible",
+    [
+        pytest.param("json", {"force_terminal": False}, True, id="json"),
+        pytest.param("text", {"force_terminal": False}, False, id="redirected-text"),
+        pytest.param("text", {"force_terminal": True}, True, id="terminal"),
+        pytest.param(
+            "text", {"force_terminal": True, "color_system": None}, False, id="plain-terminal"
+        ),
+        pytest.param(
+            "text", {"force_terminal": True, "legacy_windows": True}, False, id="legacy-windows"
+        ),
+        pytest.param("text", {"force_terminal": True, "no_color": True}, True, id="no-color"),
+        pytest.param(
+            "text",
+            {"force_terminal": False, "color_system": "standard"},
+            True,
+            id="redirected-ansi",
+        ),
+    ],
+)
+def test_read_command_links_join_one_command_event(
+    monkeypatch, command, enabled, opt_out, output, console_options, list_link_visible
+):
     monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(render, "_stdout", Console(width=300, **console_options))
     items = [
         {"name": "agent-bricks-one", "url": "https://one.example"},
         {"name": "agent-bricks-two", "url": "https://two.example"},
@@ -1031,13 +1059,12 @@ def test_read_command_links_join_one_command_event(monkeypatch, command, enabled
             returncode=0, stdout=json.dumps(items if command == "list" else items[0]), stderr=""
         ),
     )
-    args = ["--profile", "fake", "--output", "json", "deployments", command]
+    args = ["--profile", "fake", "--output", output, "deployments", command]
     if command == "get":
         args.append("agent-bricks-one")
-    result = CliRunner().invoke(cli.agentbricks, args)
+    result = CliRunner().invoke(cli.agentbricks, args, color=True)
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    rows = payload if command == "list" else [payload]
+    link_visible = enabled and (command == "get" or list_link_visible)
     assert flag_requests == ["/api/2.0/ui-flags"]
     assert len(uploads) == (0 if opt_out else 1)
     if not opt_out:
@@ -1045,9 +1072,19 @@ def test_read_command_links_join_one_command_event(monkeypatch, command, enabled
         assert log["command_path"] == f"agentbricks deployments {command}"
         assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
         assert log["background_child"] is False
-        assert log["details_link_emitted"] is enabled
+        assert log["details_link_emitted"] is link_visible
         assert uuid.UUID(log["invocation_id"]).version == 4
         assert "agent-bricks-one" not in json.dumps(log)
+    if output != "json":
+        assert "agent-bricks-one" in result.stdout
+        assert ("/ml/agents/details/agent-bricks-one" in result.stdout) is link_visible
+        if opt_out:
+            assert "cli_invocation_id" not in result.stdout
+        else:
+            assert (log["invocation_id"] in result.stdout) is link_visible
+        return
+    payload = json.loads(result.stdout)
+    rows = payload if command == "list" else [payload]
     for row in rows:
         assert row["url"] == next(item["url"] for item in items if item["name"] == row["name"])
         if not enabled:
