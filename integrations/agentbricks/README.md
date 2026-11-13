@@ -88,6 +88,12 @@ The `databricks-agentbricks` Python distribution installs the `agentbricks` comm
 pip install databricks-agentbricks
 ```
 
+Verify that the CLI is available and inspect its commands without authenticating:
+
+```sh
+agentbricks --help
+```
+
 Install from PyPI rather than from this repository. Templates on `main` can depend on SDK changes that
 are not yet released, while generated projects install the released SDK from PyPI, so a CLI installed
 from source can scaffold projects that fail to start. To work on Agent Bricks itself, see
