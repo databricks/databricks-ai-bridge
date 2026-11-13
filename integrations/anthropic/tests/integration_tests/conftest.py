@@ -5,10 +5,8 @@ Configuration (environment variables):
   RUN_SANDBOX_INTEGRATION_TESTS=1  enable the prerequisite check (creates one short-lived sandbox; no model calls)
   RUN_SANDBOX_E2E=1          also enable the end-to-end tests (real Claude sessions; a few cents on Haiku)
 
-  DATABRICKS_SANDBOX_AUTH    cli (default) | browser | auto
-  DATABRICKS_SANDBOX_PROFILE Databricks CLI profile (with cli)
-  DATABRICKS_SANDBOX_HOST    workspace URL (with browser)
-  DATABRICKS_OAUTH_ENV_FILE  optional dotenv with DATABRICKS_U2M_* for your own OAuth app
+  DATABRICKS_SANDBOX_PROFILE Databricks CLI profile (default: the SDK's default auth, e.g. DATABRICKS_HOST +
+                             DATABRICKS_CLIENT_ID/SECRET for a service principal)
   ANTHROPIC_ENV_FILE         dotenv with ANTHROPIC_API_KEY / _ENVIRONMENT_ID / _ENVIRONMENT_KEY
                              (default: .env.anthropic)
   SANDBOX_E2E_MODEL          agent model (default claude-haiku-5-5: test-only, cheapest current model)
@@ -27,10 +25,9 @@ from pathlib import Path
 
 import anthropic
 import pytest
-from _support import ANTHROPIC_API_URL, SessionRun, run_session_async
-
-from databricks_anthropic import auth as dbx_auth
-from databricks_anthropic.envfile import read_env_file
+from _support import ANTHROPIC_API_URL, SessionRun, read_env_file, run_session_async
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import Config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -86,18 +83,17 @@ def settings() -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def workspace_client():
-    for key, value in read_env_file(os.environ.get("DATABRICKS_OAUTH_ENV_FILE")).items():
-        if key.startswith("DATABRICKS_U2M_"):
-            os.environ.setdefault(key, value)
+def workspace_client() -> WorkspaceClient:
+    # Config first, then WorkspaceClient(config=...), so the client carries the connector's User-Agent product.
     try:
-        return dbx_auth.login(
-            auth=os.environ.get("DATABRICKS_SANDBOX_AUTH", "cli"),
-            profile=os.environ.get("DATABRICKS_SANDBOX_PROFILE"),
-            host=os.environ.get("DATABRICKS_SANDBOX_HOST"),
+        w = WorkspaceClient(config=Config(profile=os.environ.get("DATABRICKS_SANDBOX_PROFILE")))
+        w.current_user.me()
+    except Exception as e:  # noqa: BLE001 - surface the login problem as a test failure
+        pytest.fail(
+            f"Databricks login is not set up ({type(e).__name__}: {e}). Run `databricks auth login "
+            "--profile <name>` and set DATABRICKS_SANDBOX_PROFILE."
         )
-    except dbx_auth.AuthSetupError as e:
-        pytest.fail(f"Databricks login is not set up:\n{e}")
+    return w
 
 
 @pytest.fixture(scope="session")

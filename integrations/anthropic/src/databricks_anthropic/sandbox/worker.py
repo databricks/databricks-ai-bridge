@@ -4,16 +4,18 @@ The launcher uploads this file into the sandbox and starts it detached; it must 
 self-contained (stdlib + ``anthropic`` + ``databricks-sdk``, plus ``mcp``/``httpx`` when
 MCP servers are configured) because ``databricks-anthropic`` itself is not installed there.
 
-Environment (set by the launcher; no secrets):
+Environment (set by the launcher under ``env -i`` with an allowlist; no secrets):
 
   ANTHROPIC_ENVIRONMENT_ID  self-hosted environment
   ANTHROPIC_WORK_ID / ANTHROPIC_SESSION_ID              the claimed work item
-  CMA_SECRETS_FILE          0600 JSON with ANTHROPIC_ENVIRONMENT_KEY and ANTHROPIC_WORK_SECRET (the
-                            per-session secret that mounts memory stores). Read and deleted at startup,
-                            before any tool runs, so the secrets are not in this process's environment
-                            (which the agent could read via /proc/<pid>/environ). They stay in this process's
-                            memory, and tools run as the same Linux user. Never logged.
-  CMA_ANTHROPIC_BASE_URL    Anthropic API URL (own name so a login shell can't redirect it)
+  CMA_SECRETS_FILE          0600 JSON with ANTHROPIC_WORK_SECRET only: the work item's secret, reduced by
+                            the launcher to its sessions token, which acts on this one session (heartbeat,
+                            events, attached memory stores) and nothing else. Read and deleted at startup,
+                            before any tool runs, so it is not in this process's environment (which the
+                            agent could read via /proc/<pid>/environ). It stays in this process's memory, and
+                            tools run as the same Linux user. Never logged. The environment key is never
+                            given to the worker; it refuses to start if one is present.
+  CMA_ANTHROPIC_BASE_URL    Anthropic API URL (https; its own name, so a stray ANTHROPIC_BASE_URL is ignored)
   DBX_SANDBOX_NAME          this sandbox (heartbeat + self-stop)
   CMA_WORKDIR               agent working directory
   CMA_MAX_IDLE              seconds without session activity before the worker returns
@@ -41,6 +43,7 @@ finishes, so the model makes one tool call instead of one per poll.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -301,6 +304,30 @@ async def _open_mcp_tools(
     return tools
 
 
+def _sessions_token(secret: str | None) -> str | None:
+    """The sessions token inside the work secret (URL-safe base64 JSON). Never log it."""
+    if not secret:
+        return None
+    try:
+        parsed = json.loads(base64.urlsafe_b64decode(secret + "=" * (-len(secret) % 4)))
+    except (ValueError, TypeError):
+        return None
+    token = parsed.get("sessions_token") if isinstance(parsed, dict) else None
+    return token if isinstance(token, str) and token else None
+
+
+def _session_credential(secrets: dict[str, str]) -> tuple[str, str]:
+    """(work secret, sessions token); fails closed on an environment key or a missing sessions token."""
+    if "ANTHROPIC_ENVIRONMENT_KEY" in secrets or os.environ.get("ANTHROPIC_ENVIRONMENT_KEY"):
+        # The SDK would fall back to it; a sandbox must only ever hold the per-session token.
+        raise RuntimeError("an environment key reached the sandbox; refusing to start")
+    work_secret = secrets.get("ANTHROPIC_WORK_SECRET") or ""
+    token = _sessions_token(work_secret)
+    if token is None:
+        raise RuntimeError("the work secret carries no sessions token; refusing to start")
+    return work_secret, token
+
+
 def _load_secrets() -> dict[str, str]:
     """Read and delete CMA_SECRETS_FILE (written 0600 by the launcher) before any tool can run."""
     path = os.environ.pop("CMA_SECRETS_FILE", "")
@@ -320,11 +347,12 @@ async def main() -> None:
     name = os.environ["DBX_SANDBOX_NAME"]
     stop = threading.Event()
     try:
-        secrets = _load_secrets()
-        environment_key = secrets["ANTHROPIC_ENVIRONMENT_KEY"]
+        work_secret, sessions_token = _session_credential(_load_secrets())
         workdir = os.environ.get("CMA_WORKDIR", "/home/sandbox-agent/agent-workspace")
         os.makedirs(workdir, exist_ok=True)
         base_url = os.environ.get("CMA_ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        if not base_url.startswith("https://"):
+            raise RuntimeError(f"CMA_ANTHROPIC_BASE_URL must use https, not {base_url!r}")
         servers = json.loads(os.environ.get("CMA_MCP_SERVERS") or "[]")
         os.environ.update(
             UPSTREAM_ENV
@@ -343,7 +371,7 @@ async def main() -> None:
         )
         async with contextlib.AsyncExitStack() as stack:
             client = await stack.enter_async_context(
-                AsyncAnthropic(auth_token=environment_key, base_url=base_url)
+                AsyncAnthropic(auth_token=sessions_token, base_url=base_url)
             )
             mcp_tools = await _open_mcp_tools(stack, servers)
             tools = None
@@ -364,8 +392,7 @@ async def main() -> None:
                     work_id=os.environ["ANTHROPIC_WORK_ID"],
                     environment_id=os.environ["ANTHROPIC_ENVIRONMENT_ID"],
                     session_id=os.environ["ANTHROPIC_SESSION_ID"],
-                    environment_key=environment_key,
-                    work_secret=secrets.get("ANTHROPIC_WORK_SECRET") or None,
+                    work_secret=work_secret,
                 )
             )
             # Cancel (not kill) on SIGTERM so memory files upload before exit.

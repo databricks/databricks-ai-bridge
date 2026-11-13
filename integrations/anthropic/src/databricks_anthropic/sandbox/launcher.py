@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -15,7 +17,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Literal
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import AlreadyExists, NotFound
 
 from databricks_anthropic import _useragent
 from databricks_anthropic.sandbox import _ops
@@ -29,6 +31,7 @@ __all__ = [
     "LaunchResult",
     "Lifecycle",
     "SandboxMcpServer",
+    "SandboxOwnershipError",
     "sandbox_id_for_session",
 ]
 
@@ -42,9 +45,12 @@ VENV_PYTHON = f"{VENV_DIR}/bin/python"
 WORKER_PATH = f"{TOOLS_DIR}/worker.py"
 WORKER_LOG = f"{TOOLS_DIR}/worker.log"
 WORKER_PID = f"{TOOLS_DIR}/worker.pid"
-# Anthropic secrets for the next worker: written 0600, read and deleted by the worker at startup, so they
-# are not in its process environment, which the agent could read via /proc/<pid>/environ. They do stay in the
-# worker's memory and the agent runs as the same Linux user, so treat the sandbox as able to reach the key.
+# The work item the running worker serves (written by the start command): a re-delivered item whose worker
+# is still alive is left alone instead of being replaced (idempotent launch).
+WORKER_WORK_ID = f"{TOOLS_DIR}/worker.work_id"
+# The per-session secret for the next worker: written 0600, read and deleted by the worker at startup, so it
+# is not in its process environment, which the agent could read via /proc/<pid>/environ. It carries only the
+# work item's sessions token (scoped to this one session); the environment key never enters a sandbox.
 WORKER_SECRETS = f"{TOOLS_DIR}/worker.secrets"
 # Present while a previous worker is being replaced: that worker then skips its delete/stop step.
 WORKER_REPLACING = f"{TOOLS_DIR}/worker.replacing"
@@ -54,8 +60,9 @@ DEFAULT_WORKDIR = f"{HOME_DIR}/agent-workspace"
 # overlay (wiped on stop) owned by root, so the launcher recreates it via the image's passwordless sudo.
 MEMORY_DIR = "/mnt/memory"
 
-# Keep in step with pyproject.toml (unit-tested). The worker imports anthropic.lib.*, hence the cap.
-WORKER_PACKAGES = ("anthropic>=2.3,<3", "databricks-sdk[sandbox]>=0.157.0")
+# Exact pins for the in-sandbox venv (supply chain: a fresh resolve never pulls an unreviewed release). Each
+# pin must satisfy the package's own range in pyproject.toml (unit-tested). The worker imports anthropic.lib.*.
+WORKER_PACKAGES = ("anthropic==2.3.0", "databricks-sdk[sandbox]==0.159.0")
 
 # Tags written on every sandbox at creation; cleanup uses them to find the owning session.
 TAG_MANAGED_BY = "managed_by"
@@ -66,20 +73,46 @@ MANAGED_BY = "databricks-anthropic"
 
 Lifecycle = Literal["ephemeral", "resumable"]
 # mcp brings the HTTP client its transport is built on (httpx for 1.x, httpx2 for 2.x).
-MCP_PACKAGES = ("mcp>=1.24",)
+MCP_PACKAGES = ("mcp==2.3.0",)
 
 
 _PREFIX_RE = re.compile(r"^[a-z][a-z0-9-]{0,28}-$")
 
 
-def sandbox_id_for_session(session_id: str, *, prefix: str = "cma-") -> str:
+def sandbox_id_for_session(
+    session_id: str, *, prefix: str = "cma-", key: str | bytes | None = None
+) -> str:
     """Deterministic sandbox id for a Claude session.
 
     Sandbox ids must match AIP-122 (``^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$``, at most 63
     characters), while session ids are mixed case with underscores, so lower-casing could
     collide. A SHA-256 prefix is stable across resumes and collision-resistant.
+
+    With ``key`` (a deployment secret) the id is an HMAC instead, so nobody without the key can
+    predict a session's sandbox name and create it first (name squatting).
     """
-    return prefix + hashlib.sha256(session_id.encode()).hexdigest()[:24]
+    if key:
+        raw = key.encode() if isinstance(key, str) else key
+        digest = hmac.new(raw, session_id.encode(), hashlib.sha256).hexdigest()
+    else:
+        digest = hashlib.sha256(session_id.encode()).hexdigest()
+    return prefix + digest[:24]
+
+
+class SandboxOwnershipError(RuntimeError):
+    """An existing sandbox with the session's name is not one this launcher created for that session."""
+
+
+def sessions_token_from_secret(secret: str | None) -> str | None:
+    """The sessions token inside a work item's secret (URL-safe base64 JSON), or None. Never log it."""
+    if not secret:
+        return None
+    try:
+        parsed = json.loads(base64.urlsafe_b64decode(secret + "=" * (-len(secret) % 4)))
+    except (ValueError, TypeError):
+        return None
+    token = parsed.get("sessions_token") if isinstance(parsed, dict) else None
+    return token if isinstance(token, str) and token else None
 
 
 @dataclass(frozen=True)
@@ -107,6 +140,8 @@ class LaunchResult:
     pid: int
     created: bool
     seconds: float
+    # True when a worker for this same work item was already running and was left in place.
+    reused: bool = False
 
 
 @dataclass(kw_only=True)
@@ -117,9 +152,13 @@ class DatabricksSandboxLauncher:
     ``workspace_client``, so the agent's tools (and any MCP servers) act as that user or
     service principal.
 
-    Only the environment key and the work item's per-session secret enter the sandbox. They are
-    written to a 0600 file that the worker reads and deletes before it runs any tool, so they are
-    not in its process environment; the Anthropic API key never enters the sandbox.
+    Only the work item's sessions token enters the sandbox (it can act on that one session and its
+    attached memory stores, nothing else). It is written to a 0600 file that the worker reads and deletes
+    before it runs any tool, so it is not in its process environment. The environment key (which can claim
+    any session in the environment) and the Anthropic API key never enter a sandbox.
+
+    ``sandbox_id_key`` (recommended for shared deployments) makes sandbox names unpredictable; an existing
+    sandbox is only used if its tags show it was created for this session and environment.
 
     Lifecycle (``lifecycle``):
 
@@ -152,6 +191,8 @@ class DatabricksSandboxLauncher:
     index_url: str | None = None
     extra_packages: tuple[str, ...] = ()
     sandbox_id_prefix: str = "cma-"
+    # Secret for HMAC sandbox ids (see sandbox_id_for_session). Changing it orphans existing sandboxes.
+    sandbox_id_key: str | bytes | None = field(default=None, repr=False)
     confirm_s: float = 5
 
     def __post_init__(self) -> None:
@@ -165,15 +206,23 @@ class DatabricksSandboxLauncher:
             raise ValueError(
                 f"export_dir must be a relative path inside workdir, not {self.export_dir!r}"
             )
+        # The worker sends the session's token to this URL: never over plain HTTP.
+        if not self.anthropic_base_url.startswith("https://"):
+            raise ValueError(f"anthropic_base_url must use https, not {self.anthropic_base_url!r}")
         if self.lifecycle not in ("ephemeral", "resumable"):
             raise ValueError(
                 f"lifecycle must be 'ephemeral' or 'resumable', not {self.lifecycle!r}"
             )
-        _useragent.apply_process_env()
+        _useragent.apply()
         _useragent.tag(self.workspace_client)
 
+    def sandbox_id_for(self, session_id: str) -> str:
+        return sandbox_id_for_session(
+            session_id, prefix=self.sandbox_id_prefix, key=self.sandbox_id_key
+        )
+
     def sandbox_name_for(self, session_id: str) -> str:
-        return _ops.sandbox_name(sandbox_id_for_session(session_id, prefix=self.sandbox_id_prefix))
+        return _ops.sandbox_name(self.sandbox_id_for(session_id))
 
     def sandbox_tags(self, session_id: str) -> dict[str, str]:
         return {
@@ -183,24 +232,54 @@ class DatabricksSandboxLauncher:
             TAG_LIFECYCLE: self.lifecycle,
         }
 
+    def verify_ownership(self, name: str, session_id: str) -> None:
+        """Raise SandboxOwnershipError unless ``name`` carries this session's and environment's tags.
+
+        The sandbox API lists only sandboxes the caller can see, but exposes no creator field, so the
+        tags (written at creation) plus an unpredictable name (``sandbox_id_key``) are the check.
+        """
+        sandbox = self.workspace_client.sandbox.get_sandbox(name)
+        tags = dict((sandbox.metadata.custom_tags or {}) if sandbox.metadata else {})
+        expected = {
+            TAG_MANAGED_BY: MANAGED_BY,
+            TAG_SESSION: session_id,
+            TAG_ENVIRONMENT: self.environment_id,
+        }
+        mismatched = sorted(k for k, v in expected.items() if tags.get(k) != v)
+        if mismatched:
+            raise SandboxOwnershipError(
+                f"{name} exists but was not created for session {session_id} in environment "
+                f"{self.environment_id} (tags differ: {', '.join(mismatched)}); refusing to use it"
+            )
+
     def ensure_sandbox(self, session_id: str) -> tuple[str, bool]:
-        """Start the session's sandbox if it exists, else create it (tagged); return (name, created)."""
+        """Start the session's sandbox if it exists, else create it (tagged); return (name, created).
+
+        An existing sandbox is verified (tags) before it is started or used.
+        """
         w = self.workspace_client
-        sandbox_id = sandbox_id_for_session(session_id, prefix=self.sandbox_id_prefix)
+        sandbox_id = self.sandbox_id_for(session_id)
         name = _ops.sandbox_name(sandbox_id)
         try:
+            self.verify_ownership(name, session_id)
             _ops.ensure_running(w, name)
             return name, False
         except NotFound:
             pass
-        name = _ops.create(
-            w,
-            sandbox_id,
-            inactivity_timeout_s=self.inactivity_timeout_s,
-            image_uri=self.image_uri,
-            display_name=f"Claude session {session_id}",
-            tags=self.sandbox_tags(session_id),
-        )
+        try:
+            name = _ops.create(
+                w,
+                sandbox_id,
+                inactivity_timeout_s=self.inactivity_timeout_s,
+                image_uri=self.image_uri,
+                display_name=f"Claude session {session_id}",
+                tags=self.sandbox_tags(session_id),
+            )
+        except AlreadyExists:
+            # A concurrent launch (e.g. a re-delivered item) created it first: verify, then share it.
+            self.verify_ownership(name, session_id)
+            _ops.ensure_running(w, name)
+            return name, False
         try:
             _ops.wait_for_state(w, name, _ops.SandboxState.SANDBOX_STATE_RUNNING)
         except BaseException:
@@ -215,11 +294,26 @@ class DatabricksSandboxLauncher:
         return pkgs
 
     def _worker_secrets(self, work: BetaSelfHostedWork) -> dict[str, str]:
-        # The work secret is needed to mount the session's memory stores.
-        return {
-            "ANTHROPIC_ENVIRONMENT_KEY": self.environment_key,
-            "ANTHROPIC_WORK_SECRET": work.secret or "",
-        }
+        """The worker's only credential: the work secret, re-encoded to carry just the sessions token.
+
+        The sessions token authenticates this item's heartbeat, session events and memory stores; the
+        ingress and source tokens in the original payload are dropped. Fails closed: no sessions token
+        means no launch (the worker would otherwise need the environment key).
+        """
+        token = sessions_token_from_secret(getattr(work, "secret", None))
+        if token is None:
+            raise ValueError(
+                f"work item {work.id} carries no sessions token; refusing to launch without one "
+                "(the environment key is never sent to a sandbox)"
+            )
+        reduced = base64.urlsafe_b64encode(json.dumps({"sessions_token": token}).encode()).decode()
+        return {"ANTHROPIC_WORK_SECRET": reduced}
+
+    def _check_no_environment_key(self, *payloads: object) -> None:
+        """Fail closed if the environment key would reach the sandbox in any payload."""
+        key = self.environment_key
+        if key and any(key in json.dumps(p) for p in payloads):
+            raise RuntimeError("refusing to launch: the environment key would enter the sandbox")
 
     def _worker_env(self, work: BetaSelfHostedWork, sandbox_name: str) -> dict[str, str]:
         """Non-secret worker settings (the CMA_* protocol with worker.py); secrets go via WORKER_SECRETS."""
@@ -252,23 +346,39 @@ class DatabricksSandboxLauncher:
         t0 = time.monotonic()
         w = self.workspace_client
         session_id = work.data.id
+        secrets = self._worker_secrets(work)  # fails closed before anything is created
+        envs = self._worker_env(work, self.sandbox_name_for(session_id))
+        self._check_no_environment_key(secrets, envs)
         name, created = self.ensure_sandbox(session_id)
         try:
+            if not created:
+                live = _ops.live_worker(w, name, WORKER_PID, WORKER_WORK_ID)
+                if live is not None and live[1] == work.id:
+                    # Re-delivered item whose worker is still running: never start a second one.
+                    log.info("worker for work=%s already running in %s; leaving it", work.id, name)
+                    return LaunchResult(
+                        sandbox_name=name,
+                        pid=live[0],
+                        created=False,
+                        seconds=time.monotonic() - t0,
+                        reused=True,
+                    )
             self._prepare_memory_dir(name)
-            self._bootstrap(name)
+            worker_sha256 = self._bootstrap(name)
             # A resumed session may still have the previous item's worker; replace it.
             _ops.stop_pidfile_process(w, name, WORKER_PID, marker_path=WORKER_REPLACING)
-            _ops.upload_text(
-                w, name, WORKER_SECRETS, json.dumps(self._worker_secrets(work)), mode="600"
-            )
+            _ops.upload_text(w, name, WORKER_SECRETS, json.dumps(secrets), mode="600")
             pid = _ops.start_detached(
                 w,
                 name,
+                # Verify the worker file in the same exec that starts it, and record the work id it serves.
+                f"echo {worker_sha256}'  '{WORKER_PATH} | sha256sum -c --quiet - || exit 97; "
+                f'printf %s "$ANTHROPIC_WORK_ID" > {WORKER_WORK_ID}; '
                 f"mkdir -p {shlex.quote(self.workdir)} && cd {shlex.quote(self.workdir)} && "
-                f"exec {VENV_PYTHON} {WORKER_PATH}",
+                f"exec {VENV_PYTHON} -I {WORKER_PATH}",
                 log_path=WORKER_LOG,
                 pid_path=WORKER_PID,
-                envs=self._worker_env(work, name),
+                envs=envs,
             )
             time.sleep(self.confirm_s)
             if not _ops.is_alive(w, name, pid):
@@ -315,8 +425,8 @@ class DatabricksSandboxLauncher:
                 "%s is not writable in %s; memory stores will fail to mount", MEMORY_DIR, name
             )
 
-    def _bootstrap(self, name: str) -> None:
-        """Idempotently build the worker venv (persists across stop/start) and upload the worker."""
+    def _bootstrap(self, name: str) -> str:
+        """Idempotently build the worker venv (persists across stop/start), upload the worker; return its sha256."""
         w = self.workspace_client
         # The index URL may embed credentials: only its hash goes on disk, and it reaches uv via env.
         index_tag = (
@@ -344,6 +454,7 @@ class DatabricksSandboxLauncher:
             )
         source = resources.files("databricks_anthropic.sandbox").joinpath("worker.py").read_text()
         _ops.upload_text(w, name, WORKER_PATH, source)
+        return hashlib.sha256(source.encode()).hexdigest()
 
     def stop_session_sandbox(self, session_id: str) -> None:
         """Stop a session's sandbox (home directory is kept for resume)."""

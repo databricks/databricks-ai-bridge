@@ -2,7 +2,8 @@
 
 No model calls. Creates one short-lived sandbox (deleted at the end). Each failure message says how to fix it.
 
-    RUN_SANDBOX_INTEGRATION_TESTS=1 DATABRICKS_SANDBOX_PROFILE=<profile> uv run pytest tests/integration_tests/test_00_prerequisites.py -v
+    RUN_SANDBOX_INTEGRATION_TESTS=1 DATABRICKS_SANDBOX_PROFILE=<profile> \\
+        uv run pytest tests/integration_tests/test_00_prerequisites.py -v
 """
 
 from __future__ import annotations

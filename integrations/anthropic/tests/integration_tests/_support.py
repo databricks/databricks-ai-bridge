@@ -22,6 +22,21 @@ ANTHROPIC_API_URL = "https://api.anthropic.com"
 MAX_REPLY_WORDS = 25
 
 
+def read_env_file(path: str | None) -> dict[str, str]:
+    """Minimal dotenv reader: KEY=VALUE lines, optional quotes, # comments; a missing path is empty."""
+    values: dict[str, str] = {}
+    if not path or not os.path.exists(path):
+        return values
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.removeprefix("export ").split("=", 1)
+            values[key.strip()] = value.split(" #", 1)[0].strip().strip("'\"")
+    return values
+
+
 def model() -> str:
     return os.environ.get("SANDBOX_E2E_MODEL", "claude-haiku-5-5")
 

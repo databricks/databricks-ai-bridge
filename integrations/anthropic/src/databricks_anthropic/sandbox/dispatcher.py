@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import KW_ONLY, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,25 @@ class CleanupAction:
 
 
 @dataclass
+class DispatcherStatus:
+    """Counters for a health or status endpoint (no secrets, no session content)."""
+
+    started_at: float | None = None
+    polling: bool = False
+    last_claim_at: float | None = None
+    claimed: int = 0
+    launched: int = 0
+    reused: int = 0
+    failed: int = 0
+    skipped: int = 0
+    inflight: int = 0
+    last_error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+@dataclass
 class DatabricksSandboxDispatcher:
     """Claim work from a Claude Managed Agents self-hosted environment.
 
@@ -72,6 +92,7 @@ class DatabricksSandboxDispatcher:
     sessions_api: anthropic.Anthropic | None = None  # with an API key, for session-gone cleanup
     results: list[LaunchResult] = field(default_factory=list, init=False)
     failures: list[tuple[str, str]] = field(default_factory=list, init=False)
+    status: DispatcherStatus = field(default_factory=DispatcherStatus, init=False)
 
     def _client(self) -> AsyncAnthropic:
         # Explicit auth_token + base_url: ambient ANTHROPIC_* (e.g. Claude Code routed via a
@@ -83,18 +104,36 @@ class DatabricksSandboxDispatcher:
     async def run(self) -> list[LaunchResult]:
         semaphore = asyncio.Semaphore(self.max_concurrent_launches)
         inflight: dict[str, asyncio.Task[None]] = {}
+        status = self.status
+        status.started_at, status.polling = time.time(), True
+        # Launches block on sandbox RPCs for seconds each: give them their own threads, sized to the
+        # concurrency limit, instead of the small shared default pool (6 threads on 2 vCPUs).
+        pool = ThreadPoolExecutor(
+            max_workers=self.max_concurrent_launches, thread_name_prefix="cma-launch"
+        )
+        loop = asyncio.get_running_loop()
 
         async def launch(work: BetaSelfHostedWork) -> None:
             async with semaphore:
+                status.inflight += 1
                 try:
-                    self.results.append(await asyncio.to_thread(self.launcher.launch, work))
+                    result = await loop.run_in_executor(pool, self.launcher.launch, work)
+                    self.results.append(result)
                     del self.results[:-MAX_RECORDED]  # bounded history in poll mode
+                    if getattr(result, "reused", False):
+                        status.reused += 1
+                    else:
+                        status.launched += 1
                 except Exception as e:  # noqa: BLE001 - one bad item must not stop the dispatcher
                     detail = f"{type(e).__name__}: {e}"
                     self.failures.append((work.data.id, detail))
                     del self.failures[:-MAX_RECORDED]
+                    status.failed += 1
+                    status.last_error = type(e).__name__
                     log.error("launch failed session=%s work=%s: %s", work.data.id, work.id, detail)
                     await self._stop_work(work)
+                finally:
+                    status.inflight -= 1
 
         sweeper = None
         if not self.drain and self.sweep_interval_s:
@@ -113,27 +152,37 @@ class DatabricksSandboxDispatcher:
                 async for work in poller:
                     if work.data.type != "session":
                         log.info("skipping work=%s type=%s", work.id, work.data.type)
+                        status.skipped += 1
                         continue
                     session_id = work.data.id
                     if self.accept is not None and not self.accept(work):
                         log.info("not accepted: work=%s session=%s", work.id, session_id)
+                        status.skipped += 1
                         continue
                     running = inflight.get(session_id)
                     if running and not running.done():
                         log.info(
                             "session=%s already launching; skipping work=%s", session_id, work.id
                         )
+                        status.skipped += 1
                         continue
                     log.info("claimed work=%s session=%s", work.id, session_id)
+                    status.claimed += 1
+                    status.last_claim_at = time.time()
                     for done in [sid for sid, task in inflight.items() if task.done()]:
                         del inflight[done]  # keep the map bounded in long-running poll mode
                     inflight[session_id] = asyncio.create_task(launch(work))
+            except Exception as e:
+                status.last_error = type(e).__name__
+                raise
             finally:
+                status.polling = False
                 if sweeper:
                     sweeper.cancel()
                 pending = [t for t in inflight.values() if not t.done()]
                 if pending:
                     await asyncio.gather(*pending, return_exceptions=True)
+                pool.shutdown(wait=False)
         return self.results
 
     async def _stop_work(self, work: BetaSelfHostedWork) -> None:

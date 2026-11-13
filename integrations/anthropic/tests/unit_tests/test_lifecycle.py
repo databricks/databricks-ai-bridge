@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,7 +61,9 @@ def test_new_sandbox_is_tagged_with_session(monkeypatch):
         _ops, "create", lambda w, sid, **kw: created.update(kw, sid=sid) or f"sandboxes/{sid}"
     )
     monkeypatch.setattr(_ops, "wait_for_state", lambda *a, **k: None)
-    name, was_created = launcher(lifecycle="resumable").ensure_sandbox("sesn_ABC")
+    lc = launcher(lifecycle="resumable")
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = _ops.NotFound("nope")
+    name, was_created = lc.ensure_sandbox("sesn_ABC")
     assert was_created and name == f"sandboxes/{created['sid']}"
     assert created["tags"] == {
         "managed_by": "databricks-anthropic",

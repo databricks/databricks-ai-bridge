@@ -252,16 +252,24 @@ def test_worker_copies_match_package():
     assert worker._genie_wait_tool(None).name == mcp.GENIE_WAIT_DECLARATION["name"]
 
 
-def test_worker_packages_match_pyproject():
+def test_worker_pins_are_exact_and_within_pyproject_ranges():
     # Parsed with a regex, not tomllib, so the check also runs on Python 3.10.
+    from packaging.requirements import Requirement
+
     text = (Path(__file__).parents[2] / "pyproject.toml").read_text()
-    block = re.search(r"(?ms)^dependencies = \[(.*?)^\]", text)
-    assert block, "no [project] dependencies in pyproject.toml"
-    deps = re.findall(r'^\s*"([^"]+)"', block.group(1), flags=re.M)
-    declared = {d.split(">")[0].split("<")[0]: d for d in deps}
-    for requirement in launcher_mod.WORKER_PACKAGES:
-        name = requirement.split(">")[0].split("<")[0]
-        assert declared[name] == requirement, f"{requirement} vs pyproject {declared[name]}"
+    deps = []
+    for section in (r"^dependencies = \[(.*?)^\]", r"^mcp = \[(.*?)^\]"):
+        block = re.search(r"(?ms)" + section, text)
+        assert block, f"no {section} in pyproject.toml"
+        deps += re.findall(r'^\s*"([^"]+)"', block.group(1), flags=re.M)
+    declared = {Requirement(d).name: Requirement(d) for d in deps}
+    for pin in (*launcher_mod.WORKER_PACKAGES, *launcher_mod.MCP_PACKAGES):
+        req = Requirement(pin)
+        (spec,) = req.specifier
+        assert spec.operator == "==", f"{pin} is not an exact pin"
+        assert declared[req.name].specifier.contains(spec.version), (
+            f"{pin} is outside pyproject's {declared[req.name]}"
+        )
 
 
 def test_anthropic_internals_the_worker_imports_exist():

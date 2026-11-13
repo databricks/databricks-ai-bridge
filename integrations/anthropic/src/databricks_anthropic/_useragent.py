@@ -3,8 +3,14 @@
 Fixed by the connector (not user-configurable), per Databricks partner telemetry guidance:
 https://databrickslabs.github.io/partner-architecture/isv-partners/telemetry-attribution
 
-- SDK clients the connector builds get ``product=PRODUCT_NAME, product_version=PRODUCT_VERSION``.
-- SDK clients passed in by callers get the same token appended (``tag``).
+- ``apply()`` (run when the package is imported) sets the SDK's global product with
+  ``databricks.sdk.useragent.with_product``, per the partner guide for the Python SDK
+  (https://databrickslabs.github.io/partner-architecture/isv-partners/telemetry-attribution/sdks). Clients
+  built as ``WorkspaceClient(config=Config(...))`` afterwards send it. ``WorkspaceClient(host=..., ...)``
+  without a config defaults its product to ``unknown/0.0.0`` and so needs ``tag``.
+- SDK clients the connector builds also pass ``product=PRODUCT_NAME, product_version=PRODUCT_VERSION``.
+- SDK clients created *before* the import, and passed in by callers, get the token via ``tag``. The SDK caches the
+  User-Agent when a client is built, so ``tag`` refreshes that cache too.
 - Databricks CLI processes (ours, and the SDK's ``databricks auth token`` refreshes) and the agent's own
   SDK/CLI calls inside the sandbox carry ``DATABRICKS_{SDK,CLI}_UPSTREAM[_VERSION]``.
 
@@ -15,6 +21,8 @@ from __future__ import annotations
 
 import os
 from typing import Any
+
+from databricks.sdk import useragent
 
 PRODUCT_NAME = "ClaudeManagedAgents-DatabricksSandbox"
 PRODUCT_VERSION = "0.1.0"
@@ -32,12 +40,23 @@ def client_kwargs() -> dict[str, str]:
     return {"product": PRODUCT_NAME, "product_version": PRODUCT_VERSION}
 
 
+def apply() -> None:
+    """Attribute this process's Databricks SDK and CLI calls to the connector (idempotent)."""
+    useragent.with_product(PRODUCT_NAME, PRODUCT_VERSION)
+    apply_process_env()
+
+
 def tag(workspace_client: Any) -> Any:
-    """Append the connector token to a caller-supplied client (idempotent; keeps the caller's product)."""
+    """Make a caller-supplied client send the connector token (idempotent; keeps the caller's product)."""
     config = workspace_client.config
     # Match the whole token: `upstream/<PRODUCT_NAME>` (from UPSTREAM_ENV) is not our product token.
     if f"{PRODUCT_NAME}/{PRODUCT_VERSION}" not in config.user_agent.split():
         config.with_user_agent_extra(PRODUCT_NAME, PRODUCT_VERSION)
+    # The SDK copies config.user_agent into its HTTP client when the WorkspaceClient is built
+    # (databricks.sdk.core.ApiClient), so a later change to the config alone never reaches requests.
+    base_client = getattr(getattr(workspace_client, "api_client", None), "_api_client", None)
+    if base_client is not None and hasattr(base_client, "_user_agent_base"):
+        base_client._user_agent_base = config.user_agent
     return workspace_client
 
 

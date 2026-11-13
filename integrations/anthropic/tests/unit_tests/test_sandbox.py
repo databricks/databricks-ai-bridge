@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import re
 from importlib import resources
@@ -24,7 +25,14 @@ from databricks_anthropic.sandbox.mcp import check_custom_tool_rules
 AIP_122 = re.compile(r"^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
-def work_item(session_id="sesn_01AbC_def", work_id="work_1", secret="s3cret", kind="session"):
+def encode_secret(payload: dict) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+
+SECRET = encode_secret({"sessions_token": "s3cret", "ingress_token": "ing", "source_token": "src"})
+
+
+def work_item(session_id="sesn_01AbC_def", work_id="work_1", secret=SECRET, kind="session"):
     return SimpleNamespace(
         id=work_id, secret=secret, data=SimpleNamespace(id=session_id, type=kind)
     )
@@ -98,12 +106,14 @@ def ops(monkeypatch):
     record("create", lambda w, sid, **kw: f"sandboxes/{sid}")
     record("wait_for_state")
     record("stop_pidfile_process")
+    record("live_worker", None)
     record("start_detached", 4242)
     record("is_alive", True)
     record("delete_quietly")
     record("upload_text")
     record("tail", "log tail")
     record("run", SimpleNamespace(stdout=""))
+    monkeypatch.setattr(DatabricksSandboxLauncher, "verify_ownership", lambda self, n, s: None)
     return calls
 
 
@@ -119,10 +129,12 @@ def test_launch_creates_sandbox_when_missing(ops, monkeypatch):
     assert "ANTHROPIC_WORK_SECRET" not in kwargs["envs"]
     secrets = [(a, k) for a, k in ops["upload_text"] if a[2] == launcher_mod.WORKER_SECRETS]
     assert len(secrets) == 1 and secrets[0][1]["mode"] == "600"
-    assert json.loads(secrets[0][0][3]) == {
-        "ANTHROPIC_ENVIRONMENT_KEY": "sk-env",
-        "ANTHROPIC_WORK_SECRET": "s3cret",
-    }
+    # Only the sessions token reaches the sandbox: no environment key, no ingress/source tokens.
+    uploaded = json.loads(secrets[0][0][3])
+    assert set(uploaded) == {"ANTHROPIC_WORK_SECRET"}
+    decoded = json.loads(base64.urlsafe_b64decode(uploaded["ANTHROPIC_WORK_SECRET"]))
+    assert decoded == {"sessions_token": "s3cret"}
+    assert "sk-env" not in json.dumps(kwargs["envs"]) + secrets[0][0][3]
     assert "delete_quietly" not in ops
 
 
@@ -257,6 +269,10 @@ async def test_dispatcher_launches_sessions_skips_others_and_records_failures(mo
     assert [f[0] for f in dispatcher.failures] == ["sesn_bad"]
     assert fake.poller_kwargs["auto_stop"] is False
     assert fake.poller_kwargs["block_ms"] is None and fake.poller_kwargs["drain"] is True
+    status = dispatcher.status
+    assert (status.claimed, status.launched, status.failed, status.skipped) == (2, 1, 1, 1)
+    assert status.inflight == 0 and not status.polling and status.last_error == "RuntimeError"
+    assert "boom" not in str(status.as_dict())  # error type only: messages may carry details
 
 
 def test_dispatcher_client_ignores_ambient_anthropic_env(monkeypatch):

@@ -35,6 +35,23 @@ from google.protobuf.duration_pb2 import (
 )
 
 _SHELL = "/bin/bash"
+# Never a login shell: the agent can write ~/.profile and ~/.bashrc in the persistent home, and a login or
+# interactive shell would run them inside our own commands (uploads carry secrets; the worker reads its
+# config from the environment). The non-login exec environment already has PATH and the sandbox credential.
+_SHELL_ARGS = ("--noprofile", "--norc", "-c")
+# Variables the worker keeps from the exec environment (started under `env -i`); everything else is dropped.
+WORKER_ENV_ALLOWLIST = (
+    "HOME",
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "DATABRICKS_CONFIG_FILE",  # the sandbox's built-in credential
+    "DATABRICKS_TOKEN_CACHE_FILE",
+)
 # Base64 in one env var must stay under the kernel's per-variable limit (MAX_ARG_STRLEN,
 # 128 KiB); a multiple of 4 keeps every chunk independently decodable.
 _UPLOAD_B64_CHUNK = 120 * 1024
@@ -127,7 +144,11 @@ def run(
     check: bool = True,
 ) -> ExecuteCommandSyncResponse:
     response = w.sandbox.execute_command_sync(
-        name, _SHELL, args=["-lc", script], envs=envs, execution_timeout=Duration(seconds=timeout_s)
+        name,
+        _SHELL,
+        args=[*_SHELL_ARGS, script],
+        envs=envs,
+        execution_timeout=Duration(seconds=timeout_s),
     )
     completed = response.status == ExecuteCommandStatus.EXECUTE_COMMAND_STATUS_COMPLETED
     if check and (not completed or response.exit_code != 0):
@@ -180,12 +201,21 @@ def start_detached(
 ) -> int:
     """Daemonize ``command`` so the RPC returns while it keeps running; return its pid.
 
-    ``envs`` reach the process environment only (never the command line or disk).
+    The process starts under ``env -i`` with only ``WORKER_ENV_ALLOWLIST`` plus ``envs``, so nothing the
+    agent may have planted (PYTHONPATH, LD_PRELOAD, a redirected base URL) reaches it. ``envs`` values reach
+    the process environment only (never the command line or disk).
     """
+    for key in envs:
+        if not key.replace("_", "").isalnum():
+            raise ValueError(f"invalid environment variable name {key!r}")
+    keep = [*WORKER_ENV_ALLOWLIST, *envs]
+    env_args = " ".join(f'{k}="${{{k}}}"' for k in keep)
     log_dir = shlex.quote(os.path.dirname(log_path))
     script = (
         f"mkdir -p {log_dir}; "
-        f"setsid nohup bash -c {shlex.quote(command)} </dev/null >{shlex.quote(log_path)} 2>&1 & "
+        f"setsid nohup env -i {env_args} "
+        f"/bin/bash --noprofile --norc -c {shlex.quote(command)} "
+        f"</dev/null >{shlex.quote(log_path)} 2>&1 & "
         f"pid=$!; echo $pid > {shlex.quote(pid_path)}; echo pid=$pid"
     )
     out = run(w, name, script, envs=envs).stdout or ""
@@ -193,6 +223,26 @@ def start_detached(
         if token.startswith("pid="):
             return int(token.split("=", 1)[1])
     raise SandboxCommandError(f"could not read pid from {out!r}")
+
+
+def live_worker(
+    w: WorkspaceClient, name: str, pid_path: str, work_id_path: str
+) -> tuple[int, str] | None:
+    """(pid, work id) of a still-running worker, or None if none is alive or it recorded no work id."""
+    out = (
+        run(
+            w,
+            name,
+            f"p=$(cat {shlex.quote(pid_path)} 2>/dev/null); "
+            f'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then '
+            f'echo "$p $(cat {shlex.quote(work_id_path)} 2>/dev/null)"; fi',
+            check=False,
+        ).stdout
+        or ""
+    ).split()
+    if len(out) == 2 and out[0].isdigit():
+        return int(out[0]), out[1]
+    return None
 
 
 def is_alive(w: WorkspaceClient, name: str, pid: int) -> bool:

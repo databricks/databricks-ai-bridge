@@ -1,0 +1,87 @@
+# Hosted dispatcher (M1, service mode) as a Databricks App. See docs/design/hosted-dispatcher.md.
+#
+#   app/scripts/deploy.sh <target> <profile> <environment id> [--store-secrets [KEY_ENV_VAR]] [-- <bundle args>]
+# builds the wheel, deploys, stores the secrets, and starts the App, with the CLI attributed to the connector.
+# Example bundle args: --var export_volume=/Volumes/main/agents/session_outputs --var mcp=
+bundle:
+  name: cma-dispatcher
+
+variables:
+  environment_id:
+    description: Service-mode ("S") self-hosted environment id
+  secret_scope:
+    description: Secret scope holding env-s-key and sandbox-id-hmac-key
+    default: claude-managed-agents
+  mcp:
+    description: '"genie-one" to serve Genie One from the sandbox, or empty'
+    default: genie-one
+  export_volume:
+    description: Optional UC Volume folder for outputs/ (empty to disable)
+    default: ""
+
+sync:
+  include:
+    - wheels/*.whl   # gitignored build output, still uploaded with the App source
+
+resources:
+  secret_scopes:
+    cma_secrets:
+      name: ${var.secret_scope}
+
+  apps:
+    cma_dispatcher:
+      name: cma-dispatcher-${bundle.target}
+      description: Claude Managed Agents dispatcher (service mode) for Databricks Sandbox
+      source_code_path: .
+      # One instance: the queue claim plus idempotent launch keep a redeploy overlap safe (design doc §7).
+      compute_min_instances: 1
+      compute_max_instances: 1
+      config:
+        command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+        env:
+          # Partner attribution for every Databricks SDK/CLI call the App makes (the connector also sets the SDK
+          # product with useragent.with_product when it is imported).
+          - name: DATABRICKS_SDK_UPSTREAM
+            value: ClaudeManagedAgents-DatabricksSandbox
+          - name: DATABRICKS_SDK_UPSTREAM_VERSION
+            value: 0.1.0
+          - name: DATABRICKS_CLI_UPSTREAM
+            value: ClaudeManagedAgents-DatabricksSandbox
+          - name: DATABRICKS_CLI_UPSTREAM_VERSION
+            value: 0.1.0
+          - name: ANTHROPIC_ENVIRONMENT_ID
+            value: ${var.environment_id}
+          - name: ANTHROPIC_ENVIRONMENT_KEY
+            value_from: anthropic-environment-key
+          - name: CMA_SANDBOX_ID_KEY
+            value_from: sandbox-id-hmac-key
+          - name: CMA_SANDBOX_PREFIX
+            value: cmaapp-
+          - name: CMA_MCP
+            value: ${var.mcp}
+          - name: CMA_LIFECYCLE
+            value: ephemeral
+          - name: CMA_EXPORT_VOLUME
+            value: ${var.export_volume}
+      resources:
+        - name: anthropic-environment-key
+          secret:
+            scope: ${resources.secret_scopes.cma_secrets.name}
+            key: env-s-key
+            permission: READ
+        - name: sandbox-id-hmac-key
+          secret:
+            scope: ${resources.secret_scopes.cma_secrets.name}
+            key: sandbox-id-hmac-key
+            permission: READ
+
+targets:
+  # The workspace comes from the CLI profile passed to deploy.sh (--profile).
+  dev:
+    default: true
+    variables:
+      secret_scope: claude-managed-agents-dev
+  prod:
+    # Deploy prod from CI, or with a two-person rule for CAN_MANAGE on the App.
+    variables:
+      secret_scope: claude-managed-agents

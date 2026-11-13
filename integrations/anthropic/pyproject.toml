@@ -28,9 +28,6 @@ mcp = [
     "mcp>=1.24",
 ]
 
-[project.scripts]
-databricks-anthropic = "databricks_anthropic.sandbox.cli:main"
-
 [dependency-groups]
 dev = [
     "ruff==0.14.10",
@@ -43,6 +40,9 @@ tests = [
     "pytest-asyncio==1.3.0",
     "pytest-timeout==2.3.1",
     "pytest-cov==4.1.0",
+    # The dispatcher App's routes (app/, not part of the wheel) are tested with FastAPI's TestClient
+    # (Starlette's TestClient uses httpx2, which anthropic already brings).
+    "fastapi==0.162.2",
 ]
 
 [build-system]
@@ -58,14 +58,13 @@ include = [
 packages = ["src/databricks_anthropic"]
 
 [tool.ruff]
-include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py", "examples/**/*.py"]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py", "app/**/*.py"]
 extend = "../../pyproject.toml"
 
 [tool.ruff.lint.per-file-ignores]
-# The CLI and the runnable examples report to the terminal on stdout; the live tests print the
-# session's reply and usage so a failing run can be diagnosed from the test log.
-"src/databricks_anthropic/sandbox/cli.py" = ["T201"]
-"examples/**" = ["T201"]
+# The App's operator scripts report to the terminal; the live tests print the session's reply and usage
+# so a failing run can be diagnosed from the test log.
+"app/scripts/**" = ["T201"]
 "tests/integration_tests/**" = ["T201"]
 
 [tool.pytest.ini_options]
@@ -83,7 +82,8 @@ branch = true
 show_missing = true
 
 [tool.ty.environment]
-root = ["./src", "./tests"]
+# app/ holds the Databricks App's modules (imported as top-level `app` and `service`, as the Apps runtime does).
+root = ["./src", "./tests", "./app"]
 
 [tool.ty.src]
-include = ["./src", "./tests"]
+include = ["./src", "./tests", "./app"]
