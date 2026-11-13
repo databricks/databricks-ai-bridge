@@ -10,19 +10,26 @@ from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlsplit
 
 import click
 import pytest
 import requests
 from click.core import ParameterSource
 from click.testing import CliRunner
+from deploy_test import _DeployApi, _DeployRunner
+from rich.console import Console
 
 import databricks_agentbricks.cli.app as cli
+from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.clients import databricks_cli
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage, Readiness
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.group import AgentBricksCommand
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services.deployment import deploy_state
 
 
 class _ApiClient:
@@ -1113,3 +1120,309 @@ def test_nonfailure_outcomes_omit_failure_text(code, category):
     assert "diagnostics" not in log
     if code == 75:
         assert "error_category" not in log
+
+
+@pytest.mark.parametrize("outcome", ["DEPLOYMENT_OUTCOME_RUNNING", "DEPLOYMENT_OUTCOME_SUCCEEDED"])
+def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    context = _real_context("deploy")
+    with context:
+        telemetry.begin_deployment()
+        telemetry.set_deployment_outcome(outcome)
+        url = telemetry.deployment_details_url(
+            "https://workspace.example/ml/agents/details/agent-bricks-demo?o=123"
+        )
+        log = _log(context, exit_code=0)
+    from urllib.parse import parse_qs, urlsplit
+
+    assert isinstance(url, str)
+    params = parse_qs(urlsplit(url).query)
+    assert params["o"] == ["123"]
+    assert params["source"] == ["agentbricks-cli"]
+    assert params["cli_invocation_id"] == [log["invocation_id"]]
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["details_link_emitted"] is True
+    assert log["deployment_outcome"] == outcome
+    assert log["background_child"] is False
+    assert "agent-bricks-demo" not in json.dumps(log)
+
+
+@pytest.mark.parametrize("background_child,opt_out", [(True, False), (False, True)])
+def test_details_link_is_untracked_for_background_or_opt_out(
+    monkeypatch, background_child, opt_out
+):
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
+    context = _real_context("deploy")
+    url = "https://workspace.example/ml/agents/details/agent-bricks-demo"
+    with context:
+        telemetry.begin_deployment(background_child=background_child)
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_RUNNING")
+        assert telemetry.deployment_details_url(url) == url
+        assert _log(context, exit_code=0)["background_child"] is background_child
+
+
+def test_missing_details_link_keeps_a_conversion_denominator():
+    context = _real_context("deploy")
+    with context:
+        telemetry.begin_deployment()
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_SUCCEEDED")
+        assert telemetry.deployment_details_url(None) is None
+        log = _log(context, exit_code=0)
+    assert log["details_link_emitted"] is False
+    assert uuid.UUID(log["invocation_id"])
+
+
+def test_repeated_waits_have_distinct_invocation_ids():
+    ids = []
+    for _ in range(2):
+        context = _real_context("deployments", "wait")
+        with context:
+            telemetry.begin_deployment()
+            ids.append(_log(context, exit_code=75)["invocation_id"])
+    assert len(set(ids)) == 2
+
+
+@pytest.mark.parametrize("background_child", [False, True])
+@pytest.mark.parametrize("failure_state_write", [False, True])
+@pytest.mark.usefixtures("deployable_tmp_path")
+def test_failed_deploy_hook_records_known_outcome(
+    tmp_path, monkeypatch, background_child, failure_state_write
+):
+    """Run the command and service with fake workspace calls and an optional failing disk write."""
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events)
+    rollout_error = RuntimeError("rollout failed")
+    write_error = OSError("failure state write failed")
+    invocation_ids = []
+    logs = []
+
+    def fail_rollout(args, profile, **kwargs):
+        if list(args[:2]) == ["apps", "deploy"]:
+            metadata = telemetry._deployment_metadata(click.get_current_context())
+            assert metadata is not None
+            invocation_ids.append(metadata.invocation_id)
+            raise rollout_error
+        return runner(args, profile, **kwargs)
+
+    write_state = deploy_state.write_state
+
+    def write(path, state):
+        if failure_state_write and state["status"] == deploy_state.FAILED:
+            raise write_error
+        write_state(path, state)
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fail_rollout)
+    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(deploy_state, "write_state", write)
+    monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+    args = ["--profile", "fake", "deploy", "demo", "--source", str(tmp_path)]
+    if background_child:
+        args.append("--background-child")
+
+    result = CliRunner().invoke(cli.agentbricks, args)
+
+    assert result.exit_code == 1
+    assert result.exception is (write_error if failure_state_write else rollout_error)
+    (log,) = logs
+    assert log["command_path"] == "agentbricks deploy"
+    assert log["invocation_id"] == invocation_ids[0]
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["exit_code"] == result.exit_code
+    assert str(write_error if failure_state_write else rollout_error) in log["failure_message"]
+    assert log["background_child"] is background_child
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_FAILED"
+
+
+@pytest.mark.parametrize("background_child", [False, True])
+@pytest.mark.usefixtures("deployable_tmp_path")
+def test_preparation_failure_hook_keeps_outcome_unspecified(
+    tmp_path, monkeypatch, background_child
+):
+    AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    events = []
+    api = _DeployApi(events)
+    logs = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+    args = ["--profile", "fake", "deploy", "--source", str(tmp_path)]
+    if background_child:
+        args.append("--background-child")
+
+    result = CliRunner().invoke(cli.agentbricks, args)
+
+    assert result.exit_code == 1
+    assert "No deployment name given" in result.output
+    assert events == []
+    (log,) = logs
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["exit_code"] == result.exit_code
+    assert log["background_child"] is background_child
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def test_outcome_setter_failure_preserves_command_exception(monkeypatch):
+    error = RuntimeError("original command failure")
+
+    def unavailable_context(*args, **kwargs):
+        raise RuntimeError("telemetry context unavailable")
+
+    @click.command(cls=AgentBricksCommand)
+    def command():
+        telemetry.begin_deployment()
+        try:
+            raise error
+        finally:
+            with monkeypatch.context() as patch:
+                patch.setattr(click, "get_current_context", unavailable_context)
+                telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_FAILED")
+
+    result = CliRunner().invoke(command)
+    assert result.exit_code == 1
+    assert result.exception is error
+
+
+@pytest.mark.parametrize("command", ["get", "list"])
+@pytest.mark.parametrize("enabled,opt_out", [(True, False), (False, False), (True, True)])
+@pytest.mark.parametrize(
+    "output,console_options,list_link_visible",
+    [
+        pytest.param("json", {"force_terminal": False}, True, id="json"),
+        pytest.param("text", {"force_terminal": False}, False, id="redirected-text"),
+        pytest.param("text", {"force_terminal": True}, True, id="terminal"),
+        pytest.param(
+            "text", {"force_terminal": True, "color_system": None}, False, id="plain-terminal"
+        ),
+        pytest.param(
+            "text", {"force_terminal": True, "legacy_windows": True}, False, id="legacy-windows"
+        ),
+        pytest.param("text", {"force_terminal": True, "no_color": True}, True, id="no-color"),
+        pytest.param(
+            "text",
+            {"force_terminal": False, "color_system": "standard"},
+            True,
+            id="redirected-ansi",
+        ),
+    ],
+)
+def test_read_command_links_join_one_command_event(
+    monkeypatch, command, enabled, opt_out, output, console_options, list_link_visible
+):
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1" if opt_out else "0")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(render, "_stdout", Console(width=300, **console_options))
+    items = [
+        {"name": "agent-bricks-one", "url": "https://one.example"},
+        {"name": "agent-bricks-two", "url": "https://two.example"},
+    ]
+    uploads = []
+    flag_requests = []
+
+    class WorkspaceTransport:
+        def do(self, method, path, *, query=None, body=None):
+            if method == "GET":
+                flag_requests.append(path)
+                return {
+                    "flags": {
+                        "databricks.fe.customagents.agentCentricView.enable": enabled,
+                        "agent_memory_sessions": True,
+                    }
+                }
+            assert (method, path) == ("POST", "/telemetry-ext")
+            uploads.append(body)
+            return {}
+
+    client = SimpleNamespace(
+        host="https://workspace.example",
+        workspace_client=SimpleNamespace(
+            config=SimpleNamespace(workspace_id="123"), api_client=WorkspaceTransport()
+        ),
+    )
+    # Fake only external Apps reads and workspace transport; the command hook, attribution,
+    # event construction, and emitter all execute together.
+    monkeypatch.setattr(
+        cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: client, _client=client)
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, *a, **kw: SimpleNamespace(
+            returncode=0, stdout=json.dumps(items if command == "list" else items[0]), stderr=""
+        ),
+    )
+    args = ["--profile", "fake", "--output", output, "deployments", command]
+    if command == "get":
+        args.append("agent-bricks-one")
+    result = CliRunner().invoke(cli.agentbricks, args, color=True)
+    assert result.exit_code == 0, result.output
+    link_visible = enabled and (command == "get" or list_link_visible)
+    assert flag_requests == ["/api/2.0/ui-flags"]
+    assert len(uploads) == (0 if opt_out else 1)
+    if not opt_out:
+        log = json.loads(uploads[0]["protoLogs"][0])["entry"]["agentbricks_cli_log"]
+        assert log["command_path"] == f"agentbricks deployments {command}"
+        assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+        assert log["background_child"] is False
+        assert log["details_link_emitted"] is link_visible
+        assert uuid.UUID(log["invocation_id"]).version == 4
+        assert "agent-bricks-one" not in json.dumps(log)
+    if output != "json":
+        assert "agent-bricks-one" in result.stdout
+        assert ("/ml/agents/details/agent-bricks-one" in result.stdout) is link_visible
+        if opt_out:
+            assert "cli_invocation_id" not in result.stdout
+        else:
+            assert (log["invocation_id"] in result.stdout) is link_visible
+        return
+    payload = json.loads(result.stdout)
+    rows = payload if command == "list" else [payload]
+    for row in rows:
+        assert row["url"] == next(item["url"] for item in items if item["name"] == row["name"])
+        if not enabled:
+            assert "details_url" not in row
+            continue
+        parts = urlsplit(row["details_url"])
+        assert parts.path == f"/ml/agents/details/{row['name']}"
+        query = parse_qs(parts.query)
+        if opt_out:
+            assert query == {"o": ["123"]}
+        else:
+            assert query == {
+                "o": ["123"],
+                "source": ["agentbricks-cli"],
+                "cli_invocation_id": [log["invocation_id"]],
+            }
+
+
+@pytest.mark.parametrize("command", ["get", "list"])
+def test_read_command_failure_keeps_outcome_unspecified(monkeypatch, command):
+    logs = []
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
+    )
+
+    def unavailable(*args, **kwargs):
+        raise AgentCliError("unavailable", error_code="UNAVAILABLE")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", unavailable)
+    args = ["--profile", "fake", "deployments", command]
+    if command == "get":
+        args.append("agent-bricks-one")
+    result = CliRunner().invoke(cli.agentbricks, args)
+    assert result.exit_code == 1
+    (log,) = logs
+    assert log["command_path"] == f"agentbricks deployments {command}"
+    assert uuid.UUID(log["invocation_id"]).version == 4
+    assert log["details_link_emitted"] is False
+    assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"

@@ -36,6 +36,7 @@ from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.app_probe import AppProbe, ProbeResult
 from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
+from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 from databricks_agentbricks.diagnostics import (
     CommandDiagnostics,
     FailureStage,
@@ -157,8 +158,6 @@ class DeployResult:
     memory_grant_attempted: bool
     session_grant_attempted: bool
     tool_access: Optional[ToolAccessSummary]
-    # True only when deploy created a missing app.yaml with a placeholder command.
-    created_app_yaml: bool
     pip_index_url: Optional[str]
     instance_count: Optional[int]
     uses_runtime_api: bool
@@ -176,6 +175,7 @@ class DeployResult:
 SourceFolderStatus = Literal[
     "deleted", "already_gone", "kept", "kept_app_not_confirmed", "failed", "not_recorded"
 ]
+RolloutOutcome = Literal["succeeded", "failed"]
 
 
 @dataclass(frozen=True)
@@ -229,6 +229,8 @@ class WaitResult:
     log: Optional[str] = None
     # For a succeeded deploy: True once the App answered; None when it couldn't be checked.
     ready: Optional[bool] = None
+    from_local_state: bool = False
+    workspace: WorkspaceIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,7 @@ class _WaitSnapshot:
     ready: Optional[bool] = None
     # Why readiness couldn't be checked, when the probe said.
     unverified_detail: Optional[str] = None
+    workspace: WorkspaceIdentity | None = None
 
 
 # How often `deployments wait` re-reads a local deploy record, and the App when there is none.
@@ -295,7 +298,6 @@ class _RolledOut:
     bindings: ModelBindingState
     tracing: TracingState
     env: dict[str, str]
-    created_app_yaml: bool
     tool_plan: Optional[ToolAccessPlan]
     workspace_path: str
 
@@ -391,6 +393,12 @@ class DeployService:
         self._app_probe = app_probe
         self._clock = clock
         self._sleep = sleep
+        self._rollout_outcome: RolloutOutcome | None = None
+
+    @property
+    def rollout_outcome(self) -> RolloutOutcome | None:
+        """Terminal outcome of the latest deploy; None when preparation did not complete."""
+        return self._rollout_outcome
 
     # --- lifecycle verbs ----------------------------------------------------
 
@@ -552,6 +560,8 @@ class DeployService:
                     uses_runtime_api=uses_runtime_api,
                     log=snap.log,
                     ready=snap.ready if snap.status == deploy_state.SUCCEEDED else None,
+                    from_local_state=local,
+                    workspace=snap.workspace,
                 )
             poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
             self._sleep(max(0.0, min(poll, deadline - now)))
@@ -579,6 +589,7 @@ class DeployService:
             else (),
             log=str(log) if log else None,
             ready=result.get("ready") if isinstance(result, dict) else None,
+            workspace=WorkspaceIdentity.from_dict(state.get("workspace")),
         )
 
     def _server_snapshot(
@@ -619,6 +630,10 @@ class DeployService:
 
     # --- deploy -------------------------------------------------------------
 
+    def workspace_identity(self) -> WorkspaceIdentity | None:
+        """The authenticated target workspace for a background deployment's local record."""
+        return WorkspaceIdentity.from_client(self._api_client_provider.get())
+
     def check_auth(self) -> None:
         """Fail now, rather than in a background deploy, when the profile can't authenticate."""
         try:
@@ -638,7 +653,8 @@ class DeployService:
         The order matters:
 
         1. Resolve and validate the project/name, plan request-user scopes without mutating the
-           App, persist the name, and read the resource bindings.
+           App, persist the name, and read the resource bindings. Fail here if a bound memory or
+           session store's API is turned off for the workspace (``FEATURE_DISABLED``).
         2. Get the App's compute booting: create a missing App, or start a stopped one, without
            waiting. The boot runs server-side while every step up to the join below runs here.
         3. Reconcile the bound memory and session stores, tracing, and Runtime Store. Each
@@ -658,20 +674,24 @@ class DeployService:
         remove it. The service owns the intermediate state, manifest writes, and phase order;
         provisioners own individual resource operations and return typed results for later phases.
         """
+        self._rollout_outcome = None
         timer = _PhaseTimer(self._diagnostics)
         source_dir = pathlib.Path(request.source)
         with timer(FailureStage.PREFLIGHT):
             prepared = self.prepare(request)
         tracker = self._state_tracker
-        if tracker is None:
-            return self._roll_out(source_dir, request, prepared, timer)
-        tracker.start(source_dir, prepared.name)
+        if tracker is not None:
+            tracker.start(source_dir, prepared.name)
         try:
             result = self._roll_out(source_dir, request, prepared, timer)
         except BaseException as exc:
-            tracker.failed(_error_text(exc))
+            self._rollout_outcome = deploy_state.FAILED
+            if tracker is not None:
+                tracker.failed(_error_text(exc))
             raise
-        tracker.succeeded(result)
+        self._rollout_outcome = deploy_state.SUCCEEDED
+        if tracker is not None:
+            tracker.succeeded(result)
         return result
 
     def _roll_out(
@@ -689,6 +709,8 @@ class DeployService:
             client = self._api_client_provider.get()
         name = prepared.name
         instance_count = request.instance_count
+        if self._state_tracker is not None:
+            self._state_tracker.set_workspace(WorkspaceIdentity.from_client(client))
         ctx = ResourceContext(
             project=ProjectContext(
                 source_dir=source_dir, name=name, agent_project=prepared.agent_project
@@ -698,6 +720,11 @@ class DeployService:
             experiment_name=experiment_name,
             deployment_exists=False,
         )
+        # Check bound stores before the early App create below. A workspace that opted out of the
+        # store preview would otherwise fail at reconcile and keep an App with no deployment.
+        with timer(FailureStage.PREFLIGHT):
+            self._memory_store_provisioner.preflight(ctx)
+            self._session_store_provisioner.preflight(ctx)
         # Out of scope for the early compute start: a request-user App is created or updated
         # through the SDK scope path (`_reconcile_scoped_app`) at its original position, after the
         # reconciles, and the wait follows immediately. A follow-up can move it once this lands.
@@ -799,7 +826,6 @@ class DeployService:
             )
             if tool_plan is not None
             else None,
-            created_app_yaml=rollout.created_app_yaml,
             pip_index_url=request.pip_index_url,
             instance_count=instance_count,
             uses_runtime_api=bool(
@@ -858,7 +884,7 @@ class DeployService:
         *,
         early_compute: bool,
     ) -> _RolledOut:
-        """Reconcile resources, write app.yaml, and roll out source, in either path's order.
+        """Reconcile resources, update app.yaml env, and roll out source, in either path's order.
 
         With ``early_compute`` the compute is already booting, so everything that leaves the App
         untouched runs before the join on ACTIVE. Otherwise (a request-user App) the App is made
@@ -901,7 +927,7 @@ class DeployService:
         # 2. Patch app.yaml with the initial env. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
         with timer(FailureStage.APP_YAML):
-            created_app_yaml = (
+            if env or env_removals or prepared.agent_project is not None:
                 AppManifest.upsert_env_file(
                     source_dir,
                     env,
@@ -910,9 +936,6 @@ class DeployService:
                     if prepared.agent_project is not None
                     else (),
                 )
-                if (env or env_removals or prepared.agent_project is not None)
-                else False
-            )
         if not early_compute:
             # 3. A request-user App: ensure it exists and its compute is active. Create only when
             #    new; the compute wait runs every deploy.
@@ -936,11 +959,8 @@ class DeployService:
         env.update(runtime_late.env)
         if runtime_late.env or runtime_late.env_removals:
             with timer(FailureStage.APP_YAML):
-                created_app_yaml = (
-                    AppManifest.upsert_env_file(
-                        source_dir, runtime_late.env, list(runtime_late.env_removals)
-                    )
-                    or created_app_yaml
+                AppManifest.upsert_env_file(
+                    source_dir, runtime_late.env, list(runtime_late.env_removals)
                 )
 
         # 5. Resolve the upload destination explicitly. With the compute booting, app.yaml is now
@@ -982,7 +1002,6 @@ class DeployService:
             bindings=bindings,
             tracing=tracing,
             env=env,
-            created_app_yaml=created_app_yaml,
             tool_plan=tool_plan,
             workspace_path=workspace_path,
         )
@@ -1013,6 +1032,8 @@ class DeployService:
         of the same App still running from this project is refused before anything changes.
         """
         source_dir = pathlib.Path(request.source)
+        # Deploy never writes a new app.yaml: without a usable one the App could never start.
+        AppManifest.require_deployable(source_dir)
         resolved = self._resolve_deployment(source_dir, request.name)
         running = deploy_state.running_deploy(
             deploy_state.state_path(source_dir, resolved.name), now=self._clock()

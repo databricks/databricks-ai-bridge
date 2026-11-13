@@ -28,17 +28,18 @@ import tempfile
 import time
 from collections import deque
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
+from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
 from databricks_agentbricks.diagnostics import operation_uuid
 from databricks_agentbricks.reporting import Reporter, phase_name
 
 STATE_DIR = ".agentbricks"
 RUNNING = "running"
-SUCCEEDED = "succeeded"
-FAILED = "failed"
+SUCCEEDED: Literal["succeeded"] = "succeeded"
+FAILED: Literal["failed"] = "failed"
 # The phase a deploy reports before its first provisioning step.
 STARTING_PHASE = "Starting the deploy"
 # The phase after rollout while the App's server starts and the Apps proxy still returns 502.
@@ -197,6 +198,7 @@ def _running_state(
     now: str,
     log: Optional[pathlib.Path],
     operation_id: str | None = None,
+    workspace: WorkspaceIdentity | None = None,
 ) -> dict[str, Any]:
     return {
         "operation_id": operation_uuid(operation_id),
@@ -208,11 +210,18 @@ def _running_state(
         "status": RUNNING,
         "error": None,
         "log": str(log) if log is not None else None,
+        "workspace": asdict(workspace) if workspace is not None else None,
     }
 
 
 def record_background_start(
-    source_dir: pathlib.Path, app: str, *, pid: int, now: float, operation_id: str | None = None
+    source_dir: pathlib.Path,
+    app: str,
+    *,
+    pid: int,
+    now: float,
+    operation_id: str | None = None,
+    workspace: WorkspaceIdentity | None = None,
 ) -> pathlib.Path:
     """Record a just-spawned background deploy as running, before its process records anything.
 
@@ -234,6 +243,7 @@ def record_background_start(
                 now=stamp,
                 log=log_path(source_dir.absolute(), app),
                 operation_id=operation_id,
+                workspace=workspace,
             ),
         )
     return path
@@ -282,8 +292,14 @@ class DeployStateTracker:
             log=log_path(source_dir, app) if self._background else None,
             operation_id=self._operation_id
             or (previous.get("operation_id") if inherited else None),
+            workspace=WorkspaceIdentity.from_dict(previous.get("workspace")) if inherited else None,
         )
         self._write()
+
+    def set_workspace(self, workspace: WorkspaceIdentity | None) -> None:
+        if self._path is not None:
+            self._state["workspace"] = asdict(workspace) if workspace is not None else None
+            self._write()
 
     def phase(self, message: str) -> None:
         """Record that the deploy entered the phase named by a progress ``message``."""

@@ -29,6 +29,8 @@ from typing import Any, Callable, Optional
 
 import click
 
+from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.clients.agent_details_client import AgentDetailsClient
 from databricks_agentbricks.clients.app_probe import AppProbe
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
@@ -94,6 +96,12 @@ from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthentica
 _WAIT_TIMEOUT_S = 100
 _EX_TEMPFAIL = 75
 _DEPLOY_OPERATION_ENV = "AGENTBRICKS_DEPLOY_OPERATION_ID"
+_DEPLOYMENT_OUTCOMES: dict[str | None, telemetry.DeploymentOutcome] = {
+    None: "DEPLOYMENT_OUTCOME_UNSPECIFIED",
+    deploy_state.RUNNING: "DEPLOYMENT_OUTCOME_RUNNING",
+    deploy_state.SUCCEEDED: "DEPLOYMENT_OUTCOME_SUCCEEDED",
+    deploy_state.FAILED: "DEPLOYMENT_OUTCOME_FAILED",
+}
 
 
 def build_deploy_service(obj, *, background: bool = False) -> DeployService:
@@ -223,8 +231,7 @@ def _ignore_hangup() -> None:
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory for the deployment (containing app.yaml). Defaults to the "
-    "current directory.",
+    help="Project directory (with app.yaml). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",
@@ -317,6 +324,7 @@ def deploy(
     agent answers requests. From a coding agent or script with a short command timeout, use
     --no-wait and then `agentbricks deployments wait`.
     """
+    telemetry.begin_deployment(background_child=background_child)
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
     obj.diagnostics = diagnostics
     diagnostics.operation_id = (
@@ -341,6 +349,7 @@ def deploy(
         with diagnostics.phase(FailureStage.PREFLIGHT):
             prepared = service.prepare(request)
             service.check_auth()
+            workspace = service.workspace_identity()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)
         pid = spawn_background_deploy(
@@ -352,13 +361,35 @@ def deploy(
             pid=pid,
             now=time.time(),
             operation_id=diagnostics.operation_id,
+            workspace=workspace,
         )
-        present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
+        telemetry.set_deployment_outcome("DEPLOYMENT_OUTCOME_RUNNING")
+        present_background_started(
+            prepared.name,
+            log=log,
+            state_file=state_file,
+            output=obj.output,
+            details_url=telemetry.deployment_details_url(
+                AgentDetailsClient(obj.api_client_provider).get_url(prepared.name),
+            ),
+        )
         diagnostics.outcome = Outcome.SUBMITTED
         return
     started = time.monotonic()
-    result = service.deploy(request)
-    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
+    try:
+        result = service.deploy(request)
+    finally:
+        telemetry.set_deployment_outcome(
+            _DEPLOYMENT_OUTCOMES.get(service.rollout_outcome, "DEPLOYMENT_OUTCOME_UNSPECIFIED")
+        )
+    present_deploy_result(
+        result,
+        output=obj.output,
+        elapsed_s=time.monotonic() - started,
+        details_url=telemetry.deployment_details_url(
+            AgentDetailsClient(obj.api_client_provider).get_url(result.deployment),
+        ),
+    )
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
@@ -373,7 +404,21 @@ def deployments() -> None:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
-    present_deployments_list(build_deploy_service(obj).list_deployments(), output=obj.output)
+    telemetry.begin_deployment()
+    items = build_deploy_service(obj).list_deployments()
+    names = [item["name"] for item in items if item.get("name")]
+    details_urls = AgentDetailsClient(obj.api_client_provider).get_urls(names)
+    console = render.console()
+    # Rich omits hyperlink targets without ANSI styles or with legacy Windows rendering.
+    if obj.output == "json" or (console.color_system is not None and not console.legacy_windows):
+        details_urls = {
+            name: telemetry.deployment_details_url(url) or url for name, url in details_urls.items()
+        }
+    present_deployments_list(
+        items,
+        output=obj.output,
+        details_urls=details_urls,
+    )
 
 
 @deployments.command("get")
@@ -381,7 +426,16 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
-    present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
+    telemetry.begin_deployment()
+    data = build_deploy_service(obj).get(name)
+    present_deployment_detail(
+        data,
+        name,
+        output=obj.output,
+        details_url=telemetry.deployment_details_url(
+            AgentDetailsClient(obj.api_client_provider).get_url(name)
+        ),
+    )
 
 
 @deployments.command("wait")
@@ -413,8 +467,21 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     75 still deploying at the timeout (run the same command again).
     """
     obj = ctx.obj
+    telemetry.begin_deployment()
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
-    present_wait_result(result, output=obj.output)
+    telemetry.set_deployment_outcome(_DEPLOYMENT_OUTCOMES[result.status])
+    present_wait_result(
+        result,
+        output=obj.output,
+        details_url=telemetry.deployment_details_url(
+            AgentDetailsClient(obj.api_client_provider).get_url(
+                result.deployment, expected_workspace=result.workspace
+            )
+            if result.status != deploy_state.FAILED
+            and (not result.from_local_state or result.workspace is not None)
+            else None,
+        ),
+    )
     if result.status == deploy_state.FAILED:
         ctx.exit(1)
     if result.status == deploy_state.RUNNING:

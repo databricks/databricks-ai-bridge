@@ -316,17 +316,19 @@ run separately in the private integration runner and are not included in this ga
 Completion events retain the existing command path, exit code, error category, and bounded option
 values. Deployment commands also record observed state in `deployment_outcome`, using
 `DEPLOYMENT_OUTCOME_UNSPECIFIED`, `DEPLOYMENT_OUTCOME_RUNNING`, `DEPLOYMENT_OUTCOME_SUCCEEDED`, or
-`DEPLOYMENT_OUTCOME_FAILED`. For command-result analysis, interpret an interrupted category first, then `deployments wait` with exit 75 as pending, then `deploy` with exit 0 and an
-explicitly true no-wait option as submitted, then exit 0 as succeeded, and other exits as failed.
+`DEPLOYMENT_OUTCOME_FAILED`. For command-result analysis, interpret an interrupted category first,
+then `deployments wait` with exit 75 as pending, then `deploy` with exit 0 and an explicitly true
+no-wait option as submitted, then exit 0 as succeeded, and other exits as failed.
 Exclude interruptions, pending waits, and background submissions from a product failure-rate
 denominator and report them separately. Missing events are unknown coverage, not success.
 
 Deployment operation UUIDs remain in local state and the background worker; they are not uploaded.
 The uploaded `invocation_id` is generated separately for each command and joins details-link
 arrivals to that command. It is independent of the local deployment operation UUID connecting
-launcher, worker, and waits. Use the FrontendLog event ID to deduplicate uploads. These logs measure command invocations, not
-unique deployment attempts: repeated `deployments wait` rows must not be added to the deployment
-failure-rate denominator. The current schema cannot correlate a launcher with its worker or waits.
+launcher, worker, and waits. Use the FrontendLog event ID to deduplicate uploads. These logs measure
+command invocations, not unique deployment attempts: repeated `deployments wait` rows must not be
+added to the deployment failure-rate denominator. The current schema cannot correlate a launcher
+with its worker or waits.
 
 For startup analysis, segment `dev` invocations by error category, platform, and package version,
 and inspect regional `failure_message` where retained. Startup milestones, child exit codes,
