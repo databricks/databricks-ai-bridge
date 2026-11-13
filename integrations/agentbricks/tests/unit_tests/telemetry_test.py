@@ -24,6 +24,7 @@ import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.clients import databricks_cli
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage, Readiness
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.group import AgentBricksCommand
@@ -1080,6 +1081,24 @@ def test_parameter_entry_preserves_false_boolean_value():
     )
     entry = telemetry._ParameterEntry.from_option("agentbricks init.existing", option, False)
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
+
+
+def test_workflow_observations_are_not_emitted():
+    context = _Context()
+    context.obj.diagnostics = CommandDiagnostics(
+        failure_stage=FailureStage.ROLLOUT,
+        readiness=Readiness.UNREACHABLE,
+        probe_http_status=503,
+        app_listened=True,
+        time_to_listen_ms=100,
+        prepare_environment=True,
+        subprocess_exit_code=17,
+    )
+    error = ValueError("service error")
+    assert _log(context, exit_code=1, exception=error) == _log(
+        _Context(), exit_code=1, exception=error
+    )
+    assert _log(context, exit_code=0) == _log(_Context(), exit_code=0)
 
 
 def test_failed_subprocess_detail_is_scrubbed_before_upload():

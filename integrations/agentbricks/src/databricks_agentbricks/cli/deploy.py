@@ -39,6 +39,7 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
+from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     deploy_result_payload,
@@ -102,6 +103,7 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
     A deploy records its progress in the project's state file through a reporter that wraps the
     terminal one; ``background`` marks the detached child of `deploy --no-wait`.
     """
+    diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
     api_client_provider = obj.api_client_provider
     state_tracker = DeployStateTracker(result_payload=deploy_result_payload, background=background)
     reporter = DeployStateReporter(ClickReporter(), state_tracker)
@@ -130,6 +132,7 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
         model_binding_provisioner=ModelBindingProvisioner(api_client_provider, reporter),
         reporter=reporter,
         state_tracker=state_tracker,
+        diagnostics=diagnostics,
         app_probe=AppProbe(WorkspaceOAuthAuthenticator(obj.profile).authorization_header),
     )
 

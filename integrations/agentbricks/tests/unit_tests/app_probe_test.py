@@ -62,7 +62,7 @@ def _probe() -> AppProbe:
 def test_probe_classifies_the_status(server: str, status: int, outcome: ProbeOutcome):
     _Stub.status = status
 
-    assert _probe().probe(server) == ProbeResult(outcome, f"HTTP {status}")
+    assert _probe().probe(server) == ProbeResult(outcome, f"HTTP {status}", status)
 
 
 def test_probe_gets_the_root_with_the_bearer_and_does_not_follow_redirects(server: str):
@@ -74,14 +74,15 @@ def test_probe_gets_the_root_with_the_bearer_and_does_not_follow_redirects(serve
     assert _Stub.seen == [("/", "Bearer tok")]
 
 
-def test_probe_counts_an_unreachable_app_as_booting():
+def test_probe_distinguishes_unreachable_from_booting():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
 
     result = _probe().probe(f"http://127.0.0.1:{port}")
 
-    assert result.outcome == "booting"
+    assert result.outcome == "unreachable"
+    assert result.http_status is None
 
 
 def test_probe_without_an_oauth_token_is_unverifiable_and_sends_nothing(server: str):
