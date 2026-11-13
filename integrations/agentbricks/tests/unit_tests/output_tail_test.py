@@ -124,12 +124,14 @@ def test_idle_reader_stops_while_a_descendant_keeps_the_pipe_open():
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="uses Linux pipe sizing")
-def test_slow_open_destination_preserves_every_byte_after_child_exit():
+@pytest.mark.parametrize("blocking", [True, False])
+def test_slow_open_destination_preserves_every_byte_after_child_exit(blocking):
     import fcntl
 
     payload = b"x" * 10000 + b"\nFINAL-FAILURE\n"
     read_fd, write_fd = os.pipe()
     fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+    os.set_blocking(write_fd, blocking)
     received = bytearray()
     child_exited = threading.Event()
 

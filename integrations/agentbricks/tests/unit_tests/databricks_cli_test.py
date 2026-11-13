@@ -357,12 +357,15 @@ def test_closed_output_destination_keeps_draining_child():
 @pytest.mark.skipif(
     os.name != "posix", reason="uses POSIX process-group signals and pipe readiness"
 )
-def test_interrupt_does_not_wait_for_a_blocked_output_consumer(tmp_path):
+@pytest.mark.parametrize("blocking", [True, False])
+def test_interrupt_does_not_wait_for_a_blocked_output_consumer(tmp_path, blocking):
     ready = tmp_path / "output-blocked"
     child = "import os; os.write(1, b'x' * 1000000)"
     runner = f"""
-import pathlib, select, sys
+import os, pathlib, select, sys
 from databricks_agentbricks.clients.databricks_cli import _run_until_ready
+
+os.set_blocking(1, {blocking})
 
 def probe():
     if not select.select([], [1], [], 0)[1]:
