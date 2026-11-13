@@ -80,12 +80,14 @@ class AgentCliError(click.ClickException):
         *,
         error_code: Optional[str] = None,
         hint: Optional[str] = None,
+        error_category: str | None = None,
         subprocess_exit_code: int | None = None,
         failure_detail: str | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
+        self.error_category = error_category
         self.subprocess_exit_code = subprocess_exit_code
         self.failure_detail = failure_detail
 

@@ -311,12 +311,15 @@ def test_service_code_classification_takes_precedence_over_wrapped_transport_err
 
 
 def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
-    error = AgentCliError("private", error_code="private-user-defined-code")
+    error = AgentCliError(
+        "private", error_code="private-user-defined-code", error_category="private-user-category"
+    )
     error.__cause__ = error
     assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
     log = _log(_Context(), exit_code=1, exception=error)
     assert log["failure_message"] == "private"
     assert "private-user-defined-code" not in json.dumps(log)
+    assert "private-user-category" not in json.dumps(log)
 
 
 def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):

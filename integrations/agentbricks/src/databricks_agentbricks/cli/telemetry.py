@@ -314,6 +314,9 @@ def _error_category(exc: BaseException) -> str:
         return "ERROR_CATEGORY_INTERRUPTED"
     chain = list(_exception_chain(exc))
     for error in chain:
+        category = getattr(error, "error_category", None)
+        if isinstance(category, str) and category in _ERROR_CATEGORIES:
+            return category
         code = getattr(error, "error_code", None)
         if isinstance(code, str) and (category := _SERVICE_ERROR_CATEGORIES.get(code.upper())):
             return category

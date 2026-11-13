@@ -129,7 +129,6 @@ command path, package version, operating system, duration, and process outcome (
 nonzero exits, a bounded error category). Failures can also include up to 4096 UTF-8 bytes of
 error text in `failure_message`. Error text includes exception messages and fully captured
 failed subprocess output, with recognized credentials, paths, and email addresses scrubbed.
-Streaming output tails are omitted because they may have discarded credential context.
 Combined failure text over 65,536 characters is also omitted before scrubbing.
 Credential assignments, auth headers, credential options, and encoded text cause the remaining
 captured text to be omitted; preceding diagnostic text is retained. This avoids parsing arbitrary
@@ -139,6 +138,14 @@ may remain in service responses or application output.
 It is labeled `DATA_LABEL_USER_COMMANDS_RESPONSE`, excluded from centralized logfood, and retained
 regionally only where customer logging and encryption policies permit. Error text is omitted for
 parser errors and interruptions. Collection requires Legal approval and schema deployment.
+For `dev`, failure text can include complete child output up to 3072 bytes per captured stream.
+Once a stream exceeds that limit, all its retained text is permanently discarded and replaced with
+`[REDACTED]`, including later plain error messages, because partial output may have lost credential
+context. Short complete output is scrubbed before upload, including private keys. Displayed child
+output is unchanged. With one output stream redirected, the terminal stream is inherited unchanged
+and only the redirected stream is retained. When both streams point to the same regular file, both
+are inherited without capture to preserve their original offsets and redirection behavior.
+Startup milestones remain internal; a killed process or unavailable upload can still leave no event.
 Parameter entries include explicitly supplied options
 and parsed Click defaults with supported typed values, automatically across all commands and
 parent groups. Declare defaults in Click options so the shared emitter can read the resolved
