@@ -25,7 +25,8 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
   [development and deployment](references/deployment.md) for local-versus-deployed behavior.
 - **Deployment or proof of life:** read [development and deployment](references/deployment.md).
   If the goal is a deployed agent, a local dev server is optional, not a prerequisite. Retain
-  relevant offline checks and perform only the live validation the user has requested.
+  relevant offline checks and perform only the live validation the user has requested. Deploy needs
+  a project `app.yaml` with a real `command:`; deploy never creates one.
 - **Tools, memory, sessions, store permissions, or tracing:** read
   [state and tools](references/state-and-tools.md) for resource identity, permissions, and focused
   diagnostics.
@@ -33,7 +34,7 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
 ## Work from installed evidence
 
 Run `agentbricks <command> --help` for the relevant command, not every command in the CLI.
-Global `--profile/-p` and `--output/-o` precede subcommands. Use `--output json` when consuming
+Global `--profile/-p` precedes subcommands; `--output/-o` goes before or after them. Use `--output json` when consuming
 command results programmatically. Resource lists are workspace-wide, not proof of project ownership.
 
 In scaffolded projects, `AGENTKIT_CONTRACT.md` owns runtime wiring and transport requirements;

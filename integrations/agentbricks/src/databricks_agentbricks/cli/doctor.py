@@ -25,6 +25,7 @@ from packaging.utils import canonicalize_name
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import ManifestProblem, manifest_problems
+from databricks_agentbricks.projects.app_manifest import is_placeholder_command
 from databricks_agentbricks.projects.types import CUSTOM_FRAMEWORK
 from databricks_agentbricks.services.deployment.names import (
     _MAX_DEPLOYMENT_NAME_LEN,
@@ -436,9 +437,7 @@ def _app_command(root: pathlib.Path) -> DoctorCheck:
         return _check(
             "app_command", False, f"{path} must declare a non-empty command string or list."
         )
-    rendered = command if isinstance(command, str) else " ".join(command)
-    normalized = rendered.casefold()
-    if "replace_with" in normalized or "# todo: set your run command" in normalized:
+    if is_placeholder_command(command):
         return _check("app_command", False, f"{path} still contains a placeholder command.")
     return _check("app_command", True, "app.yaml declares a non-empty startup command.")
 

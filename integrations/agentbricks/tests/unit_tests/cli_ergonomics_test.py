@@ -3,9 +3,13 @@ delete confirmation, flag aliases, sessions get guard, and fork positional arg."
 
 from __future__ import annotations
 
+import json
+
+import click
 import pytest
 from click.testing import CliRunner
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.cli.memory import _normalize_source_type, entries, stores
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.errors import AgentCliError
@@ -180,3 +184,240 @@ def test_fork_ambiguous_source_errors():
     )
     assert result.exit_code != 0
     assert client.calls == []
+
+
+# --- -o/--output after the command -------------------------------------------
+
+
+class _StoreClient:
+    host = "https://example.databricks.com"
+
+    def create_session_store(self, name, description=None, metadata=None):
+        return {"name": f"session-stores/{name}", "description": description}
+
+    def create_memory_store(self, display_name, description=None):
+        return {"name": "memory-stores/new", "display_name": display_name}
+
+    def delete_session_store(self, name):
+        return None
+
+
+def _reset_output_modes():
+    """Clear both process-global error modes, including the line-level one a CLI run leaves behind."""
+    errors.set_output_mode("text")
+    errors.set_usage_output_mode(None)
+
+
+@pytest.fixture
+def root(monkeypatch):
+    """The real root group with a fake client; resets the process-global error modes afterwards."""
+    from databricks_agentbricks.cli import app
+
+    monkeypatch.setattr(app.CliContext, "client", lambda self: _StoreClient())
+    yield app.agentbricks
+    _reset_output_modes()
+
+
+def _command_paths(group, prefix=()):
+    for name, command in group.commands.items():
+        yield (*prefix, name)
+        if isinstance(command, click.Group):
+            yield from _command_paths(command, (*prefix, name))
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "stores", "create", "--name", "s"],
+        ["memory", "stores", "create", "--name", "m"],
+    ],
+)
+def test_output_after_command_matches_root_placement(root, args):
+    before = CliRunner().invoke(root, ["-o", "json", *args])
+    after = CliRunner().invoke(root, [*args, "-o", "json"])
+    assert after.exit_code == before.exit_code == 0, after.output
+    assert after.stdout == before.stdout
+    assert json.loads(after.stdout)
+
+
+@pytest.mark.parametrize("flag", [["--output", "json"], ["--output=json"], ["-ojson"]])
+@pytest.mark.parametrize("first", [True, False])
+def test_output_spellings_anywhere_among_options(root, flag, first):
+    rest = ["--name", "s", "--description", "d"]
+    args = [*flag, *rest] if first else [*rest, *flag]
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", *args])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["name"] == "session-stores/s"
+
+
+def test_output_after_command_wins_over_root(root):
+    cmd = ["sessions", "stores", "create", "--name", "s"]
+    as_json = CliRunner().invoke(root, ["-o", "text", *cmd, "-o", "json"])
+    assert json.loads(as_json.stdout)["name"] == "session-stores/s"
+    as_text = CliRunner().invoke(root, ["-o", "json", *cmd, "-o", "text"])
+    assert as_text.exit_code == 0
+    assert not as_text.stdout.lstrip().startswith("{")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "stores", "create", "--bogus", "-o", "json"],
+        ["sessions", "stores", "create", "-o", "json"],
+        ["memory", "stores", "create", "--bogus", "--output=json"],
+    ],
+)
+def test_usage_errors_render_json_with_output_after_command(root, args):
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "frobnicate", "-o", "json"],
+        ["frobnicate", "-o", "json"],
+        ["--bogus", "sessions", "stores", "list", "-o", "json"],
+    ],
+)
+def test_failures_before_the_command_still_render_json_with_trailing_output(root, args):
+    """An unknown command or bad root option fires before any callback, so rendering follows the
+    raw line's trailing `-o json` too."""
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code != 0
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_telemetry_records_output_after_command_like_before_it(root, monkeypatch):
+    from databricks_agentbricks.cli import telemetry
+
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kwargs: records.append(telemetry._build_log(ctx, **kwargs).to_dict()),
+    )
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    assert result.exit_code == 0, result.output
+    parameters = {entry["name"]: entry for entry in records[0]["parameters"]}
+    assert parameters["agentbricks.output"] == {
+        "name": "agentbricks.output",
+        "choice_value": "AGENTBRICKS_CLI_JSON",
+    }
+
+
+def test_every_command_accepts_output_and_lists_it_in_help(root):
+    paths = list(_command_paths(root))
+    assert len(paths) > 50
+    for path in paths:
+        result = CliRunner().invoke(root, [*path, "-o", "json", "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        assert "-o, --output [text|json]" in result.stdout, path
+
+
+@pytest.mark.parametrize("at", [1, 2])
+def test_output_between_group_names_matches_root_placement(root, at):
+    cmd = ["sessions", "stores", "create", "--name", "s"]
+    before = CliRunner().invoke(root, ["-o", "json", *cmd])
+    between = CliRunner().invoke(root, [*cmd[:at], "-o", "json", *cmd[at:]])
+    assert between.exit_code == before.exit_code == 0, between.output
+    assert between.stdout == before.stdout
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [
+            "sessions",
+            "stores",
+            "create",
+            "--name",
+            "s",
+            "--description",
+            "--output=text",
+            "--bogus",
+        ],
+        [
+            "sessions",
+            "stores",
+            "create",
+            "--name",
+            "s",
+            "--description",
+            "--output",
+            "text",
+            "--bogus",
+        ],
+        ["sessions", "stores", "create", "--name", "s", "--description", "--output", "text"],
+    ],
+)
+def test_option_value_that_looks_like_output_does_not_override_root(root, args):
+    """`--output` consumed as an option's value is not an output choice, so the root `-o json` holds."""
+    result = CliRunner().invoke(root, ["-o", "json", *args])
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_output_flag_consumed_as_option_value_stays_text(root):
+    """Click reads `-o` as `--description`'s value, so no output option was parsed and the usage
+    error renders as text - matching what Click itself decided."""
+    result = CliRunner().invoke(
+        root, ["sessions", "stores", "create", "--name", "s", "--description", "-o", "json"]
+    )
+    assert result.exit_code == 2
+    assert "{" not in result.stderr
+    assert "error:" in result.stderr
+
+
+def test_flag_named_like_a_value_option_elsewhere_keeps_trailing_output(root):
+    """`--auth` is a flag on `endpoint invoke` but takes a value on `tools add`; only the command's
+    own options decide, so its trailing `-o json` still counts."""
+    result = CliRunner().invoke(
+        root, ["-o", "text", "endpoint", "invoke", "--auth", "-o", "json", "--bogus"]
+    )
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_invalid_output_after_command_lists_choices(root):
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "yaml"])
+    assert result.exit_code == 2
+    assert "'yaml' is not one of 'text', 'json'" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-o", "text", "sessions", "stores", "delete", "example", "-yojson", "--bogus"],
+        ["-o", "text", "sessions", "stores", "delete", "example", "-yo", "json", "--bogus"],
+        ["sessions", "stores", "delete", "example", "-yojson", "--bogus"],
+    ],
+)
+def test_output_inside_short_option_cluster_renders_json_errors(root, args):
+    """`-y` is a flag and `-o` takes the rest of the cluster (or the next token), as in Click."""
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_output_inside_short_option_cluster_parses_as_json(root):
+    result = CliRunner().invoke(
+        root, ["-o", "text", "sessions", "stores", "delete", "example", "-yojson"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"deleted": "example"}
+
+
+def test_reset_clears_error_mode_left_by_an_output_line(root):
+    """A CLI run leaves its `-o` choice behind; the reset must clear it too, or later error
+    rendering in other tests would come out as JSON."""
+    CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    assert errors.error_output_mode() == "json"
+    _reset_output_modes()
+    assert errors.error_output_mode() == "text"
