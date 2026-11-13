@@ -19,6 +19,7 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.clients import databricks_cli
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage, Readiness
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.group import AgentBricksCommand
@@ -788,6 +789,45 @@ def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeyp
     )
     assert len(api.calls) == 1
     assert _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"] == detail
+
+
+@pytest.mark.parametrize(
+    "opening", ["credentials:\n", "--password\n", "-----BEGIN PRIVATE KEY-----\n"]
+)
+@pytest.mark.parametrize("capture", [False, True])
+def test_truncated_streamed_output_is_not_uploaded(monkeypatch, capsys, opening, capture):
+    output = opening + " \n" * 2000 + "synthetic-opaque-value\n"
+
+    class Process:
+        returncode = 17
+
+        def __enter__(self):
+            self.stdout = iter(output.splitlines(keepends=True))
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(databricks_cli.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    with pytest.raises(AgentCliError) as raised:
+        databricks_cli._databricks(
+            ["sync", "source", "destination"],
+            None,
+            tee=True,
+            capture=capture,
+            action="Could not upload agent source.",
+        )
+    assert raised.value.subprocess_exit_code == 17
+    assert capsys.readouterr().err == output
+
+    api = _ApiClient()
+    telemetry.emit_command(_Context(api), exit_code=1, execution_time_ms=1, exception=raised.value)
+    assert len(api.calls) == 1
+    log = _inner(api.calls[0][2])["agentbricks_cli_log"]
+    assert log["exit_code"] == 1
+    assert log["failure_message"].startswith("Could not upload agent source.")
+    assert "synthetic-opaque-value" not in json.dumps(api.calls[0][2])
 
 
 def test_uploaded_signal_diagnosis_preserves_reason_and_minimizes_assignment_paths(monkeypatch):
