@@ -33,8 +33,8 @@ a profile, the Databricks SDK's default authentication resolution is used. See
 
 ## Global options
 
-These options apply to every command. Pass them before the command name, for example
-`agentbricks -p my-profile -o json sessions stores list`.
+These options apply to every command. `--profile` goes before the command name; `--output` goes
+before or after it, for example `agentbricks -p my-profile sessions stores list -o json`.
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
@@ -633,7 +633,7 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
-| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled or always-on runs; active runs continue and manual runs remain available. |
 | [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
 | [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
@@ -650,7 +650,7 @@ agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [opt
 | `--model` | string | - | no | Model service used for Dreamer distillation. |
 | `--display-name` | string | - | no | Optional human-readable pipeline name. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
-| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | `manual` | no | How runs start: only when you start one, or also automatically about every 24 hours. |
+| `--trigger <manual\|scheduled\|always-on>` | `manual` \| `scheduled` \| `always-on` | `manual` | no | How runs start: only when you start one, also automatically about every 24 hours, or always-on (distill as sessions update, plus daily maintenance). |
 
 ```bash
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
@@ -663,6 +663,17 @@ Create a pipeline that also runs automatically about every 24 hours:
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
   --trigger scheduled
 ```
+
+Create an always-on pipeline, which distills each actor's sessions as they update and runs
+maintenance daily:
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --trigger always-on
+```
+
+`always-on` requires always-on extraction to be enabled in the workspace; otherwise the API
+returns `FEATURE_DISABLED`.
 
 ##### `agentbricks memory pipeline list`
 
@@ -693,7 +704,7 @@ agentbricks memory pipeline update NAME [options]
 | --- | --- | --- | --- | --- |
 | `--display-name` | string | - | no | New human-readable pipeline name. |
 | `--model` | string | - | no | Model service for distillation; empty string clears the override. |
-| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | - | no | How runs start: only when you start one, or also automatically about every 24 hours. |
+| `--trigger <manual\|scheduled\|always-on>` | `manual` \| `scheduled` \| `always-on` | - | no | How runs start: only when you start one, also automatically about every 24 hours, or always-on (distill as sessions update, plus daily maintenance). |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
 
 Load complex instructions from a UTF-8 file (also supported by `create`):
@@ -707,8 +718,9 @@ Instructions are sent as `dreamer_policy.instructions` with that leaf field in t
 `--model ""` clears the override. Create and update send only `dreamer_policy.model`;
 updates use the `dreamer_policy.model` field mask. There is no legacy top-level model fallback.
 List and detail views accept either model location, preferring the nested value when present.
-`--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
-`scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
+`--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, `scheduled`
+maps to `SCHEDULED`, and `always-on` maps to `ALWAYS_ON`. Omit the flag to preserve the current
+trigger.
 
 ##### `agentbricks memory pipeline pause`
 
@@ -716,7 +728,7 @@ List and detail views accept either model location, preferring the nested value 
 agentbricks memory pipeline pause NAME
 ```
 
-Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled or always-on runs. Active runs continue;
 manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
 Returns an error if the pipeline is already manual-only (paused).
 
@@ -728,7 +740,9 @@ agentbricks memory pipeline resume NAME
 
 Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
 This also enables scheduling for a pipeline originally created as manual-only.
-Returns an error if the pipeline is already scheduled (resumed).
+Returns an error if the pipeline is already scheduled or always-on (resumed), so `resume`
+never downgrades an always-on pipeline. To return a paused pipeline to always-on, use
+`update --trigger always-on`.
 Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`
@@ -775,7 +789,8 @@ agentbricks --profile dogfood memory pipeline runs get \
 
 `NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command calls
 `GET /api/2.0/agents/{NAME}` using the selected profile and the complete run resource name.
-Text output renders pipeline run details; global `--output json` returns the native
+Text output renders pipeline run details, including actors succeeded, skipped, and failed and
+entries written from the run's `stats`; global `--output json` returns the native
 `PipelineRun` response. It no longer invokes `databricks jobs get-run` or returns the Jobs JSON schema.
 
 ##### `agentbricks memory pipeline run`
@@ -1416,7 +1431,7 @@ default = "system.ai.claude-haiku-4-5"
 
 [experimental.model_services.writer]
 name = "main.my_agent.writer_llm"
-default = "system.ai.claude-sonnet-4-5"
+default = "system.ai.claude-sonnet-5-5"
 ```
 
 `agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service takes effect without a code change or redeploy, and `models upgrade` searches every role's model, plus the prompts bound with [`experimental prompts`](#agentbricks-experimental-prompts), together. Upgrade runs and switches are recorded in `.agentbricks/model_upgrades.json`; switches can be rolled back.
@@ -1681,7 +1696,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--source <SOURCE>` | path | `.` | no | Local source directory for the deployment (containing app.yaml). Defaults to the current directory. |
+| `--source <SOURCE>` | path | `.` | no | Project directory (with app.yaml). Defaults to the current directory. |
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
@@ -1690,7 +1705,7 @@ _Options_
 | `--allow-user-scope-update` | flag | - | no | Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool inference and `[auth.user]` additions. Once added, later deploys do not need this flag. |
 | `--no-wait` | flag | - | no | Run the quick checks, then finish the deploy in a background process and exit. Follow it with `agentbricks deployments wait`. |
 
-`deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. After rollout, `deploy` waits up to 5 minutes for the app to stop returning 502/503/504 (`• Waiting for the agent to answer…`), then prints `Deployed`; if it never answers, it exits 1 and points at `agentbricks deployments logs <app>`. When the profile can't call the app (a PAT, or 401/403), it prints `Couldn't check the agent answers: <reason>.` on stderr and still succeeds. The `-o json` result includes `"ready"`: `true` once the app answered, `null` when it couldn't be checked. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
+`deploy` exits 1 before deploying or creating any resources when the source has no app.yaml, or its app.yaml can't be parsed or still has a placeholder command. `deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. After rollout, `deploy` waits up to 5 minutes for the app to stop returning 502/503/504 (`• Waiting for the agent to answer…`), then prints `Deployed`; if it never answers, it exits 1 and points at `agentbricks deployments logs <app>`. When the profile can't call the app (a PAT, or 401/403), it prints `Couldn't check the agent answers: <reason>.` on stderr and still succeeds. The `-o json` result includes `"ready"`: `true` once the app answered, `null` when it couldn't be checked. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
 
 ### `agentbricks deployments`
 
@@ -1920,7 +1935,7 @@ Warm-up has its own user identity. `{{uuid}}` is an alias for the current reques
 agents, use request_id as the invocation idempotency key and user_id as the session ID: reusing a
 fixed invocation ID can replay cached results. App routing defaults to the same per-user identity.
 
-With `--output json` before `endpoint`, stdout is the Agent Bricks summary object, identical to
+With `--output json`, stdout is the Agent Bricks summary object, identical to
 `summary.json`. Progress stays on stderr. The summary includes
 successful-only latency, all-completed latency, TTFT/usage coverage, and incomplete counts.
 Runtime usage sums distinct model messages, updating rather than recounting repeated message IDs.

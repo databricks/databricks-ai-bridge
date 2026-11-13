@@ -192,6 +192,30 @@ def test_cli_get_text_explains_no_access(target, monkeypatch):
     assert "No access" in result.output and "reader@example.com" in result.output
 
 
+def test_cli_grant_help_shows_uppercase_permission_values(target, monkeypatch):
+    result = _run(target, monkeypatch, ["grant", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "[READ|WRITE]" in result.output and "[read|write]" not in result.output
+
+
+def test_cli_grant_invalid_permission_lists_uppercase_values(target, monkeypatch):
+    result = _run(
+        target, monkeypatch, ["grant", "test-store", "--user", "a", "--permission", "NONE"]
+    )
+    assert result.exit_code == 2
+    assert "is not one of 'READ', 'WRITE'" in result.output
+    target.do.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["read", "Read", "READ"])
+def test_cli_grant_accepts_any_permission_case(target, monkeypatch, value):
+    args = ["grant", "test-store", "--user", "a", "--permission", value]
+    result = _run(target, monkeypatch, args, output="text")
+    assert result.exit_code == 0, result.output
+    assert target.do.call_args.kwargs["body"] == _permission("a", "READ")
+    assert "Granted READ" in result.output
+
+
 @pytest.mark.parametrize(
     "flag,kind,name",
     [

@@ -45,6 +45,8 @@ from databricks_agentbricks.services.deployment.provisioners import (
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan, WorkspaceGrant
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Build a DeployService with the concrete ToolAccessProvisioner and fake external clients."""

@@ -1433,6 +1433,13 @@ def _make_litellm_reflection_lm(reflection_model):
     def _lm(prompt):
         messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
         completion = litellm.completion(model=model, messages=messages)
+        # A sync, non-streaming call returns a ModelResponse. Newer litellm types `completion` as a
+        # union that also covers streaming (CustomStreamWrapper) and async (Coroutine) results.
+        if not isinstance(completion, litellm.ModelResponse):
+            raise TypeError(
+                "Expected a litellm ModelResponse from the reflection model, "
+                f"got {type(completion).__name__}."
+            )
         return completion.choices[0].message.content
 
     return _lm

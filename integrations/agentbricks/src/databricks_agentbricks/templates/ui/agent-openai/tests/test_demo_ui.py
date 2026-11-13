@@ -138,8 +138,8 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     if history:
         monkeypatch.setattr(ui, "_local_history", _session_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
-    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
+    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-5-5"])
 
     async def invoke_handler(request, context):
         return {"output": []}
@@ -226,8 +226,8 @@ def test_demo_ui_routes(monkeypatch):
     assert config["session_id"] == "routing-session"
     assert config["deployed"] is False
     assert config["models"] == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "available": ["system.ai.claude-sonnet-4-5"],
+        "default": "system.ai.claude-sonnet-5-5",
+        "available": ["system.ai.claude-sonnet-5-5"],
     }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
@@ -244,8 +244,8 @@ def test_demo_ui_routes(monkeypatch):
     assert client.get("/api/demo/config").status_code == 404
 
     assert client.get("/api/demo/models").json() == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "available": ["system.ai.claude-sonnet-4-5"],
+        "default": "system.ai.claude-sonnet-5-5",
+        "available": ["system.ai.claude-sonnet-5-5"],
     }
 
     sessions = client.get("/api/demo/sessions").json()
@@ -323,19 +323,41 @@ def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
     assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is True
 
 
+def test_demo_config_reports_the_local_profile_and_no_viewer_without_an_identity(monkeypatch):
+    # Locally the chip says which Databricks profile the agent signs in with; with no forwarded
+    # identity there is no viewer name to show.
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "my-workspace")
+    config = _client(monkeypatch).get("/api/ui/config").json()
+    assert config["profile"] == "my-workspace"
+    assert config["viewer"] is None
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["profile"] is None
+
+
+def test_demo_config_reports_a_bound_memory_store_that_connects_on_deploy(monkeypatch):
+    # `agentbricks dev` keeps memory off but names the bound store, so the card can say it connects
+    # on deploy instead of reading as missing.
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE", "agent-memory")
+    memory = _client(monkeypatch).get("/api/ui/config").json()["memory"]
+    assert memory["enabled"] is False
+    assert memory["bound_store"] == "agent-memory"
+    monkeypatch.delenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["memory"]["bound_store"] is None
+
+
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
     client = _client(monkeypatch)
     calls = []
     monkeypatch.setattr(
         ui,
         "_discover_chat_models",
-        lambda: calls.append(True) or ["system.ai.claude-sonnet-4-5", "system.ai.llama-4-maverick"],
+        lambda: calls.append(True) or ["system.ai.claude-sonnet-5-5", "system.ai.llama-4-maverick"],
     )
 
     assert client.get("/api/ui/config").status_code == 200
     assert calls == []
     assert client.get("/api/demo/models").json()["available"] == [
-        "system.ai.claude-sonnet-4-5",
+        "system.ai.claude-sonnet-5-5",
         "system.ai.llama-4-maverick",
     ]
     assert calls == [True]
@@ -404,13 +426,13 @@ def test_chat_session_items_exclude_non_message_items():
 
 
 def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
         lambda _client: [
             "system.ai.llama-4-maverick",
-            "system.ai.claude-sonnet-4-5",
+            "system.ai.claude-sonnet-5-5",
             "system.ai.claude-opus-4-8",
         ],
     )
@@ -418,14 +440,14 @@ def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
 
     # Default pinned first, the rest alphabetical, and the default not repeated by discovery.
     assert ui._discover_chat_models() == [
-        "system.ai.claude-sonnet-4-5",
+        "system.ai.claude-sonnet-5-5",
         "system.ai.claude-opus-4-8",
         "system.ai.llama-4-maverick",
     ]
 
 
 def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
 
     def _boom(_client):
         raise PermissionError("cannot read system.ai")
@@ -434,11 +456,11 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     # A workspace that can't list the gateway still gets a working picker.
-    assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
+    assert ui._discover_chat_models() == ["system.ai.claude-sonnet-5-5"]
 
 
 def test_discover_chat_models_keeps_every_model(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
@@ -447,7 +469,7 @@ def test_discover_chat_models_keeps_every_model(monkeypatch):
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     result = ui._discover_chat_models()
-    assert result == ["system.ai.claude-sonnet-4-5"] + [
+    assert result == ["system.ai.claude-sonnet-5-5"] + [
         f"system.ai.test-model-{i:03d}" for i in range(30)
     ]
 
@@ -485,6 +507,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "store": "memory-stores/store",
         "actor": "alice",
         "pipelines": False,
+        "bound_store": None,
     }
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"

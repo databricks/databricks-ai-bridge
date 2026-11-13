@@ -780,3 +780,14 @@ def test_dev_waits_for_the_agent_port(tmp_path: pathlib.Path, monkeypatch):
         )
     assert result.exit_code == 0, result.output
     assert probed == [54321]  # the stubbed free port the agent serves on, behind the proxy on 9000
+
+
+def test_dev_passes_a_starting_status_for_quiet_gaps(tmp_path: pathlib.Path):
+    # dev hands run-local a status line to show while its output is quiet before the agent answers.
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts) as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    status = db.call_args.kwargs["quiet_status"](12.4)
+    assert "Starting the agent… 0:12" in status
+    assert status[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"

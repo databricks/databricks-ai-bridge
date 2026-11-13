@@ -1315,3 +1315,20 @@ def test_summary_lists_candidates_rejected_on_the_sample(capsys):
     rows = [line for line in out.splitlines() if line.rstrip().endswith("rejected on sample")]
     assert len(rows) == 2
     assert out.index("claude-haiku-5-5") < out.index("gpt-6-luna")  # sorted by score
+
+
+@pytest.mark.parametrize("args", [["--help"], ["bind", "--help"]])
+def test_models_help_examples_use_the_template_default_model(args: list[str]):
+    result = CliRunner().invoke(models, args)
+
+    assert result.exit_code == 0, result.output
+    assert "--default system.ai.claude-sonnet-5-5" in result.output
+    assert "claude-sonnet-4-5" not in result.output
+
+
+@pytest.mark.parametrize("doc", ["cli.md", "README.md"])
+def test_model_service_docs_use_the_template_default_model(doc: str):
+    text = (pathlib.Path(__file__).parents[2] / doc).read_text()
+
+    assert "system.ai.claude-sonnet-5-5" in text
+    assert "claude-sonnet-4-5" not in text

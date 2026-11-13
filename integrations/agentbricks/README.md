@@ -121,7 +121,8 @@ credentials.
 
 If Databricks SDK default authentication is already configured, you can skip `agentbricks login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
+`agentbricks --profile <profile> tools list`. Use `--output json` (before or after the command) for
+scripting.
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
@@ -150,6 +151,25 @@ thread, returning sooner if the worker finishes. This is not a delivery guarante
 uploads can be lost when the process exits after the allowance expires. Missing credentials or a
 failed upload never change the command result.
 
+Deploy and `deployments wait` telemetry includes a random invocation UUID, whether a gated
+agent-details link was printed, the observed deployment state, and whether the process is an
+internal background child. Details links carry the invocation UUID so browser arrivals can be
+joined to the command that printed them. The UUID contains no agent name or authentication data.
+Rollout outcomes are recorded independently of link availability, including failed rollouts;
+preparation failures leave the deployment outcome unspecified.
+`AGENTBRICKS_DISABLE_TELEMETRY=1` also removes these attribution parameters while keeping the link.
+`deployments get` and `deployments list` also attach a per-command UUID to details links.
+All rows from one list share one UUID and one command event; their deployment outcome stays
+unspecified because these commands only read state. List links count as emitted only when JSON
+output or terminal hyperlink rendering preserves their targets. Plain redirected output and
+terminal modes that strip hyperlink targets keep `details_link_emitted=false`; use `--output json`
+to capture the URLs. Group arrivals by the joined event's
+`command_path` to distinguish deploy, wait, get, and list. Count distinct invocation IDs, rather
+than list rows or repeated page loads, for command conversion percentages.
+A wait command has its own invocation ID; it is not another deploy. Exclude background children
+from user-invoked command counts. Link arrivals measure browser opens, including copied links,
+not terminal mouse clicks or proof that the deployer and viewer are the same person.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
@@ -165,6 +185,12 @@ agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
+Memory and session stores are off by default in `agentbricks dev`, even when a store is bound in
+`agent.toml`: the chat app shows "Not connected" for memory, and conversation state stays in
+process. They connect after `agentbricks deploy`. To use real stores locally, set
+`AGENT_MEMORY_STORE` (the Store ID) and `AGENT_SESSION_STORE` (the store name) in the project's
+`.env`.
+
 `agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
 project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
@@ -178,6 +204,18 @@ it yourself, or `agentbricks deploy <name>` to change it later.
 The app's compute starts first and boots while the other resources are provisioned. If a first
 deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
 it with `agentbricks deployments delete agent-bricks-my-agent`.
+
+When the workspace has both the Agent Memory Sessions beta and the new Agents UI enabled,
+deploy output also includes an **Agent details** link to the workspace management page. This
+applies to first deploys, redeploys, `--no-wait`, and `deployments wait`.
+`deployments get` shows the same link alongside the app URL; `deployments list` links agent
+names to their details pages and keeps a separate **Open app** link. JSON output adds
+`details_url` when available and retains `url` for the deployed agent. The optional flag lookup
+waits at most two seconds per command, including lists; unavailable or disabled flags omit the
+link without affecting the command.
+When following a local deploy record, `deployments wait` also requires its recorded workspace
+host and ID to match the selected profile. Older records or records without a workspace ID omit
+the management link; the recorded deployment status and invocation URL are still available.
 
 ### Deploying from a coding agent
 
@@ -627,8 +665,9 @@ it in `recall` and `list_memories`. `memory_tools` resolves the store from the `
 binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy`
 injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
-there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same
-tools as `databricks_agentkit.openai.memory_tools(actor)`:
+by default there (the store is provisioned and used only at deploy), even when a store is bound in
+`agent.toml`. Setting `AGENT_MEMORY_STORE` in the project's `.env` uses that store locally. The
+OpenAI Agents adapter exposes the same tools as `databricks_agentkit.openai.memory_tools(actor)`:
 
 ```python
 from databricks_agentkit.langgraph import memory_tools
@@ -665,8 +704,8 @@ agentbricks memory stores permissions revoke memory-stores/<id> \
 
 Session stores accept their configured name or `session-stores/<name>`. Memory stores accept an ID
 or `memory-stores/<id>`; permission Get also accepts the display-name lookup supported by store Get
-and rejects ambiguous matches. The global `--profile` and `--output json` options go before
-`sessions` or `memory`. List follows the existing CLI pagination convention: one JSON/piped page
+and rejects ambiguous matches. The global `--profile` option goes before `sessions` or `memory`;
+`--output json` goes before or after the command. List follows the existing CLI pagination convention: one JSON/piped page
 with `next_page_token`, interactive text pages, or every page with `--all`.
 
 Get always returns the authenticated caller's effective permission, including
@@ -711,8 +750,8 @@ trusted application context. The chat app sends the signed-in user; HTTP clients
 `agentbricks endpoint invoke`, have to send it themselves. With a request-user (`auth = "user"`) tool
 bound, the runtime also namespaces a supplied `actor` to the signed-in user.
 
-Memory is off under `agentbricks dev`, so try this against a deployed agent: two conversations, one
-actor.
+Memory is off by default under `agentbricks dev`, so try this against a deployed agent: two
+conversations, one actor.
 
 ```sh
 ask() { agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent --path /api/invocations \
@@ -720,6 +759,37 @@ ask() { agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent --
 ask "Remember that I prefer answers as bullet points."  # conversation 1 saves a fact
 ask "How do I like my answers formatted?"                # conversation 2 recalls it
 ```
+
+### Seeding and using memory from the CLI
+
+There are two ways to get a memory store behind a deployed agent. Both end with
+`agentbricks deploy`, which creates the store if it doesn't exist and grants the app access to it.
+
+**Start with an empty store.** Bind the store name, then deploy:
+
+```sh
+agentbricks memory bind support-agent-memory
+agentbricks deploy my-agent
+```
+
+**Start with memories already in the store.** Create the store, add entries, then bind and deploy:
+
+```sh
+agentbricks memory stores create --name support-agent-memory     # prints a Store ID
+agentbricks memory entries create --store <Store ID> \
+  --actor-id you@example.com \
+  --path /preferences/style.md \
+  --content "Prefers Python and concise answers with code examples."
+agentbricks memory bind support-agent-memory
+agentbricks deploy my-agent
+```
+
+`--path` is the entry's key inside the store, written like a file path; it isn't a file on your
+machine. `--actor-id` is the user the memory belongs to. In the deployed chat app, the actor is the
+signed-in user's email, so seed entries under your own email to see them recalled. `--store` takes
+the Store ID that `memory stores create` (or `memory stores list`) prints, while `bind` takes the
+store name. Check what you seeded with
+`agentbricks memory entries list --store <Store ID> --actor-id you@example.com`.
 
 ### Declaring and provisioning stores
 
@@ -742,6 +812,13 @@ agentbricks memory bind support-agent-memory
 agentbricks deploy my-agent
 ```
 
+A store that already exists is reused as is: `deploy` doesn't create a second one or change who else
+can access it. Its only permission change is a WRITE grant for the app's service principal, which
+needs you to be the store's creator or a workspace admin; if you aren't, the deploy still succeeds
+and reports the missing grant. In a shared workspace, give teammates access with
+`agentbricks memory stores permissions grant` (or `agentbricks sessions stores permissions grant`);
+see [Managing store permissions](#managing-store-permissions).
+
 Memory and session stores are independent resources: deleting one never affects the other.
 For projects with `agent.toml`, unbinding either store removes its declaration; the next deploy
 removes the corresponding `AGENT_MEMORY_STORE` or `AGENT_SESSION_STORE` entry from `app.yaml`.
@@ -762,7 +839,7 @@ and declares the Prompt Registry prompts it loads so the search can rewrite them
 
 ```sh
 agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
-agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-5-5
 agentbricks experimental prompts bind main.my_agent.writer
 agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
 agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano -c writer=claude-haiku-4-5 \
@@ -804,7 +881,7 @@ result = optimize_prompts_and_models(
     prompt_uris=["prompts:/main.my_agent.router@production"],
     gateway_endpoints={
         "main.my_agent.router_llm": ["claude-haiku-4-5", "gpt-5-4-mini"],
-        "main.my_agent.writer_llm": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+        "main.my_agent.writer_llm": ["claude-sonnet-5-5", "claude-haiku-4-5"],
     },
     scorers=scorers,  # MLflow scorers, or (inputs, expectations, answer) -> float
     max_metric_calls=200,
@@ -1040,7 +1117,7 @@ requests. By default, each App user's `X-Routing-Key` matches its generated user
 
 The final summary includes counts, throughput including drain, successful-only and all-completed
 latency percentiles, answer-text TTFT, token usage, coverage, incomplete attempts, and generator CPU
-warnings. With `--output json` before `endpoint`, stdout contains one Agent Bricks summary object;
+warnings. With `--output json`, stdout contains one Agent Bricks summary object;
 progress stays on stderr. This is the same object saved as `summary.json`.
 Locust's rounded histogram buckets are used for percentiles; all-completed timings include failures.
 These bounded tests measure the selected workload and do not establish sustainable capacity or answer quality.
@@ -1229,7 +1306,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | UC function | `mcp.functions` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
-| Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
+| Sandbox with token injection | `ai-gateway`, `workspace.workspace`, `files`, `sql`, `catalog.catalogs:read`, `catalog.schemas:read`, `catalog.tables:read` |
 | Sandbox with token injection disabled | `ai-gateway` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
@@ -1257,15 +1334,20 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
-`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
-binding with a Volume downscope additionally requests the Apps `files` user scope.
-OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
-token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
-still apply. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
-`workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
-the App service principal's permissions instead.
+When a user-auth sandbox has `databricks_access_token_included = true`, the injected credential
+carries only the App's user API scopes, so the sandbox requests `workspace.workspace` (workspace
+files), `files` (Volume files through the Files API), `sql` (SQL warehouses through the Statement
+Execution API), and `catalog.catalogs:read`, `catalog.schemas:read`, and `catalog.tables:read`
+(Unity Catalog metadata). Apps has no user API scope for Databricks Connect, clusters, jobs, or
+secrets, so sandbox code cannot call those APIs as the request user; use `auth = "app"` for them.
+An existing App deployed before these defaults needs `--allow-user-scope-update` once. A sandbox
+binding with a Volume downscope also requests the Apps `files` user scope.
+OAuth consent does not grant data access: the requesting user still needs the corresponding
+Unity Catalog and warehouse privileges, and the sandbox downscope remains authoritative. A sandbox
+binding with token injection disabled requests none of these credential scopes; its other
+resource-derived scopes still apply. Databricks Apps rejects the legacy bare `workspace` scope, so
+Agent Bricks requests `workspace.workspace`. These scopes are requested only for `auth = "user"`;
+`auth = "app"` uses the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
@@ -1421,9 +1503,8 @@ agentbricks tools remove genie_agent
 to `user`; choose `--auth app` deliberately for App service-principal execution. Existing manifests
 without `auth` preserve App/default identity. Both add commands and `remove` accept `--source PATH`
 to select a project instead of the current directory. Discovery needs no project; read that
-project's `agent.toml` to inspect configured bindings. For scripted output, put the global
-`-o json` option before `tools`, as in
-`agentbricks -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+project's `agent.toml` to inspect configured bindings. For scripted output, add `-o json`, as in
+`agentbricks tools add genie-one --source ./my-agent -o json`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml
@@ -1494,7 +1575,8 @@ agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 (`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
-and does not inject it. The id is not persisted in `agent.toml`.)
+and does not inject it, so the chat app shows "Not connected" for memory until you deploy. The id is
+not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, sends it as the
 invocation's top-level `session_id`, sends the signed-in user as `input.actor`, and creates a fresh

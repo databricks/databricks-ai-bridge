@@ -18,9 +18,10 @@
           </div>
         </div>
         <div class="header-actions">
-          <div class="viewer-chip">
+          <div class="viewer-chip" aria-describedby="viewer-tip">
             <p id="viewer-value">Loading viewer…</p>
             <span class="avatar" id="viewer-avatar" aria-hidden="true"></span>
+            <span class="viewer-tip" id="viewer-tip" role="tooltip" hidden></span>
           </div>
         </div>
       </header>
@@ -93,41 +94,52 @@
                   </button>
                 </div>
               </div>
-              <div class="memory-store">
-                <span class="memory-store-icon" aria-hidden="true">
-                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a2 2 0 0 0 4 0"/><path d="M12 5a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a2 2 0 0 1-4 0"/></svg>
-                </span>
-                <div class="memory-store-copy">
+              <div id="memory-setup" class="memory-setup" hidden></div>
+              <div id="memory-browse" class="memory-browse">
+                <div class="memory-store" id="memory-store">
+                  <span class="memory-store-icon" aria-hidden="true">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a2 2 0 0 0 4 0"/><path d="M12 5a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a2 2 0 0 1-4 0"/></svg>
+                  </span>
                   <strong id="memory-store-name">Memory store</strong>
-                  <span id="memory-store-resource"></span>
                 </div>
-              </div>
-              <label class="memory-field-label" for="memory-actor-input">Actor ID</label>
-              <p class="memory-field-hint">Memories are scoped to an actor. Change this to browse another actor's entries.</p>
-              <input id="memory-actor-input" class="memory-actor" type="text" placeholder="Actor ID" autocomplete="off" spellcheck="false" />
-              <div class="memory-search">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-                <label class="sr-only" for="memory-search-input">Search entries</label>
-                <input id="memory-search-input" type="search" placeholder="Search entries" autocomplete="off" />
-              </div>
-              <div id="memory-count" class="memory-count"></div>
-              <div id="memory-entries" class="memory-entries" aria-live="polite">
-                <div class="state-empty">Loading memory…</div>
-              </div>
-              <section id="memory-pipeline" class="memory-pipeline" aria-labelledby="memory-pipeline-title">
-                <div class="memory-pipeline-head">
-                  <h3 id="memory-pipeline-title" class="memory-field-label">Memory pipeline</h3>
-                  <button id="memory-pipeline-run" class="text-button" type="button" hidden>Run now</button>
+                <div class="memory-tabs" role="tablist" aria-label="Memory">
+                  <button id="memory-tab-entries" class="memory-tab active" type="button" role="tab" aria-selected="true" aria-controls="memory-entries-panel">Entries</button>
+                  <button id="memory-tab-pipeline" class="memory-tab" type="button" role="tab" aria-selected="false" aria-controls="memory-pipeline" tabindex="-1">Pipeline<span id="memory-pipeline-alert" class="memory-tab-dot" role="img" aria-label="Latest run failed" hidden></span></button>
                 </div>
-                <div id="memory-pipeline-confirm" class="memory-pipeline-confirm" role="alertdialog" aria-labelledby="memory-pipeline-confirm-text" hidden>
-                  <p id="memory-pipeline-confirm-text"></p>
-                  <div class="memory-pipeline-confirm-actions">
-                    <button id="memory-pipeline-cancel" class="text-button" type="button">Cancel</button>
-                    <button id="memory-pipeline-start" class="text-button" type="button">Run</button>
+                <div id="memory-entries-panel" class="memory-tab-panel memory-entries-panel" role="tabpanel" aria-labelledby="memory-tab-entries">
+                  <div class="memory-search memory-actor-field">
+                    <span class="memory-actor-icon" tabindex="0" aria-describedby="memory-actor-tip">
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                      <span class="memory-actor-tip" id="memory-actor-tip" role="tooltip">Memories are kept per actor, usually a user&#39;s email. Enter another actor ID to browse theirs.</span>
+                    </span>
+                    <label class="sr-only" for="memory-actor-input">Actor ID</label>
+                    <input id="memory-actor-input" type="text" placeholder="Actor ID, usually a user's email" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="memory-search">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                    <label class="sr-only" for="memory-search-input">Search entries</label>
+                    <input id="memory-search-input" type="search" placeholder="Search entries" autocomplete="off" />
+                  </div>
+                  <div id="memory-count" class="memory-count"></div>
+                  <div id="memory-entries" class="memory-entries" aria-live="polite">
+                    <div class="state-empty">Loading memory…</div>
                   </div>
                 </div>
-                <div id="memory-pipeline-body" class="memory-pipeline-body" aria-live="polite"></div>
-              </section>
+                <section id="memory-pipeline" class="memory-pipeline memory-tab-panel" role="tabpanel" aria-labelledby="memory-tab-pipeline" hidden>
+                  <div class="memory-pipeline-head">
+                    <h3 id="memory-pipeline-title" class="memory-field-label sr-only">Memory pipeline</h3>
+                    <button id="memory-pipeline-run" class="text-button" type="button" hidden>Run now</button>
+                  </div>
+                  <div id="memory-pipeline-confirm" class="memory-pipeline-confirm" role="alertdialog" aria-labelledby="memory-pipeline-confirm-text" hidden>
+                    <p id="memory-pipeline-confirm-text"></p>
+                    <div class="memory-pipeline-confirm-actions">
+                      <button id="memory-pipeline-cancel" class="text-button" type="button">Cancel</button>
+                      <button id="memory-pipeline-start" class="text-button" type="button">Run</button>
+                    </div>
+                  </div>
+                  <div id="memory-pipeline-body" class="memory-pipeline-body" aria-live="polite"></div>
+                </section>
+              </div>
             </div>
 
             <div class="card-block tools-pane" id="tools-pane" hidden>

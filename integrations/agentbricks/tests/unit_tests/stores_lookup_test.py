@@ -474,7 +474,6 @@ def _deploy_result(**over) -> DeployResult:
         memory_grant_attempted=False,
         session_grant_attempted=False,
         tool_access=None,
-        created_app_yaml=False,
         pip_index_url=None,
         instance_count=None,
         uses_runtime_api=True,

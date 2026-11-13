@@ -12,8 +12,12 @@ from typing import Optional
 import click
 from rich.console import Console
 
-# Error codes indicating that a preview API is unavailable in the workspace.
-_PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED", "FEATURE_DISABLED"})
+# Error codes indicating that a preview API is not deployed to the workspace's region or shard.
+_PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED"})
+
+# Error code for a workspace whose feature preview is turned off. The API returns HTTP 404 for it, so
+# callers must check this code rather than the status, which also means a missing resource.
+FEATURE_DISABLED = "FEATURE_DISABLED"
 
 # gRPC-style status codes the backend returns for transient failures (a cancelled or
 # deadline-exceeded RPC, a briefly unavailable service). Shared with the client, which
@@ -33,10 +37,33 @@ def set_output_mode(mode: str) -> None:
     _OUTPUT_MODE = mode
 
 
+# The last `-o/--output` value on the raw command line, if any. Usage errors and unknown-command
+# errors can fire before any callback runs, so their rendering consults this line-level hint first
+# and falls back to the parsed `_OUTPUT_MODE`.
+_USAGE_OUTPUT_MODE: Optional[str] = None
+
+
+def set_usage_output_mode(mode: Optional[str]) -> None:
+    """Record the raw command line's `-o/--output` value, if any, for error rendering."""
+    global _USAGE_OUTPUT_MODE
+    _USAGE_OUTPUT_MODE = mode
+
+
+def error_output_mode() -> str:
+    """The mode errors render in: the line's `-o/--output` if given, else the parsed mode."""
+    return _USAGE_OUTPUT_MODE or _OUTPUT_MODE
+
+
 _PREVIEW_HINT = (
     "These 2.0 agents APIs are in preview and gated per workspace. This handler is "
     "not enabled on the target workspace yet — try a different --profile or contact "
     "your workspace administrator."
+)
+
+# The server's message names the disabled preview, so the hint only says how to turn it on.
+_FEATURE_DISABLED_HINT = (
+    "A workspace admin can enable this preview in Settings > Feature Previews. After it is "
+    "enabled, it can take a few minutes to take effect."
 )
 
 _TRANSIENT_HINT = (
@@ -55,7 +82,7 @@ class AgentCliError(click.ClickException):
         self.hint = hint
 
     def show(self, file=None) -> None:
-        if _OUTPUT_MODE == "json":
+        if error_output_mode() == "json":
             payload: dict = {"message": self.message}
             if self.error_code:
                 payload["code"] = self.error_code
@@ -98,7 +125,9 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     if detail == "None":
         detail = ""
     message = detail or _no_detail_message(error_code) or effective.__class__.__name__
-    if error_code in _PREVIEW_ERROR_CODES:
+    if error_code == FEATURE_DISABLED:
+        hint = _FEATURE_DISABLED_HINT
+    elif error_code in _PREVIEW_ERROR_CODES:
         hint = _PREVIEW_HINT
     # ABORTED stays retryable, but it also signals a concurrency conflict (e.g. a pipeline run
     # already in progress) where re-running the command fails the same way, so skip the hint.

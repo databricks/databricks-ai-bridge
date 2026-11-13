@@ -5,6 +5,7 @@ text; Claude's carry a signature. Callers read the answer from a message's ``con
 becomes a separate item shaped like the OpenAI template's:
 ``{"role": "assistant", "content": [<reasoning block>, ...]}``. Checkpoints keep the original
 blocks so the model receives each signature on the next turn.
+An AI message's ``usage_metadata.total_tokens`` is recomputed as input plus output tokens.
 """
 
 import json
@@ -18,11 +19,13 @@ def message_items(message: Any) -> list[dict[str, Any]]:
     """Return a message as output items: its reasoning item, if any, then the message itself.
 
     The message keeps every field of ``model_dump()``; only an AI message whose content is a list
-    of reasoning or text blocks changes, to a separate reasoning item and the answer as a string.
+    of reasoning or text blocks changes, to a separate reasoning item and the answer as a string,
+    and its ``total_tokens`` is corrected by :func:`with_total_tokens`.
     """
     data = message.model_dump() if hasattr(message, "model_dump") else message
     if not isinstance(data, dict) or data.get("type") not in ("ai", "AIMessageChunk"):
         return [data]
+    data = with_total_tokens(data)
     content = data.get("content")
     reasoning, text = _split(content)
     if text is content:
@@ -30,6 +33,21 @@ def message_items(message: Any) -> list[dict[str, Any]]:
         return [data]
     answer = {**data, "content": text}
     return [{"role": "assistant", "content": reasoning}, answer] if reasoning else [answer]
+
+
+def with_total_tokens(data: Any) -> Any:
+    """Return a dumped message with ``usage_metadata.total_tokens`` set to input plus output.
+
+    databricks-langchain 0.21.0 counts Claude prompt-cache tokens in ``input_tokens`` but copies
+    the gateway's ``total_tokens``, which leaves them out. Other values pass through unchanged.
+    """
+    usage = data.get("usage_metadata") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return data
+    input_tokens, output_tokens = usage.get("input_tokens"), usage.get("output_tokens")
+    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+        return data
+    return {**data, "usage_metadata": {**usage, "total_tokens": input_tokens + output_tokens}}
 
 
 def delta_contents(content: Any) -> list[str | list[dict[str, Any]]]:
