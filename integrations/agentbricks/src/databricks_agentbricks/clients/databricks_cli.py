@@ -82,7 +82,13 @@ def _databricks(
         # leaks the underlying tool at the customer. The captured stderr still rides along as the
         # hint so debugging isn't lost.
         detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(action or "A Databricks CLI command failed.", hint=detail)
+        raise AgentCliError(
+            action or "A Databricks CLI command failed.",
+            hint=detail,
+            subprocess_exit_code=result.returncode,
+            # A legacy tee tail may have discarded the context needed for credential scrubbing.
+            failure_detail=detail if not tee else None,
+        )
     return result
 
 

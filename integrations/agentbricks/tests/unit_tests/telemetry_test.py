@@ -9,10 +9,12 @@ import uuid
 from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 import click
 import pytest
+import requests
 from click.core import ParameterSource
 from click.testing import CliRunner
 from deploy_test import _DeployApi, _DeployRunner
@@ -21,6 +23,7 @@ from rich.console import Console
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.clients import databricks_cli
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.group import AgentBricksCommand
@@ -254,6 +257,88 @@ def test_keyboard_interrupt_uses_click_abort_exit_code():
     assert telemetry._exit_code(KeyboardInterrupt()) == 1
     assert telemetry._error_category(KeyboardInterrupt()) == "ERROR_CATEGORY_INTERRUPTED"
     assert telemetry._exit_code(SystemExit()) == 0
+
+
+def test_wrapped_failure_preserves_text_in_sensitive_field():
+    context = _Context()
+    error = AgentCliError("private message", hint="private hint")
+    error.__cause__ = AgentCliError("private service detail", error_code="PERMISSION_DENIED")
+    log = _log(context, exit_code=1, exception=error)
+    assert log["failure_message"] == "private message\nCaused by: private service detail"
+    assert log == _log(_Context(), exit_code=1, exception=error)
+    assert "diagnostics" not in log
+    assert telemetry._error_category(error) == "ERROR_CATEGORY_AUTHORIZATION"
+    assert "private hint" not in json.dumps(log)
+
+
+@pytest.mark.parametrize(
+    ("cause", "category"),
+    [
+        (ConnectionError("private host"), "NETWORK"),
+        (URLError("private host"), "NETWORK"),
+        (requests.ConnectionError("private host"), "NETWORK"),
+        (requests.Timeout("private host"), "NETWORK"),
+        (FileNotFoundError("private path"), "CONFIGURATION"),
+        (ImportError("private module"), "DEPENDENCY"),
+        (ModuleNotFoundError("private module"), "DEPENDENCY"),
+    ],
+)
+def test_failure_classification_follows_explicit_causes(cause, category):
+    error = AgentCliError("Could not start")
+    error.__cause__ = cause
+    assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
+
+
+@pytest.mark.parametrize(
+    ("code", "category"),
+    [
+        ("INVALID_TOKEN", "AUTHENTICATION"),
+        ("TOKEN_EXPIRED", "AUTHENTICATION"),
+        ("forbidden", "AUTHORIZATION"),
+        ("NOT_AUTHORIZED", "AUTHORIZATION"),
+        ("TIMED_OUT", "NETWORK"),
+        ("CANCELLED", "NETWORK"),
+        ("CONFIGURATION_ERROR", "CONFIGURATION"),
+        ("INVALID_ARGUMENT", "CONFIGURATION"),
+        ("NOT_IMPLEMENTED", "RUNTIME"),
+        ("ALREADY_EXISTS", "RUNTIME"),
+    ],
+)
+def test_service_code_classification_takes_precedence_over_wrapped_transport_error(code, category):
+    error = AgentCliError("service rejected request", error_code=code)
+    error.__cause__ = ConnectionError("private host")
+    assert telemetry._error_category(error) == f"ERROR_CATEGORY_{category}"
+
+
+def test_unknown_codes_and_cyclic_causes_do_not_leak_or_loop():
+    error = AgentCliError("private", error_code="private-user-defined-code")
+    error.__cause__ = error
+    assert telemetry._error_category(error) == "ERROR_CATEGORY_RUNTIME"
+    log = _log(_Context(), exit_code=1, exception=error)
+    assert log["failure_message"] == "private"
+    assert "private-user-defined-code" not in json.dumps(log)
+
+
+def test_subprocess_failure_keeps_child_exit_separate_from_cli_exit(monkeypatch):
+    records = []
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: records.append(_log(ctx, **kwargs))
+    )
+
+    @click.command(cls=AgentBricksCommand)
+    def run():
+        raise AgentCliError(
+            "private child output",
+            subprocess_exit_code=17,
+        )
+
+    result = CliRunner().invoke(run)
+    assert result.exit_code == 1
+    assert records[0]["exit_code"] == 1
+    assert records[0]["failure_message"] == "private child output"
+    assert "diagnostics" not in records[0]
+    assert "subprocess_exit_code" not in records[0]
+    assert "failure_reason" not in records[0]
 
 
 def test_existing_workspace_client_receives_exact_transport_request(monkeypatch):
@@ -599,6 +684,8 @@ def test_new_commands_emit_click_resolved_defaults_automatically(monkeypatch, fa
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_ALL"},
         {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_NEW"},
     ]
+    message = records[0].pop("failure_message", None)
+    assert message == ("private-error" if fails else None)
     assert "private-" not in json.dumps(records)
 
 
@@ -621,6 +708,8 @@ def test_real_init_defaults_are_emitted_for_success_and_failure(monkeypatch, tmp
     assert parameters["agentbricks init.existing"]["bool_value"] is False
     assert parameters["agentbricks init.disable_chat_app"]["bool_value"] is False
     assert log["exit_code"] == result.exit_code
+    message = log.pop("failure_message", None)
+    assert (message is not None) == fails
     assert "private-project" not in json.dumps(log)
     assert "agentbricks init.profile" not in parameters
     assert "agentbricks init.memory_store" not in parameters
@@ -632,6 +721,175 @@ def test_default_free_form_and_unresolved_values_are_omitted():
     _explicit_option(context, "profile", "private-profile", source=ParameterSource.DEFAULT)
     _explicit_option(context, "framework", None, source=ParameterSource.DEFAULT)
     assert "parameters" not in _log(context, exit_code=0)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ssh://user:synthetic-secret@host/db",
+        json.dumps({"client_secret": 'synthetic-prefix"synthetic-tail'}),
+        "secretKey=synthetic-opaque-value",
+        "tokenValue=synthetic-opaque-value",
+        "access_token_value=synthetic-opaque-value",
+        json.dumps({"credentials": {"client_secret": "synthetic-opaque-value"}}),
+        json.dumps({"credentials": [{"value": "synthetic-opaque-value"}]}, indent=2),
+        json.dumps({"credentials": ["synthetic-opaque-value"]}),
+        *[
+            json.dumps({header: [{"value": "synthetic-opaque-value"}]}, indent=2)
+            for header in ["Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"]
+        ],
+        'Cookie: [\n"synthetic-opaque-value"',
+        'Authorization: {\n"value": "synthetic-opaque-value"',
+        json.dumps({"message": json.dumps({"client_secret": "synthetic-opaque-value"})}),
+        json.dumps({"message": json.dumps({"credentials": ["synthetic-opaque-value"]})}),
+        json.dumps({"message": json.dumps({"Cookie": ["synthetic-opaque-value"]})}),
+        r'{"\u0063lient_secret": "synthetic-opaque-value"}',
+        "example://name:synthetic-secret@synthetic-tail@host/db",
+        "client_secret: |\n  synthetic-opaque-value",
+        "client_secret: >-\n  synthetic-opaque-value",
+        repr({"password": b" synthetic-opaque-value"}),
+        repr({"password": b",synthetic-opaque-value"}),
+        repr({"password": b";synthetic-opaque-value"}),
+        "credentials:\n  client_secret: synthetic-opaque-value",
+        "credentials:\n  - synthetic-opaque-value",
+        '"\\u0063redentials":\n  - synthetic-opaque-value',
+        "token: Bearer synthetic-opaque-value",
+        "token=Basic synthetic-opaque-value",
+        "password=multiple words synthetic-opaque-value",
+        "credentials: # configured\n  - synthetic-opaque-value",
+        "client_secret: first line\n  synthetic-opaque-value",
+        "client_secret: &anchor\n  synthetic-opaque-value",
+        "client_secret: !!str\n  synthetic-opaque-value",
+        'password="""first line\n"}synthetic-opaque-value"""',
+        'credentials={nested: """first line\n"}synthetic-opaque-value"""}',
+        "--password synthetic-opaque-value",
+        "private_key = synthetic-opaque-value",
+        "['tool', '--password', 'synthetic-opaque-value']",
+    ],
+)
+def test_callback_error_redacts_credentials_from_uploaded_message(monkeypatch, detail):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    error = AgentCliError("Request failed: " + detail)
+    telemetry.emit_command(context, exit_code=1, execution_time_ms=1, exception=error)
+    assert len(api.calls) == 1
+    payload = json.dumps(api.calls[0][2])
+    assert "synthetic-secret" not in payload
+    assert "synthetic-prefix" not in payload
+    assert "synthetic-tail" not in payload
+    assert "synthetic-opaque-value" not in payload
+    assert "Request failed" in payload
+
+
+def test_uploaded_failure_masks_escaped_url_credentials(monkeypatch):
+    api = _ApiClient()
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    error = AgentCliError(r"Connection failed: https://user:synthetic-prefix\u0031@host/db")
+    telemetry.emit_command(_Context(api), exit_code=1, exception=error)
+
+    assert len(api.calls) == 1
+    payload = api.calls[0][2]
+    log = _inner(payload)["agentbricks_cli_log"]
+    assert log["failure_message"] == "Connection failed: https://[REDACTED]@host/db"
+    assert "synthetic-prefix" not in json.dumps(payload)
+    assert log["exit_code"] == 1
+
+
+@pytest.mark.parametrize("source", ["message", "detail", "cause", "combined"])
+def test_oversized_failure_text_is_omitted_from_uploaded_payload(monkeypatch, source):
+    api = _ApiClient()
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    oversized = "synthetic-over-budget " + "x" * 65536
+    if source == "message":
+        error = AgentCliError(oversized)
+    elif source == "detail":
+        error = AgentCliError("Request failed", failure_detail=oversized)
+    elif source == "cause":
+        error = AgentCliError("Request failed")
+        error.__cause__ = RuntimeError(oversized)
+    else:
+        error = AgentCliError("a" * 32768, failure_detail="b" * 32768)
+    displayed_message = str(error)
+
+    telemetry.emit_command(
+        _Context(api), exit_code=1, error_category="ERROR_CATEGORY_RUNTIME", exception=error
+    )
+
+    assert len(api.calls) == 1
+    payload = api.calls[0][2]
+    log = _inner(payload)["agentbricks_cli_log"]
+    assert "failure_message" not in log
+    assert "synthetic-over-budget" not in json.dumps(payload)
+    assert log["exit_code"] == 1
+    assert log["error_category"] == "ERROR_CATEGORY_RUNTIME"
+    assert str(error) == displayed_message
+
+
+def test_callback_error_preserves_prose_with_apostrophes_and_backslashes(monkeypatch):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    detail = r"Error: app doesn't exist in workspace; see .\logs\x.log; Final error: quota exceeded"
+    telemetry.emit_command(
+        context, exit_code=1, execution_time_ms=1, exception=AgentCliError(detail)
+    )
+    assert len(api.calls) == 1
+    assert _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"] == detail
+
+
+@pytest.mark.parametrize(
+    "opening", ["credentials:\n", "--password\n", "-----BEGIN PRIVATE KEY-----\n"]
+)
+@pytest.mark.parametrize("capture", [False, True])
+def test_truncated_streamed_output_is_not_uploaded(monkeypatch, capsys, opening, capture):
+    output = opening + " \n" * 2000 + "synthetic-opaque-value\n"
+
+    class Process:
+        returncode = 17
+
+        def __enter__(self):
+            self.stdout = iter(output.splitlines(keepends=True))
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(databricks_cli.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    with pytest.raises(AgentCliError) as raised:
+        databricks_cli._databricks(
+            ["sync", "source", "destination"],
+            None,
+            tee=True,
+            capture=capture,
+            action="Could not upload agent source.",
+        )
+    assert raised.value.subprocess_exit_code == 17
+    assert capsys.readouterr().err == output
+
+    api = _ApiClient()
+    telemetry.emit_command(_Context(api), exit_code=1, execution_time_ms=1, exception=raised.value)
+    assert len(api.calls) == 1
+    log = _inner(api.calls[0][2])["agentbricks_cli_log"]
+    assert log["exit_code"] == 1
+    assert log["failure_message"].startswith("Could not upload agent source.")
+    assert "synthetic-opaque-value" not in json.dumps(api.calls[0][2])
+
+
+def test_uploaded_signal_diagnosis_preserves_reason_and_minimizes_assignment_paths(monkeypatch):
+    api = _ApiClient()
+    context = _Context(api)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    detail = "Child failed: signal: killed; --config=/home/example/private/app.py; quota exceeded"
+    telemetry.emit_command(
+        context, exit_code=1, execution_time_ms=1, exception=AgentCliError(detail)
+    )
+    assert len(api.calls) == 1
+    message = _inner(api.calls[0][2])["agentbricks_cli_log"]["failure_message"]
+    assert "signal: killed" in message
+    assert "quota exceeded" in message
+    assert "/home/example/private" not in message
 
 
 @pytest.mark.parametrize(
@@ -821,6 +1079,55 @@ def test_parameter_entry_preserves_false_boolean_value():
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
 
 
+def test_failed_subprocess_detail_is_scrubbed_before_upload():
+    error = AgentCliError(
+        "Could not start",
+        failure_detail="ModuleNotFoundError: package_missing\nAuthorization: Bearer synthetic-secret",
+    )
+    details = _log(_Context(), exit_code=1, exception=error)
+    assert "ModuleNotFoundError: package_missing" in details["failure_message"]
+    assert "synthetic-secret" not in json.dumps(details)
+
+
+def test_long_subprocess_detail_preserves_final_error_after_scrubbing():
+    error = AgentCliError(
+        "Could not deploy",
+        failure_detail=(
+            "Uploading files\n" * 400 + "Final error: app is busy\npassword=synthetic-opaque-value"
+        ),
+    )
+    message = _log(_Context(), exit_code=1, exception=error)["failure_message"]
+    assert message.startswith("Could not deploy")
+    assert "[truncated]" in message
+    assert "Final error: app is busy" in message
+    assert "synthetic-opaque-value" not in message
+    assert len(message.encode("utf-8")) <= 4096
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        click.UsageError("private arg"),
+        click.Abort(),
+        KeyboardInterrupt(),
+        SystemExit(1),
+        click.exceptions.Exit(1),
+    ],
+)
+def test_parser_and_control_exceptions_have_no_failure_text(error):
+    assert "failure_message" not in _log(_Context(), exit_code=1, exception=error)
+
+
+def test_exception_string_failure_preserves_cause_text():
+    class BrokenMessage(Exception):
+        def __str__(self):
+            raise ValueError("cannot stringify")
+
+    error = BrokenMessage()
+    error.__cause__ = ValueError("root cause")
+    assert _log(_Context(), exit_code=1, exception=error)["failure_message"] == "root cause"
+
+
 @pytest.mark.parametrize("outcome", ["DEPLOYMENT_OUTCOME_RUNNING", "DEPLOYMENT_OUTCOME_SUCCEEDED"])
 def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
@@ -932,6 +1239,7 @@ def test_failed_deploy_hook_records_known_outcome(
     assert log["invocation_id"] == invocation_ids[0]
     assert uuid.UUID(log["invocation_id"]).version == 4
     assert log["exit_code"] == result.exit_code
+    assert str(write_error if failure_state_write else rollout_error) in log["failure_message"]
     assert log["background_child"] is background_child
     assert log["details_link_emitted"] is False
     assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_FAILED"
