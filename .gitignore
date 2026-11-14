@@ -20,3 +20,7 @@ Pipfile
 docs/build
 
 **/uv.lock
+
+# MLflow SQLite files created by local trace tests.
+**/mlflow.db
+**/mlflow.db-*
