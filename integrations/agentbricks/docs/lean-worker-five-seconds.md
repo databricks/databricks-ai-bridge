@@ -5,13 +5,19 @@ Follow-up to the [lean dependency prototype](lean-worker-prototype.md), November
 copy, and installation. It is not five seconds from New Chat to a ready session.
 
 [Latest chat App](https://agent-bricks-sb-lean-five-14-6051921418418893.staging.aws.databricksapps.com) ·
-[Published source](https://e2-dogfood.staging.cloud.databricks.com/#workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/revisions/458f3484aba214f34e9e787b1b62802750c58f05b684febe825630366617acbd/source) ·
+[Current published source](https://e2-dogfood.staging.cloud.databricks.com/#workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/revisions/09cdecbbc8fc88306acb3f0f66e63341f9653dbcb417573434632222e851c2d8/source) ·
 [Traces](https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253550735/traces) ·
 [Draft #917](https://github.com/databricks/databricks-ai-bridge/pull/917)
 
 Choose **New Chat** and `system.ai.gpt-5-mini`. The App has **zero warm spares** and
 a 600-second idle timeout. Source is readable by all workspace users. The prior
 lean App remains available for comparison, and the user's original demo is unchanged.
+
+The latest App includes managed **web search**. See the
+[web-search benchmark](lean-worker-websearch.md) for first/warm search timings
+and invocation-time MCP discovery costs. The measurements below preserve the
+earlier revision with no configured MCP server; its source and identity remain
+in the evidence record.
 
 ## What changed
 

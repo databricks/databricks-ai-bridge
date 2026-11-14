@@ -8,8 +8,9 @@ project build, persistent worker, session isolation, and direct SSE are unchange
 
 **Latest:** the [five-second handler follow-up](lean-worker-five-seconds.md) combines
 this dependency set with install-time bytecode compilation and smaller startup
-imports. It links the new App and reports handler time separately from total
-session readiness. The comparison below preserves the original results.
+imports. The [web-search benchmark](lean-worker-websearch.md) extends the live App
+with managed MCP search and measures first/warm searches. Both report handler time
+separately from total session readiness. The comparison below preserves the original results.
 
 ## Original live result (November 14)
 

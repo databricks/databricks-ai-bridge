@@ -95,3 +95,5 @@ The [five-second handler follow-up](lean-worker-five-seconds.md) adds install-ti
 bytecode compilation, defers unconfigured MCP imports, and reduces import-cache
 bookkeeping. It reports the handler reduction separately from total session
 readiness: most of the improvement moves compilation into installation.
+The [managed web-search benchmark](lean-worker-websearch.md) adds real MCP search
+to the deployed prototype and measures the discovery/graph-build cost on invocation.
