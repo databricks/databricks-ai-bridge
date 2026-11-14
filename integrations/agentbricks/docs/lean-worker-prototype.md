@@ -6,7 +6,12 @@ imports from [#910](https://github.com/databricks/databricks-ai-bridge/pull/910)
 The deployed App orchestrator continues to use #915. Source copy, locked install,
 project build, persistent worker, session isolation, and direct SSE are unchanged.
 
-## Live result (November 14)
+**Latest:** the [five-second handler follow-up](lean-worker-five-seconds.md) combines
+this dependency set with install-time bytecode compilation and smaller startup
+imports. It links the new App and reports handler time separately from total
+session readiness. The comparison below preserves the original results.
+
+## Original live result (November 14)
 
 [Lean chat App](https://agent-bricks-sb-lean-1114-6051921418418893.staging.aws.databricksapps.com) · [Published source](https://e2-dogfood.staging.cloud.databricks.com/#workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-1114/revisions/fa6cbaa68f55c20596d1cd5218f7806e1de1a6e3c88e16282678b084400e2fca/source) ·
 [Traces](https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253353374/traces) ·
@@ -83,6 +88,8 @@ made about cold startup for arbitrary custom servers or large user dependencies.
 Use two environments: install the normal #915 CLI separately, and vendor the lean
 worker wheels only into the agent project. Deploying with the lean checkout's CLI
 would also change the orchestrator and invalidate this comparison.
+The original comparison used worker commit `0b9ffc41`; the latest follow-up has
+[its own reproduction instructions](lean-worker-five-seconds.md#reproduce).
 
 ```sh
 # From this experimental checkout, prepare a separate normal CLI.

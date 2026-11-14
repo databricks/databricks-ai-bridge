@@ -1,0 +1,2248 @@
+{
+  "tested_worker_code_commit": "2ded21b4a9c358fc8112a57bd9001e907e25a240",
+  "baseline_worker_code_commit": "0b9ffc41358be63ee0412bf81e03ae884c7f6a7f",
+  "orchestrator_commit": "307200f2e55819d51c23fa6138ae90886dacce67",
+  "orchestrator_version": "0.10.0.dev0+sandbox.a1e2b00761e032bb",
+  "recorded_at": "2026-11-14T03:56:53.774742+00:00",
+  "model": "system.ai.gpt-5-mini",
+  "method": "Three fresh baseline sessions taken from the earlier alternating exploratory run; three final candidate sessions afterward, with every shared package version pinned to baseline. Zero App-managed warm spares. Two streamed turns per session. Each environment starts from source and locked install; provider VM/cache state uncontrolled. Small samples, not latency percentiles. Compilation is paid inside dependency installation, not eliminated.",
+  "baseline_started_at": "2026-11-14T03:39:04.317551+00:00",
+  "candidate_started_at": "2026-11-14T03:52:47.406370+00:00",
+  "summary": {
+    "baseline": {
+      "handler_s": {
+        "median": 10.190059999999999,
+        "min": 9.9673,
+        "max": 10.30645,
+        "values": [
+          9.9673,
+          10.30645,
+          10.190059999999999
+        ]
+      },
+      "dependency_install_s": {
+        "median": 1.6653099999999998,
+        "min": 1.65151,
+        "max": 1.6665699999999999,
+        "values": [
+          1.6653099999999998,
+          1.65151,
+          1.6665699999999999
+        ]
+      },
+      "preparation_s": {
+        "median": 17.11075,
+        "min": 16.91156,
+        "max": 17.17558,
+        "values": [
+          16.91156,
+          17.17558,
+          17.11075
+        ]
+      },
+      "preparation_client_s": {
+        "median": 18.93261695606634,
+        "min": 18.900026356917806,
+        "max": 19.407415227033198,
+        "values": [
+          18.900026356917806,
+          18.93261695606634,
+          19.407415227033198
+        ]
+      },
+      "warm_first_text_s": {
+        "median": 2.4240739359520376,
+        "min": 2.405749003053643,
+        "max": 2.492982585914433,
+        "values": [
+          2.492982585914433,
+          2.4240739359520376,
+          2.405749003053643
+        ]
+      },
+      "first_tool_turn_first_text_s": {
+        "median": 4.415834597079083,
+        "min": 4.2679581069387496,
+        "max": 5.338441301020794,
+        "values": [
+          5.338441301020794,
+          4.2679581069387496,
+          4.415834597079083
+        ]
+      },
+      "stop_s": {
+        "median": 22.651272464892827,
+        "min": 22.565209959982894,
+        "max": 23.82132881099824,
+        "values": [
+          22.651272464892827,
+          22.565209959982894,
+          23.82132881099824
+        ]
+      },
+      "handler_phase_medians_s": {
+        "bindings": 0.30801999999999996,
+        "import_cache": 0.46257,
+        "configuration": 0.05849,
+        "project_import": 4.23928,
+        "tracing_import": 0.88118,
+        "agentkit_import": 2.74435,
+        "framework_import": 0.77895
+      }
+    },
+    "candidate": {
+      "handler_s": {
+        "median": 4.57215,
+        "min": 4.56748,
+        "max": 4.61111,
+        "values": [
+          4.61111,
+          4.57215,
+          4.56748
+        ]
+      },
+      "dependency_install_s": {
+        "median": 5.889069999999999,
+        "min": 5.7569,
+        "max": 6.111470000000001,
+        "values": [
+          5.7569,
+          6.111470000000001,
+          5.889069999999999
+        ]
+      },
+      "preparation_s": {
+        "median": 15.59033,
+        "min": 15.44528,
+        "max": 15.65293,
+        "values": [
+          15.65293,
+          15.59033,
+          15.44528
+        ]
+      },
+      "preparation_client_s": {
+        "median": 17.522107772994787,
+        "min": 16.82688105897978,
+        "max": 17.634376200963743,
+        "values": [
+          17.634376200963743,
+          17.522107772994787,
+          16.82688105897978
+        ]
+      },
+      "warm_first_text_s": {
+        "median": 2.337648927932605,
+        "min": 2.1205418460303918,
+        "max": 2.483289833064191,
+        "values": [
+          2.337648927932605,
+          2.483289833064191,
+          2.1205418460303918
+        ]
+      },
+      "first_tool_turn_first_text_s": {
+        "median": 4.5242947429651394,
+        "min": 3.877224879921414,
+        "max": 29.714696288923733,
+        "values": [
+          29.714696288923733,
+          3.877224879921414,
+          4.5242947429651394
+        ]
+      },
+      "stop_s": {
+        "median": 22.674632730078883,
+        "min": 21.449444534955546,
+        "max": 75.85756058699917,
+        "values": [
+          22.674632730078883,
+          21.449444534955546,
+          75.85756058699917
+        ]
+      },
+      "handler_phase_medians_s": {
+        "bindings": 0.27355,
+        "import_cache": 0.0066,
+        "configuration": 0.0576,
+        "project_import": 1.6848800000000002,
+        "tracing_import": 0.23213999999999999,
+        "agentkit_import": 1.31328,
+        "framework_import": 0.22916999999999998
+      }
+    }
+  },
+  "samples": [
+    {
+      "variant": "baseline",
+      "session_id": "five-profile-655fcf9d7d5445b8a961ec9d681dd06a",
+      "sandbox_id": "renewing-billfish-6071",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 18.900026356917806,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:40:05.507232+00:00",
+            "duration_ms": 1100.72
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 16.39,
+              "toolchain": 0.07,
+              "import_check": 254.68,
+              "project_build": 598.9,
+              "project_install": 19.68,
+              "dependency_install": 1665.31
+            },
+            "started_at": "2026-11-14T03:40:06.729667+00:00",
+            "duration_ms": 2971.5
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:40:03.229247+00:00",
+            "duration_ms": 2159.66
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 308.02,
+              "import_cache": 461.16,
+              "configuration": 58.49,
+              "project_import": 4119.62,
+              "tracing_import": 874.76,
+              "agentkit_import": 2705.51,
+              "framework_import": 767.92
+            },
+            "started_at": "2026-11-14T03:40:10.046357+00:00",
+            "duration_ms": 9967.3
+          }
+        },
+        "preparation_ms": 16911.56
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:69356fadd818f7e152c49cc22de90ad64d6233604041cc61d060895bdb991a55",
+          "status": "succeeded",
+          "client_first_text_s": 5.338441301020794,
+          "client_wall_s": 5.778117347043008,
+          "text_updates": 2,
+          "worker": {
+            "id": "98ede6f9991a45d08732eff74fef91b7",
+            "pid": 457,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "4a717942d4f868302076e202db2df876d1322a33db2df2715700857c47edfc5d",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 68.16,
+            "bindings": 0.29,
+            "agent_build": 11.64,
+            "session_open": 56.11,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4407.07,
+            "framework_import": 0.05
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:69356fadd818f7e152c49cc22de90ad64d6233604041cc61d060895bdb991a55",
+            "session_id": "five-profile-655fcf9d7d5445b8a961ec9d681dd06a",
+            "trace_id": "tr-542cc3751bcc3a1d6a76983afacebeba",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 4192.24
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 4151.23
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1246.63
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1240.23
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.56
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 5.25
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.26
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1279.37
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1275.75
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.52
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:122b0dbf251250421f2c56c03da7ae1ac9be253fe66fe2974a313a70a5acf83b",
+          "status": "succeeded",
+          "client_first_text_s": 2.492982585914433,
+          "client_wall_s": 2.7968268459662795,
+          "text_updates": 1,
+          "worker": {
+            "id": "98ede6f9991a45d08732eff74fef91b7",
+            "pid": 457,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "4a717942d4f868302076e202db2df876d1322a33db2df2715700857c47edfc5d",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.61,
+            "bindings": 0.28,
+            "agent_build": 5.22,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1571.32,
+            "framework_import": 0.05
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:122b0dbf251250421f2c56c03da7ae1ac9be253fe66fe2974a313a70a5acf83b",
+            "session_id": "five-profile-655fcf9d7d5445b8a961ec9d681dd06a",
+            "trace_id": "tr-e9260a28e3e599e3c245b0923977b0ba",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1570.81
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1568.93
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1055.3
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1051.46
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 2.05
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "renewing-billfish-6071",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 251.18,
+          "sandbox_lookup": 43.77,
+          "stop_request": 109.33,
+          "wait_until_stopped": 21995.5,
+          "total": 22410.46
+        }
+      },
+      "stop_client_s": 22.651272464892827
+    },
+    {
+      "variant": "baseline",
+      "session_id": "five-profile-b6024aa5ea264b72b342ebfa5dc6003e",
+      "sandbox_id": "purifying-stingray-2516",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 18.93261695606634,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:42:34.113797+00:00",
+            "duration_ms": 1105.89
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 15.73,
+              "toolchain": 0.07,
+              "import_check": 249.39,
+              "project_build": 575.84,
+              "project_install": 16.99,
+              "dependency_install": 1651.51
+            },
+            "started_at": "2026-11-14T03:42:35.331232+00:00",
+            "duration_ms": 2859.46
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:42:31.774644+00:00",
+            "duration_ms": 2219.39
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 313.55,
+              "import_cache": 462.57,
+              "configuration": 59.1,
+              "project_import": 4239.28,
+              "tracing_import": 881.18,
+              "agentkit_import": 2793.85,
+              "framework_import": 832.06
+            },
+            "started_at": "2026-11-14T03:42:38.530519+00:00",
+            "duration_ms": 10306.45
+          }
+        },
+        "preparation_ms": 17175.58
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:d7641d433c6bfeb4567442a5ab6e4751bff949c9e132dc5e2ca532a67629c82e",
+          "status": "succeeded",
+          "client_first_text_s": 4.2679581069387496,
+          "client_wall_s": 5.7609264239436015,
+          "text_updates": 2,
+          "worker": {
+            "id": "26316542915841f7a9d7917177ba5738",
+            "pid": 455,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "460490e7ba0ccee97fcc5c840f145c1af3199ad6bb1df0794696110e8ed1bd5d",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 66.52,
+            "bindings": 0.31,
+            "agent_build": 10.8,
+            "session_open": 55.27,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 3427.75,
+            "framework_import": 0.05
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:d7641d433c6bfeb4567442a5ab6e4751bff949c9e132dc5e2ca532a67629c82e",
+            "session_id": "five-profile-b6024aa5ea264b72b342ebfa5dc6003e",
+            "trace_id": "tr-86f693c9d16aaef88b89b2b730b397fe",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3212.42
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3170.7
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1015.91
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1009.55
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.52
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 6.08
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.27
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1161.59
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1157.8
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.52
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:c6a2736892e587d0f5dc6a8827db3095c5829a5cc6f2d27ac70bd4f06291a52b",
+          "status": "succeeded",
+          "client_first_text_s": 2.4240739359520376,
+          "client_wall_s": 2.7292086030356586,
+          "text_updates": 1,
+          "worker": {
+            "id": "26316542915841f7a9d7917177ba5738",
+            "pid": 455,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "460490e7ba0ccee97fcc5c840f145c1af3199ad6bb1df0794696110e8ed1bd5d",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.6,
+            "bindings": 0.34,
+            "agent_build": 5.13,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1509.49,
+            "framework_import": 0.05
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:c6a2736892e587d0f5dc6a8827db3095c5829a5cc6f2d27ac70bd4f06291a52b",
+            "session_id": "five-profile-b6024aa5ea264b72b342ebfa5dc6003e",
+            "trace_id": "tr-5d71a456d307d725c95e39ab393c3d24",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1508.97
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1506.98
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1152.75
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1148.69
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.63
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "purifying-stingray-2516",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 212.48,
+          "sandbox_lookup": 41.32,
+          "stop_request": 112.38,
+          "wait_until_stopped": 21967.96,
+          "total": 22343.72
+        }
+      },
+      "stop_client_s": 22.565209959982894
+    },
+    {
+      "variant": "baseline",
+      "session_id": "five-profile-1d0fb982d39445428e549272b32f57f2",
+      "sandbox_id": "kind-ladybeetle-1857",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 19.407415227033198,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:43:24.495444+00:00",
+            "duration_ms": 1247.14
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 17.07,
+              "toolchain": 0.09,
+              "import_check": 255.32,
+              "project_build": 584.32,
+              "project_install": 24.34,
+              "dependency_install": 1666.57
+            },
+            "started_at": "2026-11-14T03:43:25.852911+00:00",
+            "duration_ms": 2891.85
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:43:22.247343+00:00",
+            "duration_ms": 2130.04
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 294.48,
+              "import_cache": 463.31,
+              "configuration": 57.95,
+              "project_import": 4247.48,
+              "tracing_import": 938.67,
+              "agentkit_import": 2744.35,
+              "framework_import": 778.95
+            },
+            "started_at": "2026-11-14T03:43:29.063096+00:00",
+            "duration_ms": 10190.06
+          }
+        },
+        "preparation_ms": 17110.75
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:22d3cd2f32271d2a04d3b2fa5e954805c77d2f9536e0c867f0199a350d7544cb",
+          "status": "succeeded",
+          "client_first_text_s": 4.415834597079083,
+          "client_wall_s": 5.769555822014809,
+          "text_updates": 1,
+          "worker": {
+            "id": "c962ab68d74d4168ad21e7f940002fbc",
+            "pid": 456,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "3ca02914ea634757c27601b5740ee00db1a86186b0bc23283e6bc48a5a96bc67",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 66.73,
+            "bindings": 0.29,
+            "agent_build": 11.1,
+            "session_open": 55.2,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 3497.61,
+            "framework_import": 0.05
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:22d3cd2f32271d2a04d3b2fa5e954805c77d2f9536e0c867f0199a350d7544cb",
+            "session_id": "five-profile-1d0fb982d39445428e549272b32f57f2",
+            "trace_id": "tr-b2d32f389472e0538b600aa8cf85ec3e",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3293.96
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3252.6
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1233.05
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1226.4
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.72
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 5.05
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.24
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1285.12
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1281.07
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.52
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:4f7115eb3e16f731c960d9f7d2e9147d55d98df4425b44668f644b23dc2e1153",
+          "status": "succeeded",
+          "client_first_text_s": 2.405749003053643,
+          "client_wall_s": 2.7085533450590447,
+          "text_updates": 1,
+          "worker": {
+            "id": "c962ab68d74d4168ad21e7f940002fbc",
+            "pid": 456,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "3ca02914ea634757c27601b5740ee00db1a86186b0bc23283e6bc48a5a96bc67",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.62,
+            "bindings": 0.27,
+            "agent_build": 5.24,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1454.83,
+            "framework_import": 0.04
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "baseline",
+            "invocation_id": "sandbox:4f7115eb3e16f731c960d9f7d2e9147d55d98df4425b44668f644b23dc2e1153",
+            "session_id": "five-profile-1d0fb982d39445428e549272b32f57f2",
+            "trace_id": "tr-4d4ba54488037f61f5d4af10b2222e97",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1454.28
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1452.27
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1047.22
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1043.12
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.65
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "kind-ladybeetle-1857",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 375.23,
+          "sandbox_lookup": 47.51,
+          "stop_request": 106.84,
+          "wait_until_stopped": 23049.27,
+          "total": 23588.75
+        }
+      },
+      "stop_client_s": 23.82132881099824
+    },
+    {
+      "variant": "candidate",
+      "session_id": "five-pinned-4013e0643e2f405a93a61a49a0ecf100",
+      "sandbox_id": "resilient-capybara-1650",
+      "source_hash": "86604f7e3bf3cf7c3c12c36744a7a32b2209aaa100ecb69ce35262e1a5fcbde4",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 17.634376200963743,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:53:03.415814+00:00",
+            "duration_ms": 1237.32
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 15.59,
+              "toolchain": 0.09,
+              "import_check": 111.95,
+              "project_build": 647.97,
+              "project_install": 16.76,
+              "dependency_install": 5756.9
+            },
+            "started_at": "2026-11-14T03:53:04.768235+00:00",
+            "duration_ms": 6890.73
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:53:01.073479+00:00",
+            "duration_ms": 2230.32
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 258.12,
+              "import_cache": 6.6,
+              "configuration": 57.6,
+              "project_import": 1659.9,
+              "tracing_import": 234.99,
+              "agentkit_import": 1357.01,
+              "framework_import": 299.63
+            },
+            "started_at": "2026-11-14T03:53:12.005266+00:00",
+            "duration_ms": 4611.11
+          }
+        },
+        "preparation_ms": 15652.93
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:9d64e57e687a652b171384705394e05b394fc7b0c4f492d1da7d4366e3417f91",
+          "status": "succeeded",
+          "client_first_text_s": 29.714696288923733,
+          "client_wall_s": 41.27087466197554,
+          "text_updates": 2,
+          "worker": {
+            "id": "dc3687475d2341a6bc697af13e1b1e15",
+            "pid": 517,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "3e4f158bd25e6ffc3c3d682d5504192ec4c62f56f38b2ffed3590e8d13ea5fc4",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 69.64,
+            "bindings": 0.27,
+            "agent_build": 10.98,
+            "session_open": 58.28,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 39863.47,
+            "framework_import": 0.04
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:9d64e57e687a652b171384705394e05b394fc7b0c4f492d1da7d4366e3417f91",
+            "session_id": "five-pinned-4013e0643e2f405a93a61a49a0ecf100",
+            "trace_id": "tr-ea6c3c6adca287cd9a711eefa82a6ee2",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 39688.91
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 39655.77
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1238.36
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1231.86
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.73
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 5.37
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.21
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1353.46
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1349.61
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.59
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:570b55541d89f5310cd4d90e52f32205594e5afb45abba0d84c503202ab17dde",
+          "status": "succeeded",
+          "client_first_text_s": 2.337648927932605,
+          "client_wall_s": 2.634856989956461,
+          "text_updates": 1,
+          "worker": {
+            "id": "dc3687475d2341a6bc697af13e1b1e15",
+            "pid": 517,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "3e4f158bd25e6ffc3c3d682d5504192ec4c62f56f38b2ffed3590e8d13ea5fc4",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.54,
+            "bindings": 0.28,
+            "agent_build": 5.15,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1434.71,
+            "framework_import": 0.05
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:570b55541d89f5310cd4d90e52f32205594e5afb45abba0d84c503202ab17dde",
+            "session_id": "five-pinned-4013e0643e2f405a93a61a49a0ecf100",
+            "trace_id": "tr-fe8cd651c7dc8f3d0d8492f08418a2aa",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1434.24
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1432.54
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1063.12
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1059.3
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.47
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "resilient-capybara-1650",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 239.64,
+          "sandbox_lookup": 42.13,
+          "stop_request": 99.23,
+          "wait_until_stopped": 22046.13,
+          "total": 22436.25
+        }
+      },
+      "stop_client_s": 22.674632730078883
+    },
+    {
+      "variant": "candidate",
+      "session_id": "five-pinned-eca31949dae2487ea5865d2b79dcbdb2",
+      "sandbox_id": "delightful-werewolf-6654",
+      "source_hash": "86604f7e3bf3cf7c3c12c36744a7a32b2209aaa100ecb69ce35262e1a5fcbde4",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 17.522107772994787,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:54:26.970759+00:00",
+            "duration_ms": 1161.48
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 16.02,
+              "toolchain": 0.07,
+              "import_check": 103.59,
+              "project_build": 576.77,
+              "project_install": 17.4,
+              "dependency_install": 6111.47
+            },
+            "started_at": "2026-11-14T03:54:28.239620+00:00",
+            "duration_ms": 7176.16
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:54:24.838472+00:00",
+            "duration_ms": 2021.29
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 282.28,
+              "import_cache": 6.55,
+              "configuration": 63.46,
+              "project_import": 1684.88,
+              "tracing_import": 229.73,
+              "agentkit_import": 1301.41,
+              "framework_import": 225.45
+            },
+            "started_at": "2026-11-14T03:54:35.758337+00:00",
+            "duration_ms": 4572.15
+          }
+        },
+        "preparation_ms": 15590.33
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:19e21e65fa3a1d7b239ed7b13355f4e83ea26231d39f502d246677963142b57d",
+          "status": "succeeded",
+          "client_first_text_s": 3.877224879921414,
+          "client_wall_s": 5.303251244942658,
+          "text_updates": 3,
+          "worker": {
+            "id": "2dba1e2739fe4c4c9f3d286abff3ab64",
+            "pid": 532,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "0c9c5cc781a7084144ed1d33f67ad979d7b7436f1a2055b13eddf8e18900123d",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 70.76,
+            "bindings": 0.27,
+            "agent_build": 11.59,
+            "session_open": 58.78,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 3105.87,
+            "framework_import": 0.04
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:19e21e65fa3a1d7b239ed7b13355f4e83ea26231d39f502d246677963142b57d",
+            "session_id": "five-pinned-eca31949dae2487ea5865d2b79dcbdb2",
+            "trace_id": "tr-6a8d920f6e9d9a7728dfd737a4c48777",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 2900.83
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 2866.27
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1012.77
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1006.17
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.59
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 5.7
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.25
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1162.22
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1158.42
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.5
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:e7767dc397145fb78528619486edbb4e9ab0a9319f370f734d2b3ef04886bc45",
+          "status": "succeeded",
+          "client_first_text_s": 2.483289833064191,
+          "client_wall_s": 2.7816785350441933,
+          "text_updates": 1,
+          "worker": {
+            "id": "2dba1e2739fe4c4c9f3d286abff3ab64",
+            "pid": 532,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "0c9c5cc781a7084144ed1d33f67ad979d7b7436f1a2055b13eddf8e18900123d",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.52,
+            "bindings": 0.29,
+            "agent_build": 5.11,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1560.51,
+            "framework_import": 0.05
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:e7767dc397145fb78528619486edbb4e9ab0a9319f370f734d2b3ef04886bc45",
+            "session_id": "five-pinned-eca31949dae2487ea5865d2b79dcbdb2",
+            "trace_id": "tr-5e2a5cc79e2706cf478a100a86154bc6",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1560.02
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1558.25
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1111.07
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1107.28
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.46
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "delightful-werewolf-6654",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 206.02,
+          "sandbox_lookup": 40.0,
+          "stop_request": 111.49,
+          "wait_until_stopped": 20841.57,
+          "total": 21207.24
+        }
+      },
+      "stop_client_s": 21.449444534955546
+    },
+    {
+      "variant": "candidate",
+      "session_id": "five-pinned-e78b52eb3e064940aa7ab84d125a279e",
+      "sandbox_id": "evolving-tapir-6583",
+      "source_hash": "86604f7e3bf3cf7c3c12c36744a7a32b2209aaa100ecb69ce35262e1a5fcbde4",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "preparation_client_s": 16.82688105897978,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:55:13.922410+00:00",
+            "duration_ms": 1363.68
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 16.17,
+              "toolchain": 0.07,
+              "import_check": 103.63,
+              "project_build": 574.86,
+              "project_install": 16.83,
+              "dependency_install": 5889.07
+            },
+            "started_at": "2026-11-14T03:55:15.386332+00:00",
+            "duration_ms": 6949.72
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T03:55:11.904261+00:00",
+            "duration_ms": 1824.39
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 273.55,
+              "import_cache": 6.91,
+              "configuration": 55.32,
+              "project_import": 1690.0,
+              "tracing_import": 232.14,
+              "agentkit_import": 1313.28,
+              "framework_import": 229.17
+            },
+            "started_at": "2026-11-14T03:55:22.675890+00:00",
+            "duration_ms": 4567.48
+          }
+        },
+        "preparation_ms": 15445.28
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:fbd9d73f801b0574b73792ecdcca5e954e8993e75bc4a5ce5e30a0e7061438ad",
+          "status": "succeeded",
+          "client_first_text_s": 4.5242947429651394,
+          "client_wall_s": 5.891760793980211,
+          "text_updates": 2,
+          "worker": {
+            "id": "e8c78b614529420f81d4a38a96148515",
+            "pid": 546,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "1f595137c4104159860d03f2cc3bb9e4862d12e2bf136ea7144f568b0221d3bf",
+            "retiring": false,
+            "invocation_count": 1
+          },
+          "worker_timings_ms": {
+            "prepare": 63.77,
+            "bindings": 0.28,
+            "agent_build": 10.84,
+            "session_open": 52.54,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 3597.63,
+            "framework_import": 0.04
+          },
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "managed_session_history_verified": false,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:fbd9d73f801b0574b73792ecdcca5e954e8993e75bc4a5ce5e30a0e7061438ad",
+            "session_id": "five-pinned-e78b52eb3e064940aa7ab84d125a279e",
+            "trace_id": "tr-ca0568e34767801879698fdcb33a5736",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3400.62
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 3367.59
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1289.7
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1283.44
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.53
+              },
+              {
+                "name": "tools",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 4.62
+              },
+              {
+                "name": "get_current_time",
+                "type": "TOOL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.16
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1395.11
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1391.31
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.46
+              }
+            ]
+          }
+        },
+        {
+          "invocation_id": "sandbox:29f2f1b87770109943c05545b6336b201fea53e68fc7f45f4825ee65cc5b3126",
+          "status": "succeeded",
+          "client_first_text_s": 2.1205418460303918,
+          "client_wall_s": 3.3372380459913984,
+          "text_updates": 1,
+          "worker": {
+            "id": "e8c78b614529420f81d4a38a96148515",
+            "pid": 546,
+            "mode": "persistent",
+            "reused": true,
+            "identity": "1f595137c4104159860d03f2cc3bb9e4862d12e2bf136ea7144f568b0221d3bf",
+            "retiring": false,
+            "invocation_count": 2
+          },
+          "worker_timings_ms": {
+            "prepare": 5.58,
+            "bindings": 0.29,
+            "agent_build": 5.17,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1243.5,
+            "framework_import": 0.05
+          },
+          "tool_calls": [],
+          "managed_session_history_verified": true,
+          "trace": {
+            "variant": "candidate",
+            "invocation_id": "sandbox:29f2f1b87770109943c05545b6336b201fea53e68fc7f45f4825ee65cc5b3126",
+            "session_id": "five-pinned-e78b52eb3e064940aa7ab84d125a279e",
+            "trace_id": "tr-b0c46b50011be9258ed13478c6b64af6",
+            "status": "TraceStatus.OK",
+            "spans": [
+              {
+                "name": "sandbox.invoke",
+                "type": "UNKNOWN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1243.02
+              },
+              {
+                "name": "LangGraph",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1241.11
+              },
+              {
+                "name": "model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 919.55
+              },
+              {
+                "name": "_RoutedChatDatabricks",
+                "type": "CHAT_MODEL",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 915.64
+              },
+              {
+                "name": "HumanInTheLoopMiddleware.after_model",
+                "type": "CHAIN",
+                "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+                "duration_ms": 1.73
+              }
+            ]
+          }
+        }
+      ],
+      "stop": {
+        "sandbox_id": "evolving-tapir-6583",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 215.83,
+          "sandbox_lookup": 35.72,
+          "stop_request": 120.25,
+          "wait_until_stopped": 75243.63,
+          "total": 75624.93
+        }
+      },
+      "stop_client_s": 75.85756058699917
+    }
+  ],
+  "sources": {
+    "baseline": {
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "workspace_source": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-1114/revisions/fa6cbaa68f55c20596d1cd5218f7806e1de1a6e3c88e16282678b084400e2fca/source",
+      "uv_lock_sha256": "9599dbb1a22254a16dbf66e58cd8528226f1c6c9a0198e59fc8b482a5948ce56",
+      "pyproject_sha256": "b6125b81e0666846960e02f5ae20e8adfbe9e97932e6f21dae6a5200cfed869a",
+      "wheels": {
+        "databricks-ai-bridge": {
+          "version": "0.22.0+lean.0959379c78c7",
+          "wheel": "databricks_ai_bridge-0.22.0+lean.0959379c78c7-py3-none-any.whl",
+          "sha256": "12032de22627ef797138df8e5d4e217172b1bf6aaf01d813c68f522e206c876e"
+        },
+        "databricks-agentbricks": {
+          "version": "0.10.0.dev0+lean.9fd969491273",
+          "wheel": "databricks_agentbricks-0.10.0.dev0+lean.9fd969491273-py3-none-any.whl",
+          "sha256": "13198c6e0e8c421e246a8e30507797b23074db78f64764903fa6c10eec91ed89"
+        },
+        "databricks-langchain": {
+          "version": "0.22.0+lean.59a6fa2b2820",
+          "wheel": "databricks_langchain-0.22.0+lean.59a6fa2b2820-py3-none-any.whl",
+          "sha256": "fbc1de392b9e772e1ab83c9f78158af78f0cf2861d9996485a93a368c179ce9e"
+        },
+        "databricks-openai": {
+          "version": "0.18.0+lean.7c22d48642db",
+          "wheel": "databricks_openai-0.18.0+lean.7c22d48642db-py3-none-any.whl",
+          "sha256": "a937453afcdb87832ee0318d0f43fd348ecb3c09c422982e1c140e61f78c97d2"
+        },
+        "databricks-mcp": {
+          "version": "0.9.2+lean.276ec7df83f4",
+          "wheel": "databricks_mcp-0.9.2+lean.276ec7df83f4-py3-none-any.whl",
+          "sha256": "c27a759d848d9366822c495b41ef599a295839234f153566a1ce3942e2bc4a66"
+        }
+      },
+      "installed": {
+        "packages": {
+          "opentelemetry-sdk": "1.45.2",
+          "jsonschema-specifications": "2025.9.1",
+          "databricks-agentbricks": "0.10.0.dev0+lean.9fd969491273",
+          "langgraph-checkpoint-sqlite": "3.1.3",
+          "openai": "2.54.0",
+          "tenacity": "9.2.1",
+          "annotated-doc": "0.0.6",
+          "SQLAlchemy": "2.1.8",
+          "truststore": "0.10.5",
+          "markdown-it-py": "4.3.0",
+          "langchain-protocol": "0.0.21",
+          "googleapis-common-protos": "1.76.0",
+          "databricks-sdk": "0.166.0",
+          "databricks-ai-bridge": "0.22.0+lean.0959379c78c7",
+          "uuid_utils": "0.19.0",
+          "langgraph-sdk": "0.4.14",
+          "opentelemetry-semantic-conventions": "0.66b2",
+          "click": "8.5.1",
+          "h11": "0.16.0",
+          "fastapi": "0.162.7",
+          "opentelemetry-exporter-otlp-proto-grpc": "1.45.2",
+          "mcp": "1.30.0",
+          "urllib3": "2.8.0",
+          "jiter": "0.19.0",
+          "rich": "15.0.0",
+          "packaging": "26.3",
+          "langchain": "1.4.9",
+          "zstandard": "0.25.0",
+          "pydantic-settings": "2.16.3",
+          "pycparser": "3.12",
+          "httpx2": "2.16.0",
+          "databricks-openai": "0.18.0+lean.7c22d48642db",
+          "opentelemetry-exporter-otlp-proto-common": "1.45.2",
+          "Pygments": "2.21.0",
+          "sse-starlette": "3.7.0",
+          "jsonpointer": "3.12",
+          "langsmith": "0.14.17",
+          "typing-inspection": "0.4.5",
+          "jsonpatch": "1.47",
+          "python-multipart": "0.0.33",
+          "certifi": "2026.10.23",
+          "cryptography": "50.0.2",
+          "psycopg-binary": "3.3.9",
+          "psycopg-pool": "3.3.3",
+          "mdurl": "0.1.2",
+          "langgraph-prebuilt": "1.1.1",
+          "databricks-mcp": "0.9.2+lean.276ec7df83f4",
+          "grpcio": "1.85.1",
+          "tqdm": "4.70.1",
+          "google-auth": "2.62.2",
+          "idna": "3.20",
+          "langgraph": "1.2.20",
+          "psycopg": "3.3.9",
+          "orjson": "3.13.0",
+          "pyasn1_modules": "0.4.2",
+          "greenlet": "3.5.6",
+          "xxhash": "4.1.0",
+          "uvicorn": "0.54.0",
+          "httpx-sse": "0.4.3",
+          "langchain-core": "1.7.6",
+          "databricks-langchain": "0.22.0+lean.59a6fa2b2820",
+          "attrs": "26.1.0",
+          "opentelemetry-proto": "1.45.2",
+          "requests": "2.34.2",
+          "agent-langgraph": "0.1.0",
+          "ormsgpack": "1.13.1",
+          "tomli": "2.5.0",
+          "griffelib": "2.4.1",
+          "sqlite-vec": "0.1.9",
+          "PyJWT": "2.15.1",
+          "tomlkit": "0.15.2",
+          "opentelemetry-api": "1.45.2",
+          "referencing": "0.37.0",
+          "opentelemetry-exporter-otlp-common": "0.66b2",
+          "typing_extensions": "4.16.0",
+          "python-dotenv": "1.2.4",
+          "pydantic_core": "2.50.4",
+          "aiosqlite": "0.22.1",
+          "httpcore2": "2.16.0",
+          "langgraph-checkpoint": "4.3.1",
+          "sniffio": "1.3.1",
+          "httpcore": "1.0.9",
+          "jsonschema": "4.26.0",
+          "langchain-mcp-adapters": "0.3.2",
+          "charset-normalizer": "3.5.2",
+          "websockets": "16.1.1",
+          "requests-toolbelt": "1.0.0",
+          "protobuf": "7.36.2",
+          "starlette": "1.10.0",
+          "rpds-py": "2026.9.1",
+          "mlflow-tracing": "3.18.0",
+          "pydantic": "2.14.3",
+          "cachetools": "7.3.1",
+          "pyasn1": "0.6.5",
+          "PyYAML": "6.0.3",
+          "annotated-types": "0.8.0",
+          "httpx": "0.28.1",
+          "cffi": "2.1.1",
+          "anyio": "4.16.0",
+          "openai-agents": "0.20.0",
+          "distro": "1.9.0"
+        },
+        "heavy": {
+          "pyspark": false,
+          "pyarrow": false,
+          "numpy": false,
+          "pandas": false
+        }
+      }
+    },
+    "candidate": {
+      "source_hash": "86604f7e3bf3cf7c3c12c36744a7a32b2209aaa100ecb69ce35262e1a5fcbde4",
+      "workspace_source": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/revisions/458f3484aba214f34e9e787b1b62802750c58f05b684febe825630366617acbd/source",
+      "uv_lock_sha256": "2a1cc1814447ee217041a0547c463669e42fed6de10bd52a38e6afb3b616e888",
+      "pyproject_sha256": "c18a8dce7d0f1a8d158c0555a5db3fcb05334eedb82647fe5ca228e707a4b6c9",
+      "wheels": {
+        "databricks-ai-bridge": {
+          "version": "0.22.0+lean.0959379c78c7",
+          "wheel": "databricks_ai_bridge-0.22.0+lean.0959379c78c7-py3-none-any.whl",
+          "sha256": "12032de22627ef797138df8e5d4e217172b1bf6aaf01d813c68f522e206c876e"
+        },
+        "databricks-agentbricks": {
+          "version": "0.10.0.dev0+lean.dc816091be44",
+          "wheel": "databricks_agentbricks-0.10.0.dev0+lean.dc816091be44-py3-none-any.whl",
+          "sha256": "92ead7e0de40cc069d7a422c18dc72658ac1976d9de3cbc74f628d46d7d692d3"
+        },
+        "databricks-langchain": {
+          "version": "0.22.0+lean.59a6fa2b2820",
+          "wheel": "databricks_langchain-0.22.0+lean.59a6fa2b2820-py3-none-any.whl",
+          "sha256": "fbc1de392b9e772e1ab83c9f78158af78f0cf2861d9996485a93a368c179ce9e"
+        },
+        "databricks-openai": {
+          "version": "0.18.0+lean.7c22d48642db",
+          "wheel": "databricks_openai-0.18.0+lean.7c22d48642db-py3-none-any.whl",
+          "sha256": "a937453afcdb87832ee0318d0f43fd348ecb3c09c422982e1c140e61f78c97d2"
+        },
+        "databricks-mcp": {
+          "version": "0.9.2+lean.276ec7df83f4",
+          "wheel": "databricks_mcp-0.9.2+lean.276ec7df83f4-py3-none-any.whl",
+          "sha256": "c27a759d848d9366822c495b41ef599a295839234f153566a1ce3942e2bc4a66"
+        }
+      },
+      "installed": {
+        "packages": {
+          "tomli": "2.5.0",
+          "sqlite-vec": "0.1.9",
+          "requests-toolbelt": "1.0.0",
+          "opentelemetry-api": "1.45.2",
+          "opentelemetry-exporter-otlp-common": "0.66b2",
+          "annotated-types": "0.8.0",
+          "truststore": "0.10.5",
+          "sse-starlette": "3.7.0",
+          "aiosqlite": "0.22.1",
+          "googleapis-common-protos": "1.76.0",
+          "jsonpointer": "3.12",
+          "certifi": "2026.10.23",
+          "idna": "3.20",
+          "annotated-doc": "0.0.6",
+          "opentelemetry-proto": "1.45.2",
+          "jsonschema": "4.26.0",
+          "pydantic-settings": "2.16.3",
+          "xxhash": "4.1.0",
+          "cryptography": "50.0.2",
+          "langgraph-sdk": "0.4.14",
+          "anyio": "4.16.0",
+          "mcp": "1.30.0",
+          "langsmith": "0.14.17",
+          "mlflow-tracing": "3.18.0",
+          "ormsgpack": "1.13.1",
+          "langgraph": "1.2.20",
+          "pyasn1_modules": "0.4.2",
+          "PyJWT": "2.15.1",
+          "httpx2": "2.16.0",
+          "markdown-it-py": "4.3.0",
+          "langchain": "1.4.9",
+          "packaging": "26.3",
+          "jiter": "0.19.0",
+          "langgraph-checkpoint": "4.3.1",
+          "openai-agents": "0.20.0",
+          "requests": "2.34.2",
+          "databricks-openai": "0.18.0+lean.7c22d48642db",
+          "jsonschema-specifications": "2025.9.1",
+          "python-multipart": "0.0.33",
+          "typing_extensions": "4.16.0",
+          "databricks-langchain": "0.22.0+lean.59a6fa2b2820",
+          "databricks-mcp": "0.9.2+lean.276ec7df83f4",
+          "psycopg-binary": "3.3.9",
+          "referencing": "0.37.0",
+          "PyYAML": "6.0.3",
+          "orjson": "3.13.0",
+          "langchain-mcp-adapters": "0.3.2",
+          "psycopg-pool": "3.3.3",
+          "python-dotenv": "1.2.4",
+          "grpcio": "1.85.1",
+          "urllib3": "2.8.0",
+          "databricks-agentbricks": "0.10.0.dev0+lean.dc816091be44",
+          "protobuf": "7.36.2",
+          "langchain-protocol": "0.0.21",
+          "databricks-ai-bridge": "0.22.0+lean.0959379c78c7",
+          "opentelemetry-semantic-conventions": "0.66b2",
+          "databricks-sdk": "0.166.0",
+          "langchain-core": "1.7.6",
+          "Pygments": "2.21.0",
+          "pydantic": "2.14.3",
+          "distro": "1.9.0",
+          "SQLAlchemy": "2.1.8",
+          "httpx": "0.28.1",
+          "click": "8.5.1",
+          "cachetools": "7.3.1",
+          "langgraph-prebuilt": "1.1.1",
+          "tqdm": "4.70.1",
+          "pydantic_core": "2.50.4",
+          "opentelemetry-sdk": "1.45.2",
+          "uuid_utils": "0.19.0",
+          "typing-inspection": "0.4.5",
+          "pyasn1": "0.6.5",
+          "httpcore2": "2.16.0",
+          "zstandard": "0.25.0",
+          "jsonpatch": "1.47",
+          "tomlkit": "0.15.2",
+          "griffelib": "2.4.1",
+          "agent-langgraph": "0.1.0",
+          "httpx-sse": "0.4.3",
+          "langgraph-checkpoint-sqlite": "3.1.3",
+          "google-auth": "2.62.2",
+          "sniffio": "1.3.1",
+          "fastapi": "0.162.7",
+          "greenlet": "3.5.6",
+          "httpcore": "1.0.9",
+          "h11": "0.16.0",
+          "starlette": "1.10.0",
+          "opentelemetry-exporter-otlp-proto-grpc": "1.45.2",
+          "cffi": "2.1.1",
+          "opentelemetry-exporter-otlp-proto-common": "1.45.2",
+          "pycparser": "3.12",
+          "websockets": "16.1.1",
+          "rpds-py": "2026.9.1",
+          "uvicorn": "0.54.0",
+          "openai": "2.54.0",
+          "attrs": "26.1.0",
+          "psycopg": "3.3.9",
+          "rich": "15.0.0",
+          "tenacity": "9.2.1",
+          "mdurl": "0.1.2",
+          "charset-normalizer": "3.5.2"
+        },
+        "heavy": {
+          "pyspark": false,
+          "pyarrow": false,
+          "numpy": false,
+          "pandas": false
+        }
+      }
+    }
+  },
+  "installed_version_differences": {
+    "databricks-agentbricks": [
+      "0.10.0.dev0+lean.9fd969491273",
+      "0.10.0.dev0+lean.dc816091be44"
+    ]
+  },
+  "exploratory_probes": {
+    "lean-profile": {
+      "hook": {
+        "total_s": 9.315283127000043,
+        "adapter_s": 0.050906009999948765,
+        "cpu_s": 9.096748790000001,
+        "prepared": {
+          "timings_ms": {
+            "framework_import": 779.54,
+            "agentkit_import": 2694.38,
+            "tracing_import": 869.32,
+            "project_import": 4081.79,
+            "import_cache": 439.35,
+            "bindings": 338.67,
+            "configuration": 60.37
+          }
+        },
+        "rss_mib": 211.93359375,
+        "modules": 3379,
+        "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+        "uv_compile_env": null
+      },
+      "bootstrap": {
+        "extract": 15.49,
+        "toolchain": 0.07,
+        "dependency_install": 1610.79,
+        "project_build": 576.62,
+        "project_install": 16.03,
+        "import_check": 273.67
+      },
+      "instrumented": true
+    },
+    "compiled": {
+      "hook": {
+        "total_s": 4.723967724999966,
+        "adapter_s": 0.05058471600000303,
+        "cpu_s": 4.5606284839999995,
+        "prepared": {
+          "timings_ms": {
+            "framework_import": 249.03,
+            "agentkit_import": 1285.94,
+            "tracing_import": 227.33,
+            "project_import": 1941.65,
+            "import_cache": 433.2,
+            "bindings": 481.55,
+            "configuration": 53.68
+          }
+        },
+        "rss_mib": 202.60546875,
+        "modules": 3379,
+        "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+        "uv_compile_env": null
+      },
+      "bootstrap": {
+        "extract": 15.59,
+        "toolchain": 0.07,
+        "dependency_install": 5642.01,
+        "project_build": 557.0,
+        "project_install": 17.54,
+        "import_check": 109.68
+      },
+      "instrumented": false
+    },
+    "compiled-no-prefetch": {
+      "hook": {
+        "total_s": 4.388404958000137,
+        "adapter_s": 0.04977027900008579,
+        "cpu_s": 4.145791083000001,
+        "prepared": {
+          "timings_ms": {
+            "framework_import": 226.99,
+            "agentkit_import": 1326.12,
+            "tracing_import": 259.17,
+            "project_import": 1974.32,
+            "bindings": 490.44,
+            "configuration": 60.83
+          }
+        },
+        "rss_mib": 199.90625,
+        "modules": 3379,
+        "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+        "uv_compile_env": null
+      },
+      "bootstrap": {
+        "extract": 15.72,
+        "toolchain": 0.07,
+        "dependency_install": 5863.1,
+        "project_build": 632.32,
+        "project_install": 18.1,
+        "import_check": 112.19
+      },
+      "instrumented": false
+    },
+    "candidate-profile": {
+      "hook": {
+        "total_s": 4.327947031999997,
+        "adapter_s": 0.05238158600002407,
+        "cpu_s": 4.03428194,
+        "prepared": {
+          "timings_ms": {
+            "framework_import": 232.03,
+            "agentkit_import": 1322.88,
+            "tracing_import": 230.71,
+            "project_import": 1613.08,
+            "import_cache": 321.0,
+            "bindings": 501.15,
+            "configuration": 53.84
+          }
+        },
+        "rss_mib": 187.32421875,
+        "modules": 3137,
+        "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+        "uv_compile_env": null
+      },
+      "bootstrap": {
+        "extract": 15.72,
+        "toolchain": 0.06,
+        "dependency_install": 5914.5,
+        "project_build": 617.17,
+        "project_install": 17.34,
+        "import_check": 107.43
+      },
+      "instrumented": true
+    },
+    "final-probe": {
+      "hook": {
+        "total_s": 3.976915555000005,
+        "adapter_s": 0.052286830000184636,
+        "cpu_s": 3.765443443,
+        "prepared": {
+          "timings_ms": {
+            "framework_import": 239.72,
+            "agentkit_import": 1338.64,
+            "tracing_import": 266.57,
+            "project_import": 1714.23,
+            "import_cache": 7.98,
+            "bindings": 290.22,
+            "configuration": 66.34
+          }
+        },
+        "rss_mib": 185.375,
+        "modules": 3136,
+        "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+        "uv_compile_env": null
+      },
+      "bootstrap": {
+        "extract": 15.64,
+        "toolchain": 0.07,
+        "dependency_install": 5804.7,
+        "project_build": 614.3,
+        "project_install": 24.69,
+        "import_check": 116.83
+      },
+      "instrumented": false
+    }
+  },
+  "excluded_exploratory_app_samples": {
+    "reason": "langgraph-checkpoint 4.3.2 and langgraph-prebuilt 1.1.2 instead of baseline 4.3.1 and 1.1.1. Replaced by final pinned run above.",
+    "samples": [
+      {
+        "session_id": "five-profile-e5c231d9f6044980975d6a07681c85ac",
+        "source_hash": "70411bd1f0cd24c923b5a3cd106f526e292b00add99cd320cb1573eeb482b222",
+        "handler_ms": 4541.29,
+        "preparation_ms": 15652.8,
+        "stop": {
+          "sandbox_id": "pithy-leafhopper-7773",
+          "status": "stopped",
+          "timings_ms": {
+            "registry_connect_and_lock": 234.56,
+            "sandbox_lookup": 42.95,
+            "stop_request": 95.79,
+            "wait_until_stopped": 21934.37,
+            "total": 22318.42
+          }
+        }
+      },
+      {
+        "session_id": "five-profile-081e0aa6d8564da59ffcbb64e3fc4d61",
+        "source_hash": "70411bd1f0cd24c923b5a3cd106f526e292b00add99cd320cb1573eeb482b222",
+        "handler_ms": 4467.13,
+        "preparation_ms": 15429.41,
+        "stop": {
+          "sandbox_id": "alert-salmon-1448",
+          "status": "stopped",
+          "timings_ms": {
+            "registry_connect_and_lock": 216.67,
+            "sandbox_lookup": 47.83,
+            "stop_request": 110.59,
+            "wait_until_stopped": 20913.47,
+            "total": 21298.75
+          }
+        }
+      },
+      {
+        "session_id": "five-profile-56e9182a16f0463d9fba885b67fc534d",
+        "source_hash": "70411bd1f0cd24c923b5a3cd106f526e292b00add99cd320cb1573eeb482b222",
+        "handler_ms": 4451.42,
+        "preparation_ms": 15747.49,
+        "stop": {
+          "sandbox_id": "resounding-chub-9982",
+          "status": "stopped",
+          "timings_ms": {
+            "registry_connect_and_lock": 240.36,
+            "sandbox_lookup": 50.65,
+            "stop_request": 104.21,
+            "wait_until_stopped": 22012.85,
+            "total": 22420.81
+          }
+        }
+      }
+    ]
+  },
+  "validation": {
+    "unit_tests": "76 passed, 15 skipped; langgraph_mcp_imports_test, mcp_request_user_test, sandbox_runtime/imports_test and adapters_test",
+    "clean_install": "uv pip check passed, 101 distributions; no package exclusions",
+    "configured_mcp": {
+      "no_mcp_import_when_unconfigured": true,
+      "configured_tools": [
+        "sum_numbers"
+      ],
+      "result": [
+        {
+          "type": "text",
+          "text": "42",
+          "id": "lc_2f014395-5723-4bda-a822-f78c25e24263"
+        }
+      ]
+    },
+    "real_invocations": 12,
+    "inspected_traces": 12,
+    "ui": "No UI source changes; live API/SSE evidence, no new browser recording",
+    "not_verified": [
+      "Live OpenAI invocation",
+      "Optional integration and minimum-version matrix",
+      "Five-second end-to-end readiness",
+      "Production latency percentiles"
+    ]
+  },
+  "publication": [
+    {
+      "variant": "candidate",
+      "url": "https://agent-bricks-sb-lean-five-14-6051921418418893.staging.aws.databricksapps.com",
+      "source": {
+        "bundle_bytes": 1179318,
+        "created_at": "2026-11-14T03:52:41.478157+00:00",
+        "entrypoint": "runtime.sandbox_entry:invoke",
+        "execution_artifact": null,
+        "file_count": 21,
+        "git_source": null,
+        "id": "afa2d4ed7ce49e4484206b03f919981b",
+        "name": "environment:agent-bricks-sb-lean-five-14-458f3484aba214f3",
+        "source_archive": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/catalog/sources/afa2d4ed7ce49e4484206b03f919981b.tar.gz",
+        "source_hash": "86604f7e3bf3cf7c3c12c36744a7a32b2209aaa100ecb69ce35262e1a5fcbde4",
+        "source_kind": "workspace",
+        "source_path": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/revisions/458f3484aba214f34e9e787b1b62802750c58f05b684febe825630366617acbd/source"
+      },
+      "config": {
+        "workspace": "https://e2-dogfood.staging.cloud.databricks.com",
+        "service_principal": "e3205568-3738-4880-b7b4-b275349aa5a2",
+        "runtime_store": "runtime-stores/agent-bricks-sb-lean-five-14",
+        "example_workspace_path": "",
+        "default_entrypoint": "runtime.sandbox_entry:invoke",
+        "default_environment": "agent-bricks-sb-lean-five-14-458f3484aba214f3",
+        "default_agent_id": "afa2d4ed7ce49e4484206b03f919981b",
+        "sandbox_idle_timeout_seconds": 600,
+        "sandbox_warm_pool_size": 0,
+        "sandbox_scope": "session",
+        "environment_mode": "on-demand",
+        "capabilities": [
+          "git-revisions",
+          "session-pinning",
+          "source-snapshots",
+          "text-streaming",
+          "session-sandboxes",
+          "session-ssh",
+          "session-preparation"
+        ],
+        "workbench": {
+          "framework": "langgraph",
+          "sessions": {
+            "mode": "managed",
+            "store": "sb-lean-five-14-sessions"
+          },
+          "tracing": {
+            "configured": true,
+            "experiment_name": "/Shared/agentbricks_traces/sb-lean-five-14",
+            "experiment_id": "1476495253550735",
+            "url": "https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253550735/traces"
+          },
+          "tools": []
+        }
+      },
+      "deployment": {
+        "create_time": "2026-11-14T03:52:48Z",
+        "creator": "james.wu@databricks.com",
+        "deployment_artifacts": {
+          "source_code_path": "/Workspace/Users/e3205568-3738-4880-b7b4-b275349aa5a2/src/01f1dfdedb551e67a08e6530610084e2"
+        },
+        "deployment_id": "01f1dfdedb551e67a08e6530610084e2",
+        "mode": "SNAPSHOT",
+        "source_code_path": "/Workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-five-14/app/rollouts/fed214dc0209485da491b37609244cb0",
+        "status": {
+          "message": "App started successfully",
+          "state": "SUCCEEDED"
+        },
+        "update_time": "2026-11-14T03:52:59Z"
+      },
+      "source_readers": [
+        {
+          "group": "users",
+          "levels": [
+            "WorkspaceObjectPermissionLevel.CAN_READ"
+          ]
+        }
+      ]
+    }
+  ],
+  "cleanup": {
+    "direct_probes_and_builders": {
+      "checked_at": "2026-11-14T03:55:02.698363+00:00",
+      "sandboxes": [
+        {
+          "artifact": "lean-profile/sandbox.json",
+          "sandbox_id": "devout-cheetah-3860",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "compiled/sandbox.json",
+          "sandbox_id": "heuristic-fossa-6447",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "compiled-no-prefetch/sandbox.json",
+          "sandbox_id": "tough-passerine-1247",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "candidate-profile/sandbox.json",
+          "sandbox_id": "cultivated-stinkbug-2381",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "final-probe/sandbox.json",
+          "sandbox_id": "rejoicing-tilapia-5789",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "candidate/builder.json",
+          "sandbox_id": "teeming-tenrec-3557",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "candidate-final/builder.json",
+          "sandbox_id": "limber-crayfish-5594",
+          "status": "Stopped"
+        },
+        {
+          "artifact": "candidate-pinned/builder.json",
+          "sandbox_id": "up-baboon-8285",
+          "status": "Stopped"
+        }
+      ]
+    },
+    "live_sessions": "Every measured App session returned stopped; see sample stop records. Both lean Apps remain running with zero warm spares."
+  },
+  "reproduction": {
+    "local_artifact_directory": "/home/james.wu/agentbricks-demo/startup-five-20261114",
+    "benchmark_script_sha256": "6b8cc48a3d9a8f57a387d6bbc4f57bad3e2bcb09870ab3e101b3eec4468ecd52",
+    "trace_verifier_sha256": "5cfd4e46d008498b0ed93a2d64259b196453db7cdc2b071743894206b8794a48",
+    "report": "../lean-worker-five-seconds.md"
+  }
+}

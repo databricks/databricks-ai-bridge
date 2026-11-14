@@ -90,3 +90,8 @@ Three fresh App sessions per variant measured 14.88 → 10.38 s median handler
 preparation and 25.41 → 17.36 s total preparation. All 12 streamed tool/history
 invocations and inspected traces passed. The report includes the live App, source,
 reproduction commands, exact artifacts, and remaining limitations.
+
+The [five-second handler follow-up](lean-worker-five-seconds.md) adds install-time
+bytecode compilation, defers unconfigured MCP imports, and reduces import-cache
+bookkeeping. It reports the handler reduction separately from total session
+readiness: most of the improvement moves compilation into installation.
