@@ -158,8 +158,11 @@ class DatabricksSandboxDispatcher:
                 )
                 async for work in poller:
                     if work.data.type != "session":
-                        log.info("skipping work=%s type=%s", work.id, work.data.type)
+                        # The poller acknowledged it; stop it, or it stays stranded until its lease expires. (The SDK
+                        # only defines session work today, so this is defensive.)
+                        log.info("stopping unsupported work=%s type=%s", work.id, work.data.type)
                         status.skipped += 1
+                        await self._stop_work(work)
                         continue
                     session_id = work.data.id
                     if self.accept is not None and not self.accept(work):

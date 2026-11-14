@@ -266,10 +266,18 @@ async def test_dispatcher_launches_sessions_skips_others_and_records_failures(mo
     fake = FakeClient(items)
     dispatcher = DatabricksSandboxDispatcher(launcher, drain=True)
     monkeypatch.setattr(dispatcher, "_client", lambda: fake)
+    stopped = []
+
+    async def stop_work(work):
+        stopped.append(work.data.id)
+
+    monkeypatch.setattr(dispatcher, "_stop_work", stop_work)
     await dispatcher.run()
 
     assert launched == ["sesn_a"]
     assert [f[0] for f in dispatcher.failures] == ["sesn_bad"]
+    # The unsupported item is acknowledged by the poller, so it is stopped rather than left stranded; so is the failure.
+    assert sorted(stopped) == ["sesn_bad", "x"]
     assert fake.poller_kwargs["auto_stop"] is False
     assert fake.poller_kwargs["block_ms"] is None and fake.poller_kwargs["drain"] is True
     status = dispatcher.status
