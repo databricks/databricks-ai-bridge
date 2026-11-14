@@ -119,24 +119,32 @@ class Orchestrator:
                         metrics["remote_connect"] = round(
                             (time.perf_counter() - connect_started) * 1000, 2
                         )
-                        with timed(metrics, "environment_probe"):
-                            home = remote.run('printf "%s" "$HOME"').strip()
-                            deployment = hashlib.sha256(self.namespace.encode()).hexdigest()[:16]
-                            root = f"{home}/.agentbricks-prototype/{deployment}/{bundle.digest}"
-                            if execution_artifact:
-                                artifact_hash = execution_artifact["sha256"]
-                                if not re.fullmatch(r"[a-f0-9]{64}", artifact_hash):
-                                    raise ValueError("Invalid execution artifact hash")
-                                root += "/" + artifact_hash
-                                ready = remote.run(
-                                    f"python3 -c {shlex.quote(CHECK_READY)} {shlex.quote(root)} "
-                                    f"{shlex.quote(json.dumps(execution_artifact))}"
-                                ).strip()
-                            else:
-                                ready = remote.run(
-                                    f"if test -f {shlex.quote(root + '/ready.json')}; then "
-                                    f"cat {shlex.quote(root + '/ready.json')}; fi"
-                                ).strip()
+                        deployment = hashlib.sha256(self.namespace.encode()).hexdigest()[:16]
+                        attached = allocation.prepared
+                        if attached:
+                            if attached.entrypoint != entrypoint:
+                                raise RevisionConflict("Prepared worker entrypoint mismatch")
+                            home = attached.home
+                            ready = json.dumps(attached.bootstrap)
+                            metrics["environment_probe"] = 0.0
+                        else:
+                            with timed(metrics, "environment_probe"):
+                                home = remote.run('printf "%s" "$HOME"').strip()
+                                root = f"{home}/.agentbricks-prototype/{deployment}/{bundle.digest}"
+                                if execution_artifact:
+                                    artifact_hash = execution_artifact["sha256"]
+                                    if not re.fullmatch(r"[a-f0-9]{64}", artifact_hash):
+                                        raise ValueError("Invalid execution artifact hash")
+                                    root += "/" + artifact_hash
+                                    ready = remote.run(
+                                        f"python3 -c {shlex.quote(CHECK_READY)} {shlex.quote(root)} "
+                                        f"{shlex.quote(json.dumps(execution_artifact))}"
+                                    ).strip()
+                                else:
+                                    ready = remote.run(
+                                        f"if test -f {shlex.quote(root + '/ready.json')}; then "
+                                        f"cat {shlex.quote(root + '/ready.json')}; fi"
+                                    ).strip()
                         bootstrap_reused = bool(ready)
                         if ready:
                             timeline.reuse_installation()
@@ -199,6 +207,8 @@ class Orchestrator:
                         state_dir = (
                             f"{home}/.agentbricks-prototype/{deployment}/sessions/{state_key}"
                         )
+                        if attached and state_dir != attached.state_dir:
+                            raise RevisionConflict("Prepared worker state directory mismatch")
                         request = {
                             "session_id": session_id,
                             "invocation_id": invocation_id,
@@ -214,17 +224,20 @@ class Orchestrator:
                         if _warm_worker:
                             timeline.start("handler_prepare")
                             report("Initializing resident handler")
-                            result, worker = self._invoke_worker(
-                                remote,
-                                home,
-                                bootstrap,
-                                state_dir,
-                                entrypoint,
-                                request,
-                                None,
-                                metrics,
-                                prepare=True,
-                            )
+                            if attached:
+                                result, worker = attached.result, attached.worker
+                            else:
+                                result, worker = self._invoke_worker(
+                                    remote,
+                                    home,
+                                    bootstrap,
+                                    state_dir,
+                                    entrypoint,
+                                    request,
+                                    None,
+                                    metrics,
+                                    prepare=True,
+                                )
                             timeline.complete(
                                 details=(result.get("details") or {}).get("timings_ms")
                                 if not worker.get("reused")
@@ -278,7 +291,14 @@ class Orchestrator:
                 "result": result,
                 "worker": worker,
                 **(
-                    {"pool_worker": {"state_dir": state_dir, "python": bootstrap["python"]}}
+                    {
+                        "pool_worker": {
+                            "state_dir": state_dir,
+                            "python": bootstrap["python"],
+                            "home": home,
+                            "root": root,
+                        }
+                    }
                     if _pool_fill
                     else {}
                 ),

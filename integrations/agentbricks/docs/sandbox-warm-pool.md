@@ -3,6 +3,10 @@
 This opt-in prototype moves source copy, dependency installation and handler initialization
 before session creation. One unused, prepared sandbox is assigned to each new session.
 The resident Python process survives assignment, so its imports and prepared handler are reused.
+On assignment, one remote command validates the installed revision and unused worker identity;
+the orchestrator reuses that result rather than probing and preparing the handler again.
+Session creation wakes the preparation scheduler immediately. The UI receives preparation
+snapshots through SSE, with status polling as a fallback, and enables Send on readiness.
 
 ## Local CLI setup
 
@@ -86,45 +90,12 @@ The database must be disposable; tests create and drop their own unique schemas.
 tests require Playwright and Chromium (`SANDBOX_UI_CHROME` can select its executable).
 Live measurements and deployment identity follow.
 
-## Live result — November 13, 2026
+## Live demo and findings
 
-[Warm-pool App](https://agent-bricks-sb-warm-pool-1113-6051921418418893.staging.aws.databricksapps.com)
-· [Workspace source](https://e2-dogfood.staging.cloud.databricks.com/#workspace/2718939784140450)
-· [Runtime Store](https://e2-dogfood.staging.cloud.databricks.com/api/2.0/agents/runtime-stores/agent-bricks-sb-warm-pool-1113)
+The [combined App](https://agent-bricks-sb-lean-five-14-6051921418418893.staging.aws.databricksapps.com)
+uses two unassigned warm spares and the optimized worker from
+[draft #917](https://github.com/databricks/databricks-ai-bridge/pull/917).
+Open Sandbox, wait for **2 ready**, then choose New Chat.
 
-Deployed independently of `sb-workbench-1109` on e2-dogfood. The published revision
-folder is readable by all workspace users. Pool size 2; sandbox idle timeout 1800 s.
-
-- App deployment: `01f1df9d43831cab86588aa776ea2e78`
-- Orchestrator wheel: `0.10.0.dev0+sandbox.f071406d05c8ea71`
-- Agent source: `a9c7bf92ca2ff52275a6f3272bf06bf87dd5d2e65411e247df3a131064d7b093`
-- Same frozen LangGraph workbench agent, SQLite history and default-experiment tracing;
-  model `system.ai.gpt-5-mini`. No custom image or dependency changes.
-
-Three simultaneous session requests consumed two ready spares and exercised one cold fallback:
-
-| Measurement | Two pool hits | One cold fallback |
-| --- | --- | --- |
-| Internal session preparation | 2.07 / 2.11 s | 27.84 s |
-| Caller-observed preparation | 4.49 / 4.52 s | 33.29 s |
-| Source copy / install | Reused | 3.77 / 7.08 s |
-| Handler prepare RPC | 0.55 / 0.52 s, cached | 14.17 s |
-| First text after separate preparation | 3.38 / 3.81 s | 3.76 s |
-| Subsequent turn first text | 2.09 / 3.14 s | 2.27 s |
-
-The caller-observed preparation includes HTTP, the preparation queue and one-second status
-polling. The cold request also queued behind the first two preparations. These are small
-functional samples, not latency percentiles or an isolated model-latency benchmark.
-
-A separate new session invoked directly without a prepare call claimed a spare and streamed
-first text in **3.87 s**, completing in 4.17 s. For an assigned session, stop took **21.80 s**;
-resume took **15.48 s** internally (18.67 s observed), skipped copy/install, restarted its
-worker and retained conversation history. Pooling does not speed up that resume path.
-
-Checks passed: distinct sandboxes and histories; unchanged worker ID from preparation
-through two turns; cold fallback; automatic refill; direct first invocation; stop/resume
-mapping and history; live Chromium capacity/origin labels with no page errors. Test-assigned
-sandboxes were stopped afterward; the demo App retains its two-spare pool for new sessions.
-Multi-replica races and policy changes were tested with real PostgreSQL; live validation
-used one App replica. Long-running churn, credential renewal and sustained arrival rates
-still need a soak test before treating this controller as production-ready.
+Measurements and optimization tradeoffs are maintained in the
+[investigation doc](https://docs.google.com/document/d/13X3RCi46JPWUuB74MOdqCbcaJ5wuVu3fjC2e1Y_aKFw/edit?tab=t.0#bookmark=id.wgjb4zzi3iwo).

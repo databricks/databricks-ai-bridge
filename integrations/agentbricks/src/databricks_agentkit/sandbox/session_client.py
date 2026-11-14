@@ -25,6 +25,19 @@ def timed(metrics, name):
 
 
 @dataclass(frozen=True)
+class PreparedSandbox:
+    """A spare validated during this claim, never a cross-request health cache."""
+
+    sandbox: dict
+    home: str
+    bootstrap: dict
+    state_dir: str
+    entrypoint: str
+    worker: dict
+    result: dict
+
+
+@dataclass(frozen=True)
 class SessionSandbox:
     sandbox: dict
     created: bool
@@ -32,6 +45,7 @@ class SessionSandbox:
     installation_status: str
     state_key: str | None = None
     pool_hit: bool = False
+    prepared: PreparedSandbox | None = None
 
     @property
     def id(self):
@@ -106,10 +120,21 @@ class SessionSandboxClient:
                 and (not row or row["status"] == "pending")
                 and self.warm_pool
             ):
-                pool_hit = self.warm_pool.claim(session, source_hash, source_revision)
+                with timed(metrics, "pool_claim"):
+                    prepared = self.warm_pool.claim(session, source_hash, source_revision)
+                pool_hit = bool(prepared)
                 if pool_hit:
                     row = session.get()
                     report("Using prepared sandbox from warm pool")
+                    return SessionSandbox(
+                        prepared.sandbox,
+                        False,
+                        False,
+                        "ready",
+                        row["bootstrap_metrics"]["worker_state_key"],
+                        pool_hit=True,
+                        prepared=prepared,
+                    )
             sandbox_id = row["sandbox_id"] if row else None
             with timed(metrics, "sandbox_lookup"):
                 sandbox = self.lakebox.get(sandbox_id) if sandbox_id else None
