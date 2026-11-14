@@ -504,6 +504,10 @@ def test_run_one_latency_hard_gate(mocker):
     assert score == 0.0
     assert obj == {"quality": 0.0, "latency": 0.0, "cost": 0.0}
     assert feedback.startswith("REJECTED: latency")
+    assert adapter._last_metrics["quality"] is None
+    assert adapter._last_metrics["latency_s"] >= state.latency_hard_gate
+    assert adapter._last_metrics["cost_usd"] is None
+    assert state.scorer_attempted == 0
 
 
 def test_run_one_warns_when_a_record_goes_over_the_latency_gate(mocker, monkeypatch):
@@ -877,3 +881,121 @@ def test_prompt_only_cost_uses_traced_calls(override):
         {}, [], {}, rates, llm_calls=[{"model": "gpt-test", "input": 2000, "output": 2000}]
     )
     assert cost == pytest.approx(0.0042 if override else 0.008)
+
+
+@pytest.mark.parametrize("override_name", ["claude-haiku-4-5", "system.ai.claude-haiku-4-5"])
+@pytest.mark.parametrize("traced_name", ["claude-haiku-4-5", "system.ai.claude-haiku-4-5"])
+@pytest.mark.parametrize("rate, expected", [(10.0, 0.0028), (0.0, 0.0)])
+def test_prompt_only_cost_override_survives_state_construction(
+    mocker, override_name, traced_name, rate, expected
+):
+    mocker.patch(
+        f"{opt.__name__}.mlflow.genai.load_prompt",
+        return_value=mocker.Mock(template="Answer {{question}}", version=1),
+    )
+    catalog = mocker.patch(f"{opt.__name__}._mlflow_model_cost", return_value=0.5)
+    state = opt._build_state(
+        predict_fn=lambda inputs: "answer",
+        prompt_uris=["prompts:/cat.schema.instructions@production"],
+        gateway_endpoints={},
+        scorers=[],
+        weight_quality=0.7,
+        weight_latency=0.2,
+        weight_cost=0.1,
+        latency_hard_gate=60.0,
+        cost_soft_gate=0.02,
+        reflection_model="unused",
+        token_costs={override_name: {"input": rate, "output": rate}},
+    )
+    cost = _estimate_cost_usd(
+        {},
+        state.endpoint_targets,
+        {},
+        state.token_costs,
+        llm_calls=[{"model": traced_name, "input": 2000, "output": 2000}],
+    )
+    assert cost == pytest.approx(expected)
+    catalog.assert_not_called()
+
+
+def _median_adapter(mocker, predict, scorer):
+    et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
+    state = _state(
+        predict_fn=predict,
+        scorers=[scorer],
+        endpoint_targets=[et],
+        token_costs={"m1": {"input": 1.0, "output": 0.0}},  # 1M input tokens -> 0.07 USD
+    )
+    mocker.patch(f"{opt.__name__}._sync_destinations")
+    mocker.patch(
+        f"{opt.__name__}._extract_trace_summary",
+        return_value={"total_tokens": {"input": 1_000_000, "output": 0}, "spans": []},
+    )
+    return _AgentAdapter(state)
+
+
+def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mocker):
+    def predict(inputs):
+        if inputs["n"] == 3:
+            raise RuntimeError("boom")
+        return "ok"
+
+    adapter = _median_adapter(mocker, predict, lambda inputs, expected, answer: expected["q"])
+    val = opt._tag_validation_records(
+        [
+            {"inputs": {"n": 1}, "expectations": {"q": 1.0}},
+            {"inputs": {"n": 2}, "expectations": {"q": 0.5}},
+            {"inputs": {"n": 3}, "expectations": {"q": 1.0}},
+        ]
+    )
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(val, candidate)
+
+    medians = opt._median_metrics(adapter, candidate, len(val))
+    assert medians is not None
+    assert medians["quality"] == pytest.approx(0.5)  # 1.0, 0.5, and the failure's 0.0
+    assert medians["cost_usd"] == pytest.approx(1.0 * _DBU_TO_USD)
+    failed = adapter._val_metrics[(opt._json_key(candidate), 2)]
+    assert failed == {"quality": 0.0, "latency_s": None, "cost_usd": None}
+    assert opt._median_metrics(adapter, {"model:ep1": "other"}, len(val)) is None
+
+
+def test_medians_keep_identical_validation_rows_apart(mocker):
+    # GEPA scores identical rows as separate examples; the median must too.
+    qualities = iter([0.0, 0.0, 1.0])
+    adapter = _median_adapter(
+        mocker, lambda inputs: "ok", lambda inputs, expected, answer: next(qualities)
+    )
+    record = {"inputs": {"n": 1}, "expectations": {}}
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(opt._tag_validation_records([record, record, record]), candidate)
+    medians = opt._median_metrics(adapter, candidate, 3)
+    assert medians is not None
+    assert medians["quality"] == 0.0
+
+
+def test_training_evaluations_do_not_count_toward_the_medians(mocker):
+    qualities = iter([1.0, 0.0])
+    adapter = _median_adapter(
+        mocker, lambda inputs: "ok", lambda inputs, expected, answer: next(qualities)
+    )
+    record = {"inputs": {"n": 1}, "expectations": {}}
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(opt._tag_validation_records([record]), candidate)  # validation: 1.0
+    adapter.evaluate([record], candidate)  # the same record in a training minibatch: 0.0
+    medians = opt._median_metrics(adapter, candidate, 1)
+    assert medians is not None
+    assert medians["quality"] == 1.0
+
+
+def test_median_handles_even_counts_and_missing_values():
+    assert opt._median([3.0, 1.0, None, 2.0, 4.0]) == pytest.approx(2.5)
+    assert opt._median([None]) is None
+
+
+def test_metrics_change_line_keeps_sub_cent_costs_readable():
+    line = opt._format_metrics_change(
+        {"quality": 0.0, "latency_s": 2.3, "cost_usd": 0.00012},
+        {"quality": 1.0, "latency_s": 0.5, "cost_usd": 0.00004},
+    )
+    assert line == "median quality 0.00 -> 1.00, latency 2.3s -> 0.5s, cost $0.00012 -> $0.000040"

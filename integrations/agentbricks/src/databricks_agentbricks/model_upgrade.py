@@ -7,8 +7,8 @@ Python project in workspace files) plus ``databricks-agentbricks[upgrade]``. Ins
 ``job_main`` imports the project's own ``predict_fn``, eval data, and scorers (``module:attr``
 references, the same inputs ``optimize_prompts_and_models`` takes) and runs the search:
 ``databricks_agentkit.model_upgrades.optimize_prompts_and_models`` (GEPA), which routes the agent's
-calls to a temporary ``<service>_exp_<id>`` clone of the bound model service, so production traffic is
-never touched while candidates run. The job records its ``UpgradeReport`` on an MLflow run; the CLI
+calls to temporary ``<service>_exp_<id>_<model>`` clones of the bound model services (one per
+candidate model), so production traffic is never touched while candidates run. The job records its ``UpgradeReport`` on an MLflow run; the CLI
 reads it back (``fetch_report``) and only `models apply` switches the service.
 
 The job-side heavy dependencies (``gepa``, full ``mlflow``) are imported lazily, so the CLI stays
@@ -101,6 +101,9 @@ class UpgradeReport:
     # Prompts (registry names) the winner rewrote; empty when only models changed.
     prompt_changes: list[str] = field(default_factory=list)
     mlflow_run_id: Optional[str] = None
+    # Medians over the eval records, in raw units: quality, latency_s, cost_usd (None if unmeasured).
+    baseline_metrics: Optional[dict[str, Optional[float]]] = None
+    best_metrics: Optional[dict[str, Optional[float]]] = None
 
     @property
     def changed(self) -> bool:
@@ -127,6 +130,8 @@ class UpgradeReport:
             val_records=int(data.get("val_records", 0)),
             prompt_changes=list(data.get("prompt_changes") or []),
             mlflow_run_id=data.get("mlflow_run_id"),
+            baseline_metrics=data.get("baseline_metrics"),
+            best_metrics=data.get("best_metrics"),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -149,6 +154,8 @@ class UpgradeReport:
             "val_records": self.val_records,
             "prompt_changes": self.prompt_changes,
             "mlflow_run_id": self.mlflow_run_id,
+            "baseline_metrics": self.baseline_metrics,
+            "best_metrics": self.best_metrics,
         }
 
 
@@ -349,6 +356,8 @@ def run_upgrade(
         train_records=len(train_data),
         val_records=len(val_data),
         prompt_changes=prompt_changes,
+        baseline_metrics=getattr(result, "baseline_metrics", None),
+        best_metrics=getattr(result, "best_metrics", None),
     )
     return report, result
 
@@ -432,7 +441,7 @@ def run_and_record(root: pathlib.Path, config: JobConfig) -> UpgradeReport:
     from databricks_agentkit.runtime.workspace import workspace_client  # noqa: PLC0415
 
     # Each call site must call its bound service (the agent reads AGENT_MODEL_SERVICE_<ROLE> at
-    # import), or the optimizer's redirect to the <service>_exp_<id> clone never matches.
+    # import), or the optimizer's redirect to the <service>_exp_<id>_<model> clones never matches.
     for role, service in config.services.items():
         os.environ[model_service_env(role)] = service
     mlflow.set_tracking_uri("databricks")

@@ -2,6 +2,7 @@
 
 import pytest
 
+from databricks_agentkit.model_upgrades import optimization as opt
 from databricks_agentkit.model_upgrades import optimize_prompts_and_models, score
 
 
@@ -263,11 +264,11 @@ def test_invalid_model_selection_rejected(mocker, fake_predict, fake_scorers):
         )
 
 
-def test_patched_endpoints_rewrites_known_models_and_restores():
-    """The context manager should rewrite `model=<ep>` to `<ep>_exp` and restore on exit."""
+def test_patched_endpoints_rewrites_to_the_active_clone_and_restores():
+    """Calls to a service go to its active clone, switches apply mid-block, and exit restores."""
     Completions = pytest.importorskip("openai.resources.chat.completions").Completions
 
-    from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
+    from databricks_agentkit.model_upgrades.optimization import _patched_endpoints
 
     seen = []
     original_create = Completions.create
@@ -278,15 +279,26 @@ def test_patched_endpoints_rewrites_known_models_and_restores():
 
     Completions.create = fake_create
     try:
-        targets = [
-            _EndpointTarget(name="wb-supervisor", candidate_models=["m"], initial_model="m"),
-            _EndpointTarget(name="wb-rewriter", candidate_models=["m"], initial_model="m"),
-        ]
-        with _patched_endpoints(targets):
+        active = {"wb-supervisor": "wb-supervisor_exp_a_m1", "wb-rewriter": "wb-rewriter_exp_a_m1"}
+        redirected = []
+        with _patched_endpoints(active, redirected):
             Completions.create(None, model="wb-supervisor", messages=[])
             Completions.create(None, model="wb-rewriter", messages=[])
             Completions.create(None, model="some-other-endpoint", messages=[])
-        assert seen == [targets[0].exp_name, targets[1].exp_name, "some-other-endpoint"]
+            active["wb-supervisor"] = "wb-supervisor_exp_a_m2"  # the next candidate's model
+            Completions.create(None, model="wb-supervisor", messages=[])
+        assert seen == [
+            "wb-supervisor_exp_a_m1",
+            "wb-rewriter_exp_a_m1",
+            "some-other-endpoint",
+            "wb-supervisor_exp_a_m2",
+        ]
+        # Only redirected calls are recorded, each under the clone it was sent to.
+        assert redirected == [
+            "wb-supervisor_exp_a_m1",
+            "wb-rewriter_exp_a_m1",
+            "wb-supervisor_exp_a_m2",
+        ]
         # After exit, the patch is removed and our fake is back at the top.
         assert Completions.create is fake_create
     finally:
@@ -297,7 +309,7 @@ def test_patched_endpoints_covers_responses_api():
     """Responses.create should be patched alongside Completions.create."""
     Responses = pytest.importorskip("openai.resources.responses").Responses
 
-    from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
+    from databricks_agentkit.model_upgrades.optimization import _patched_endpoints
 
     seen = []
     original = Responses.create
@@ -308,11 +320,10 @@ def test_patched_endpoints_covers_responses_api():
 
     Responses.create = fake_create
     try:
-        targets = [_EndpointTarget(name="wb-supervisor", candidate_models=["m"], initial_model="m")]
-        with _patched_endpoints(targets):
+        with _patched_endpoints({"wb-supervisor": "wb-supervisor_exp_a_m"}):
             Responses.create(None, model="wb-supervisor", input=[])
             Responses.create(None, model="some-other", input=[])
-        assert seen == [targets[0].exp_name, "some-other"]
+        assert seen == ["wb-supervisor_exp_a_m", "some-other"]
         assert Responses.create is fake_create
     finally:
         Responses.create = original
@@ -444,15 +455,34 @@ def test_preflight_aborts_when_every_record_fails(mocker, fake_scorers):
     delete.assert_called()
 
 
-def test_patched_endpoints_no_targets_is_noop():
-    """Passing an empty target list should not touch the OpenAI client."""
+def test_prompt_only_search_leaves_the_openai_client_alone(mocker, fake_predict, fake_scorers):
     Completions = pytest.importorskip("openai.resources.chat.completions").Completions
-
-    from databricks_agentkit.model_upgrades.optimization import _patched_endpoints
-
     before = Completions.create
-    with _patched_endpoints([]):
-        assert Completions.create is before
+    seen = []
+    fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
+
+    def _optimize(**kwargs):
+        seen.append(Completions.create is before)
+        return mocker.Mock(best_candidate={}, val_aggregate_scores=[0.5], best_idx=0)
+
+    fake_gepa.optimize.side_effect = _optimize
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._build_prompt_target",
+        return_value=mocker.Mock(
+            short_name="foo", template="t", alias="production", required_vars=[]
+        ),
+    )
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._preflight")
+    optimize_prompts_and_models(
+        fake_predict,
+        [],
+        [{"inputs": {}, "expectations": {"expected_response": "x"}}],
+        prompt_uris=["prompts:/cat.schema.foo@production"],
+        scorers=fake_scorers,
+        max_metric_calls=1,
+    )
+    assert seen == [True]
     assert Completions.create is before
 
 
@@ -506,3 +536,42 @@ def test_result_keeps_every_model_the_search_tried(mocker, fake_scorers):
     assert result.model_history == {
         "ep1": {"databricks-gpt-5-4-mini": [0.5, 0.6], "databricks-gpt-6-luna": [0.2]},
     }
+
+
+def test_optimize_reports_the_seeds_and_winners_medians(mocker, fake_scorers):
+    real_adapter = opt._AgentAdapter
+    fake_gepa = _mock_optimize_env(mocker)
+    # The real adapter, so its evaluations record raw metrics; routing is stubbed.
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter", real_adapter)
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._sync_destinations")
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._preflight")
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._extract_trace_summary",
+        return_value={"total_tokens": {"input": 1_000_000, "output": 0}, "spans": []},
+    )
+    val = [{"inputs": {"n": i}, "expectations": {"expected_response": "x"}} for i in range(3)]
+    best = {"model:ep1": "databricks-gpt-5-4-mini"}
+
+    def _optimize(**kwargs):
+        kwargs["adapter"].evaluate(kwargs["valset"], kwargs["seed_candidate"])
+        kwargs["adapter"].evaluate(kwargs["valset"], best)
+        return mocker.Mock(best_candidate=best, val_aggregate_scores=[0.5, 0.6], best_idx=1)
+
+    fake_gepa.optimize.side_effect = _optimize
+    result = optimize_prompts_and_models(
+        lambda inputs: "ok",
+        [],
+        val,
+        gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]},
+        scorers=fake_scorers,
+        max_metric_calls=10,
+        token_costs={
+            "databricks-claude-sonnet-4": {"input": 4.0, "output": 0.0},
+            "databricks-gpt-5-4-mini": {"input": 1.0, "output": 0.0},
+        },
+    )
+    assert result.baseline_metrics is not None and result.best_metrics is not None
+    assert result.baseline_metrics["quality"] == 1.0
+    assert result.baseline_metrics["cost_usd"] == pytest.approx(4.0 * 0.07)
+    assert result.best_metrics["cost_usd"] == pytest.approx(1.0 * 0.07)
+    assert result.best_metrics["latency_s"] is not None

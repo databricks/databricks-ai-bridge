@@ -1050,6 +1050,44 @@ def test_upgrade_summary_shows_each_roles_change_and_the_score(tmp_path, stub_jo
     assert "agentbricks experimental models apply" in out
 
 
+def test_upgrade_summary_shows_how_the_medians_moved(tmp_path, stub_job, monkeypatch):
+    report = _report("system.ai.claude-haiku-4-5")
+    report.baseline_metrics = {"quality": 0.5, "latency_s": 3.0, "cost_usd": 0.004}
+    report.best_metrics = {"quality": 0.9, "latency_s": 1.5, "cost_usd": 0.001}
+    monkeypatch.setattr(model_upgrade, "fetch_report", lambda *args: report)
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--wait", "--source", str(project)],
+        _Ctx(_JobClient(life_cycle="TERMINATED", result="SUCCESS")),
+    )
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "Median quality 0.50 → 0.90 (+80%)" in out
+    assert "Median latency 3.0s → 1.5s (-50%)" in out
+    assert "Median cost per request $0.0040 → $0.0010 (-75%)" in out
+
+
+def test_sub_cent_costs_keep_two_significant_figures():
+    from databricks_agentbricks.cli.models import _usd
+
+    assert _usd(0.004) == "$0.0040"
+    assert _usd(0.00012) == "$0.00012"
+    assert _usd(0.00004) == "$0.000040"
+    assert _usd(0.0) == "$0.0000"
+    assert _usd(1.5) == "$1.5000"
+
+
+def test_upgrade_summary_skips_medians_a_run_did_not_measure(tmp_path, stub_job):
+    # stub_job's report has no medians (as from a job before they were recorded).
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--wait", "--source", str(project)],
+        _Ctx(_JobClient(life_cycle="TERMINATED", result="SUCCESS")),
+    )
+    assert result.exit_code == 0, result.output
+    assert "Median" not in result.output
+
+
 # --- prompt bindings ---------------------------------------------------------------------
 
 

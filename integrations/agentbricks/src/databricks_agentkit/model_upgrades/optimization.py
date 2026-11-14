@@ -22,7 +22,8 @@ import time
 import uuid
 import warnings
 from collections import Counter, defaultdict
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, cast
 
@@ -133,9 +134,26 @@ class _EndpointTarget:
     initial_model: str
     experiment_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
+    def __post_init__(self):
+        # The qualified and bare forms name the same model and must share one candidate/clone.
+        self.initial_model = self.initial_model.removeprefix("system.ai.")
+        self.candidate_models = list(
+            dict.fromkeys(model.removeprefix("system.ai.") for model in self.candidate_models)
+        )
+
     @property
-    def exp_name(self):
-        return model_services.exp_name(self.name, self.experiment_id)
+    def models(self):
+        """The seed model, then each candidate: the models this service is evaluated with."""
+        return list(dict.fromkeys([self.initial_model, *self.candidate_models]))
+
+    def exp_name(self, model):
+        """The temporary clone of this service that always routes to ``model``."""
+        slug = re.sub(r"[^0-9a-z]+", "_", model.removeprefix("system.ai.").lower()).strip("_")
+        return model_services.exp_name(self.name, f"{self.experiment_id}_{slug}")
+
+    @property
+    def exp_names(self):
+        return {model: self.exp_name(model) for model in self.models}
 
 
 @dataclass
@@ -152,9 +170,10 @@ class _State:
     reflection_model: str
     token_costs: dict
     model_selection: str = "bandit"
-    last_gateway_synced: dict = field(default_factory=dict)
-    backend_controls: dict = field(default_factory=dict)
-    expected_backends: dict = field(default_factory=dict)
+    # Production service -> the clone its calls are redirected to for the candidate being scored.
+    active_clones: dict = field(default_factory=dict)
+    # Every clone an LLM call was redirected to since the current prediction started.
+    redirected_calls: list = field(default_factory=list)
     created_exp_endpoints: list = field(default_factory=list)
     scorer_attempted: int = 0
     scorer_succeeded: int = 0
@@ -194,6 +213,9 @@ class Result:
         model_history: endpoint -> model -> per-record scores from every evaluation of that model,
             including the minibatch checks of candidates GEPA rejected. GEPA's own result only
             keeps candidates that won a minibatch, so this is the only record of the rest.
+        baseline_metrics / best_metrics: the seed's and the winner's medians over val_data, in raw
+            units: `quality` (scorer score), `latency_s` (seconds), and `cost_usd` (per record).
+            A value is None when no record measured it.
     """
 
     best_candidate: dict
@@ -205,6 +227,8 @@ class Result:
     endpoint_targets: List[_EndpointTarget] = field(repr=False)
     gepa_result: object = field(default=None, repr=False)
     model_history: dict = field(default_factory=dict, repr=False)
+    baseline_metrics: Optional[dict] = None
+    best_metrics: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +306,9 @@ def _build_state(
     if latency_hard_gate <= 0:
         raise ValueError(f"latency_hard_gate must be > 0 (got {latency_hard_gate})")
 
-    merged_costs = dict(token_costs) if token_costs else {}
+    merged_costs = {
+        name.removeprefix("system.ai."): rate for name, rate in (token_costs or {}).items()
+    }
 
     prompt_targets = [_build_prompt_target(u) for u in prompt_uris]
     endpoint_targets = [
@@ -352,7 +378,7 @@ def _preflight(state, seed, train_data, val_data):
         return
     print(f"Running pre-flight smoke test on up to {len(samples)} records...")
     with _patched_prompts(seed, state.prompt_targets):
-        _sync_destinations(seed, state, use_exp=True)
+        _sync_destinations(seed, state)
         last_error = None
         for sample in samples:
             try:
@@ -375,15 +401,43 @@ def _preflight(state, seed, train_data, val_data):
 
 
 def _ensure_exp_endpoints(state):
-    for et in state.endpoint_targets:
+    """Create one clone per (service, model), in parallel, and wait until each answers.
+
+    A clone never changes model, so switching candidates only changes which clone a call is
+    redirected to: no destination update to propagate, and no replica can serve a stale model.
+    """
+    clones = [
+        (name, model) for et in state.endpoint_targets for model, name in et.exp_names.items()
+    ]
+    if not clones:
+        return
+
+    def create(clone):
+        name, model = clone
         model_services.create(
             _client(),
-            et.exp_name,
-            _resolve_system_ai_name(et.initial_model),
+            name,
+            _resolve_system_ai_name(model),
             comment=f"{_MANAGED_BY}; role=experimental",
         )
-        state.created_exp_endpoints.append(et.exp_name)
-        print(f"  {et.exp_name}: created with {et.initial_model}")
+        return clone
+
+    with ThreadPoolExecutor(max_workers=min(len(clones), _CLONE_WORKERS)) as pool:
+        futures = [pool.submit(create, clone) for clone in clones]
+        errors = []
+        for future in futures:
+            try:
+                name, model = future.result()
+            except Exception as e:  # noqa: BLE001 - re-raised once every creation has settled
+                errors.append(e)
+                continue
+            state.created_exp_endpoints.append(name)
+            print(f"  {name}: created with {model}")
+        if errors:
+            raise errors[0]
+        # Only creations that finished are waited on, so a failure above cleans up what exists.
+        for future in [pool.submit(_wait_until_serving, name) for name, _ in clones]:
+            future.result()
 
 
 def _cleanup_exp_endpoints(state):
@@ -440,14 +494,14 @@ def _resolve_system_ai_name(fmapi_endpoint):
     return _resolve_model_info(fmapi_endpoint)["name"]
 
 
-_ROUTE_READY_TIMEOUT_S = 120.0
-_ROUTE_POLL_INTERVAL_S = 2.0
-_ROUTE_READY_MATCHES = 3
+_CLONE_READY_TIMEOUT_S = 300.0
+_CLONE_POLL_INTERVAL_S = 2.0
+_CLONE_WORKERS = 8
 
 
-def _probe_backend_model(name: str) -> str:
-    """Read an inference response's model ID without adding a probe to the agent trace."""
-    response = _client().api_client.do(
+def _probe_service(name: str) -> None:
+    """Send one minimal inference request to model service ``name``."""
+    _client().api_client.do(
         "POST",
         "/ai-gateway/mlflow/v1/chat/completions",
         body={
@@ -456,66 +510,38 @@ def _probe_backend_model(name: str) -> str:
             "max_tokens": 16,
         },
     )
-    model = response.get("model") if isinstance(response, dict) else None
-    if not isinstance(model, str) or not model:
-        raise RuntimeError(f"Inference for {name!r} did not return a backend model identity")
-    return model
 
 
-def _wait_for_endpoint_model(name: str, expected: str, *, timeout: float | None = None) -> None:
-    """Wait for consecutive responses matching a direct control, not the config read-back."""
-    deadline = time.monotonic() + (_ROUTE_READY_TIMEOUT_S if timeout is None else timeout)
-    matches = 0
-    observed = "no response"
+def _wait_until_serving(name: str, *, timeout: float | None = None) -> None:
+    """Wait until a newly created clone answers inference."""
+    deadline = time.monotonic() + (_CLONE_READY_TIMEOUT_S if timeout is None else timeout)
+    last = "no response"
     while time.monotonic() < deadline:
         try:
-            observed = _probe_backend_model(name)
+            _probe_service(name)
+            return
         except (NotFound, TemporarilyUnavailable) as exc:
             # A newly created service can be absent from inference while its route propagates.
-            observed = type(exc).__name__
-        matches = matches + 1 if observed == expected else 0
-        if matches >= _ROUTE_READY_MATCHES:
-            return
+            last = type(exc).__name__
         remaining = deadline - time.monotonic()
         if remaining > 0:
-            time.sleep(min(_ROUTE_POLL_INTERVAL_S, remaining))
+            time.sleep(min(_CLONE_POLL_INTERVAL_S, remaining))
     raise TimeoutError(
-        f"Route {name!r} did not stabilize on backend {expected!r}; last observed {observed!r}. "
+        f"Experimental service {name!r} did not start serving; last observed {last}. "
         "Candidate evaluation stopped without accepting a score."
     )
 
 
-def _sync_destinations(candidate, state, *, use_exp):
-    """Push candidate model choices to gateway endpoints.
-
-    Experimental routes enter the cache only after inference matches a direct model control.
-    The control and readiness caches belong to one optimization run.
-    """
-    cache = state.last_gateway_synced
-    updated = False
+def _sync_destinations(candidate, state):
+    """Redirect each service's calls to the clone for the candidate's model."""
     for et in state.endpoint_targets:
-        ep_name = et.exp_name if use_exp else et.name
         model = candidate.get(_model_key(et))
         if model is None:
             continue
-        if model != cache.get(ep_name):
-            # Invalidate first: a failed switch must not leave the old model marked ready.
-            cache.pop(ep_name, None)
-            state.expected_backends.pop(ep_name, None)
-            _set_endpoint_model(ep_name, model)
-            if use_exp:
-                target = _resolve_system_ai_name(model)
-                if target not in state.backend_controls:
-                    state.backend_controls[target] = _probe_backend_model(target)
-                expected = state.backend_controls[target]
-                print(f"  Waiting for {ep_name} to serve backend {expected}...")
-                _wait_for_endpoint_model(ep_name, expected)
-                state.expected_backends[ep_name] = expected
-            cache[ep_name] = model
-            print(f"  {ep_name} -> {model}")
-            updated = True
-    if not updated and not use_exp:
-        print("  All endpoints already up to date.")
+        clone = et.exp_name(model)
+        if state.active_clones.get(et.name) != clone:
+            state.active_clones[et.name] = clone
+            print(f"  {et.name} -> {model}")
 
 
 # ---------------------------------------------------------------------------
@@ -586,8 +612,9 @@ def _patched_prompts(candidate, prompt_targets):
 # ---------------------------------------------------------------------------
 
 
-def _patch_create(import_path, cls_name, is_async, rewrites):
-    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to `<endpoint>_exp_<id>`.
+def _patch_create(import_path, cls_name, is_async, rewrites, redirected):
+    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to the clone `rewrites` names,
+    appending each clone a call was sent to onto ``redirected``.
 
     Returns `(cls, "create", original)` for the caller to restore on exit, or
     `None` if the import isn't available (e.g. an older `openai` SDK without the
@@ -608,6 +635,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
             model = kwargs.get("model")
             if model in rewrites:
                 kwargs["model"] = rewrites[model]
+                redirected.append(kwargs["model"])
             return await original(self, *args, **kwargs)
     else:
 
@@ -615,6 +643,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
             model = kwargs.get("model")
             if model in rewrites:
                 kwargs["model"] = rewrites[model]
+                redirected.append(kwargs["model"])
             return original(self, *args, **kwargs)
 
     cls.create = patched
@@ -622,8 +651,11 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
 
 
 @contextmanager
-def _patched_endpoints(endpoint_targets):
-    """Rewrite `model=<prod_endpoint>` to `<prod_endpoint>_exp_<id>` on outbound LLM calls.
+def _patched_endpoints(active_clones, redirected=None):
+    """Rewrite `model=<prod_endpoint>` to its active clone on outbound LLM calls.
+
+    ``active_clones`` is read on every call, so `_sync_destinations` switches candidates by
+    updating it. Each redirected call's clone is appended to ``redirected``.
 
     Patches the OpenAI Python client's chat.completions and responses APIs (sync
     + async) so any agent routing through OpenAI / databricks_openai /
@@ -634,11 +666,8 @@ def _patched_endpoints(endpoint_targets):
     Agents that bypass the OpenAI client (raw requests/httpx to the gateway) are
     not covered; document and add a separate intercept if it comes up.
     """
-    if not endpoint_targets:
-        yield
-        return
-
-    rewrites = {et.name: et.exp_name for et in endpoint_targets}
+    rewrites = active_clones
+    redirected = [] if redirected is None else redirected
     targets = [
         ("openai.resources.chat.completions", "Completions", False),
         ("openai.resources.chat.completions", "AsyncCompletions", True),
@@ -648,7 +677,7 @@ def _patched_endpoints(endpoint_targets):
     patches = [
         p
         for (path, cls_name, is_async) in targets
-        if (p := _patch_create(path, cls_name, is_async, rewrites)) is not None
+        if (p := _patch_create(path, cls_name, is_async, rewrites, redirected)) is not None
     ]
 
     try:
@@ -733,8 +762,8 @@ def _read_span_requested_model(span):
     return attr if isinstance(attr, str) and attr else None
 
 
-def _get_active_trace():
-    """Return the latest active MLflow Trace object, or None if no trace exists.
+def _get_active_trace(previous_trace_id=None):
+    """Return the latest MLflow Trace, excluding the trace from before this prediction.
 
     Used by `_run_scorers` so MLflow `Scorer` objects (e.g. `make_judge` judges
     with `Trace` template fields) get the per-component span data they need;
@@ -742,7 +771,7 @@ def _get_active_trace():
     """
     try:
         trace_id = mlflow.get_last_active_trace_id()
-        if not trace_id:
+        if not trace_id or trace_id == previous_trace_id:
             return None
         # With async trace logging (MLflow's default outside Databricks), the trace may still be in
         # the export queue; reading it back first returns "span data is corrupted" and drops its
@@ -753,14 +782,13 @@ def _get_active_trace():
         return None
 
 
-def _extract_trace_summary():
-    """Pull total tokens + per-span debug info from the latest active trace.
+def _extract_trace_summary(trace):
+    """Pull total tokens + per-span debug info from this prediction's trace.
 
-    Returns {} if no trace is active. We no longer try to attribute spans to
+    Returns {} if no fresh trace is available. We no longer try to attribute spans to
     specific endpoints -- caller uses the totals + per-endpoint defaults.
     """
     try:
-        trace = _get_active_trace()
         if not trace or not trace.data:
             return {}
         total_in, total_out = 0, 0
@@ -808,49 +836,25 @@ def _extract_trace_summary():
 # ---------------------------------------------------------------------------
 
 
-def _candidate_route_mismatches(trace, expected: dict[str, str]) -> dict[str, str]:
-    """Check actual agent responses as well as probes, since replicas can disagree."""
-    if not expected:
-        return {}
-    mismatches = {}
-    observed = False
-    spans = trace.data.spans if trace and trace.data else []
-    for span in spans:
-        inputs = span.inputs
-        if isinstance(inputs, str):
-            try:
-                inputs = json.loads(inputs)
-            except json.JSONDecodeError:
-                inputs = None
-        name = inputs.get("model") if isinstance(inputs, dict) else None
-        if not isinstance(name, str) or not name:
-            attrs = getattr(span, "attributes", None) or {}
-            name = attrs.get(_LLM_MODEL_ATTR_KEY)
-            if not name and hasattr(span, "get_attribute"):
-                name = span.get_attribute(_LLM_MODEL_ATTR_KEY)
-        if not isinstance(name, str) or name not in expected:
-            continue
-        observed = True
-        outputs = span.outputs
-        if isinstance(outputs, str):
-            try:
-                outputs = json.loads(outputs)
-            except json.JSONDecodeError:
-                outputs = None
-        model = outputs.get("model") if isinstance(outputs, dict) else None
-        if not isinstance(model, str) or not model:
-            raise RuntimeError(
-                f"Cannot verify candidate backend for {name!r}: its trace has no response model ID. "
-                "Enable MLflow autologging with request and response capture."
-            )
-        if model != expected[name]:
-            mismatches[name] = model
-    if not observed:
+def _check_candidate_routing(state):
+    """Raise unless this prediction's LLM calls reached the candidate's clones, and no other's.
+
+    The OpenAI-client redirect records each call it sends to a clone, so this holds for any
+    framework built on that client. An agent that bypasses it records none.
+    """
+    active = set(state.active_clones.values())
+    wrong = sorted(set(state.redirected_calls) - active)
+    if wrong:
         raise RuntimeError(
-            "Cannot verify candidate backend: no calls to an experimental service were traced. "
-            "Enable MLflow autologging and route the agent through its bound model services."
+            f"Candidate calls reached {', '.join(wrong)}, another candidate's experimental "
+            "service, instead of this candidate's."
         )
-    return mismatches
+    if not active & set(state.redirected_calls):
+        raise RuntimeError(
+            "Cannot verify candidate routing: no LLM call was redirected to the candidate's "
+            "experimental services. Route every LLM call through the OpenAI client (directly or "
+            "via databricks-openai / LangChain) using the bound model service names."
+        )
 
 
 def _convert_to_numeric(score):
@@ -994,7 +998,7 @@ def _rate_cost_usd(in_tokens, out_tokens, rate):
 def _price_by_name(names, in_tokens, out_tokens, token_costs):
     """USD for the first of `names` with a `token_costs` override, else the first MLflow prices."""
     for name in names:
-        rate = token_costs.get(name)
+        rate = token_costs.get(name.removeprefix("system.ai."))
         if rate is not None:
             return _rate_cost_usd(in_tokens, out_tokens, rate)
     for name in names:
@@ -1021,12 +1025,12 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
     but keeps a signal when the trace lacks per-span usage.
     """
     if llm_calls:
-        # A call to a model service (or its `_exp_<id>` clone) records the service's name, which no
-        # catalog can price; price it as the model the candidate routes that service to.
+        # A call records the requested service or clone name, which no catalog can price; price a
+        # clone as the one model it routes to, and a service as the candidate's model for it.
         routed = {}
         for et in endpoint_targets:
-            chosen = candidate.get(_model_key(et), et.initial_model)
-            routed[et.name] = routed[et.exp_name] = chosen
+            routed[et.name] = candidate.get(_model_key(et), et.initial_model)
+            routed.update({clone: model for model, clone in et.exp_names.items()})
         total = 0.0
         for call in llm_calls:
             in_t = call.get("input") or 0
@@ -1085,6 +1089,62 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
 # ---------------------------------------------------------------------------
 
 
+def _json_key(value):
+    """A stable, hashable key for a candidate."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+# GEPA gets copies of the validation records tagged with their position, so the adapter can tell a
+# validation evaluation from a training one and keep identical validation rows apart.
+_VAL_INDEX_KEY = "_model_upgrades_val_index"
+
+
+def _tag_validation_records(val_data):
+    return [{**record, _VAL_INDEX_KEY: i} for i, record in enumerate(val_data)]
+
+
+def _median(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def _median_metrics(adapter, candidate, val_records):
+    """``candidate``'s median quality, latency (s), and cost ($) over its evaluations of the
+    ``val_records`` validation rows, or None if it has none."""
+    raw = getattr(adapter, "_val_metrics", {})
+    key = _json_key(candidate)
+    measured = [raw[(key, i)] for i in range(val_records) if (key, i) in raw]
+    if not measured:
+        return None
+    return {
+        name: _median(m.get(name) for m in measured)
+        for name in ("quality", "latency_s", "cost_usd")
+    }
+
+
+def _format_metrics_change(baseline, best):
+    """One line: how the median quality, latency, and cost moved from the seed to the winner."""
+
+    def usd(value):
+        # Sub-cent costs keep 2 significant figures instead of rounding to $0.0000.
+        decimals = 4 if value <= 0 else max(4, 1 - math.floor(math.log10(value)))
+        return f"${value:.{decimals}f}"
+
+    parts = []
+    for name, label, fmt in (
+        ("quality", "quality", "{:.2f}".format),
+        ("latency_s", "latency", "{:.1f}s".format),
+        ("cost_usd", "cost", usd),
+    ):
+        before, after = baseline.get(name), best.get(name)
+        if before is not None and after is not None:
+            parts.append(f"{label} {fmt(before)} -> {fmt(after)}")
+    return "median " + ", ".join(parts) if parts else ""
+
+
 def _format_full_trace(spans):
     if not spans:
         return "(no spans captured)"
@@ -1100,6 +1160,10 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def __init__(self, state):
         self.state = state
         self._model_history = {et.name: defaultdict(list) for et in state.endpoint_targets}
+        # (candidate, validation row) -> raw quality / latency / cost of its latest evaluation, so
+        # the result can report the seed's and winner's medians in units, not 0-1 objective scores.
+        self._val_metrics = {}
+        self._last_metrics = {}
 
     def _validate(self, candidate):
         for pt in self.state.prompt_targets:
@@ -1117,41 +1181,21 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def _run_one(self, candidate, inputs, expectations):
         """Score a single record. Caller owns prompt-patching + endpoint sync."""
         state = self.state
-        deadline = time.monotonic() + _ROUTE_READY_TIMEOUT_S
-        while True:
-            previous_trace_id = (
-                mlflow.get_last_active_trace_id() if state.expected_backends else None
-            )
-            start = time.perf_counter()
-            prediction_failed = False
-            try:
-                answer = state.predict_fn(inputs)
-            except Exception as e:
-                prediction_failed = True
-                answer = f"ERROR: {type(e).__name__}: {e}"
-            latency = time.perf_counter() - start
-            mlflow_trace = _get_active_trace()
-            if prediction_failed:
-                break
-            if previous_trace_id and (
-                getattr(getattr(mlflow_trace, "info", None), "trace_id", None) == previous_trace_id
-            ):
-                raise RuntimeError(
-                    "Cannot verify candidate backend without a fresh prediction trace. "
-                    "Trace each predict_fn call separately and enable MLflow autologging."
-                )
-            mismatches = _candidate_route_mismatches(mlflow_trace, state.expected_backends)
-            if not mismatches:
-                break
-            # Discard stale-backend attempts before scoring or updating bandit history. Only the
-            # verified attempt's latency, trace, and cost contribute to the candidate's score.
-            for name, observed in mismatches.items():
-                expected = state.expected_backends[name]
-                print(f"  {name} served {observed}, expected {expected}; waiting before retrying.")
-                _wait_for_endpoint_model(
-                    name, expected, timeout=max(0.0, deadline - time.monotonic())
-                )
-        trace = _extract_trace_summary()
+        state.redirected_calls.clear()
+        previous_trace_id = mlflow.get_last_active_trace_id()
+        start = time.perf_counter()
+        prediction_failed = False
+        try:
+            answer = state.predict_fn(inputs)
+        except Exception as e:
+            prediction_failed = True
+            answer = f"ERROR: {type(e).__name__}: {e}"
+        latency = time.perf_counter() - start
+        mlflow_trace = _get_active_trace(previous_trace_id)
+        # Every real evaluation runs with clones active (`_sync_destinations` runs first).
+        if not prediction_failed and state.active_clones:
+            _check_candidate_routing(state)
+        trace = _extract_trace_summary(mlflow_trace)
 
         if prediction_failed:
             # A failed model must not look attractive to the bandit because it failed quickly.
@@ -1159,6 +1203,8 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 model = candidate.get(_model_key(et), "")
                 if model:
                     self._model_history[et.name][model].append(0.0)
+            # A fast failure is not a fast answer: it adds no latency or cost.
+            self._last_metrics = {"quality": 0.0, "latency_s": None, "cost_usd": None}
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},
@@ -1175,6 +1221,8 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 "so it scores 0 on every objective. Raise latency_hard_gate if the agent is "
                 "legitimately this slow.",
             )
+            # The gate rejects the composite score before scoring quality; it wasn't measured.
+            self._last_metrics = {"quality": None, "latency_s": latency, "cost_usd": None}
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},
@@ -1212,6 +1260,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
             llm_calls=trace.get("llm_calls"),
         )
         cost_score = max(0.0, 1.0 - cost_usd / state.cost_soft_gate)
+        self._last_metrics = {"quality": quality, "latency_s": latency, "cost_usd": cost_usd}
 
         score = (
             state.weight_quality * quality
@@ -1244,7 +1293,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
 
         outputs, scores, trajectories, all_obj = [], [], [], []
         with _patched_prompts(candidate, self.state.prompt_targets):
-            _sync_destinations(candidate, self.state, use_exp=True)
+            _sync_destinations(candidate, self.state)
             for record in batch:
                 score, obj, answer, feedback, trace = self._run_one(
                     candidate,
@@ -1254,6 +1303,9 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 scores.append(score)
                 outputs.append(answer)
                 all_obj.append(obj)
+                val_index = record.get(_VAL_INDEX_KEY)
+                if val_index is not None:
+                    self._val_metrics[(_json_key(candidate), val_index)] = self._last_metrics
                 if capture_traces:
                     trajectories.append(
                         {
@@ -1626,11 +1678,16 @@ def optimize_prompts_and_models(
         the cost component to use real token usage; without it, cost
         degenerates to a per-model constant via the 500/200 fallback and
         the library emits a warn-once.
-      - Model searches require a fresh trace per prediction containing each request's service name
-        and the response's model ID. Route changes wait for three consecutive inference responses
-        matching a direct model control, with a 120-second polling timeout. Each evaluation checks
-        its own responses too; stale attempts are retried without scoring, and unverifiable routing
-        stops the run.
+      - Model searches redirect OpenAI chat/completions and responses calls (sync and async) to
+        fixed per-model clones. Each clone must answer inference within 300 seconds of its
+        readiness check. Every successful prediction must redirect at least one call, and every
+        redirected call must reach a clone for the active candidate; otherwise the run stops
+        before scoring. Routing is verified independently of traces, without backend-ID checks
+        or stale-response retries. Calls that bypass the OpenAI client are not intercepted.
+      - Scorers and cost summaries use only a trace created by the current prediction. An
+        unchanged last-trace ID is treated as missing: trace-aware scorers receive None and cost
+        uses the fallback described above. Records over the latency gate score zero on every
+        objective, but their unmeasured raw quality and cost are recorded as None.
       - At least 10% of evaluations must produce a numeric scorer score;
         below that the call raises at the end so a misconfigured scorer
         doesn't silently report `delta=0`.
@@ -1639,9 +1696,10 @@ def optimize_prompts_and_models(
       1. Loads each prompt URI's current `@production` template and extracts
          its required template variables.
       2. Reads each gateway endpoint's current destination as the seed model.
-      3. Creates `<endpoint>_exp_<id>` clones of every gateway endpoint and runs
-         optimization against them. The exp endpoints are deleted on exit
-         (success or failure).
+      3. Creates one `<endpoint>_exp_<id>_<model>` clone per endpoint and distinct model,
+         including the seed, and waits for each to answer inference. A clone's model stays
+         fixed; switching candidates selects different clones without repointing services.
+         Only clones created by this search are deleted on exit (success or failure).
       4. Pre-flight: runs `predict_fn` once on the first record with the seed
          candidate to catch obvious failures (broken agent, auth, missing
          endpoint) before burning the metric budget.
@@ -1657,7 +1715,7 @@ def optimize_prompts_and_models(
       Works whether the agent loads prompts fresh per call or caches the
       `PromptVersion` instance at module import (see `_patched_prompts`).
     - **Endpoints**: the OpenAI client's `model=<endpoint>` arg is rewritten
-      to `<endpoint>_exp_<id>` so calls land on the experimental clones rather than
+      to the active candidate's `<endpoint>_exp_<id>_<model>` clone rather than
       prod. Covers `chat.completions.create` and `responses.create`, sync +
       async (see `_patched_endpoints`).
 
@@ -1731,7 +1789,7 @@ def optimize_prompts_and_models(
         defaults: dict[str, Any] = {
             "seed_candidate": seed,
             "trainset": train_data,
-            "valset": val_data,
+            "valset": _tag_validation_records(val_data),
             "adapter": adapter,
             "reflection_lm": f"databricks/{state.reflection_model}",
             "reflection_prompt_template": templates,
@@ -1751,7 +1809,13 @@ def optimize_prompts_and_models(
                 templates,
             )
         defaults.update(gepa_kwargs)
-        with _patched_endpoints(state.endpoint_targets):
+        # Prompt-only searches have no services to redirect, so they leave the OpenAI client alone.
+        redirect = (
+            _patched_endpoints(state.active_clones, state.redirected_calls)
+            if state.endpoint_targets
+            else nullcontext()
+        )
+        with redirect:
             _preflight(state, seed, train_data, val_data)
             gepa_result = gepa.optimize(**defaults)
 
@@ -1763,6 +1827,12 @@ def optimize_prompts_and_models(
             f"baseline {baseline_score:.3f} -> best {best_score:.3f} "
             f"(delta {best_score - baseline_score:+.3f})"
         )
+        baseline_metrics = _median_metrics(adapter, seed, len(val_data))
+        best_metrics = _median_metrics(adapter, gepa_result.best_candidate, len(val_data))
+        if baseline_metrics and best_metrics:
+            line = _format_metrics_change(baseline_metrics, best_metrics)
+            if line:
+                print(line)
 
         attempted, succeeded = state.scorer_attempted, state.scorer_succeeded
         if scorers and attempted > 0 and (succeeded / attempted) < 0.10:
@@ -1789,6 +1859,8 @@ def optimize_prompts_and_models(
                 endpoint: {model: list(scores) for model, scores in models.items()}
                 for endpoint, models in getattr(adapter, "_model_history", {}).items()
             },
+            baseline_metrics=baseline_metrics,
+            best_metrics=best_metrics,
         )
     finally:
         print("Cleaning up experimental endpoints...")

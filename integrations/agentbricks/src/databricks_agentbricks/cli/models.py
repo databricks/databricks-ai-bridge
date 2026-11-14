@@ -21,6 +21,7 @@ Runs and switches are recorded in ``.agentbricks/model_upgrades.json``.
 
 from __future__ import annotations
 
+import math
 import pathlib
 from typing import Optional
 
@@ -588,6 +589,29 @@ def _refresh_latest_run(obj, project, upgrade_id: Optional[str] = None) -> Optio
     return entry
 
 
+def _usd(value: float) -> str:
+    """Dollars to at least 4 decimals, keeping 2 significant figures of sub-cent amounts."""
+    decimals = 4 if value <= 0 else max(4, 1 - math.floor(math.log10(value)))
+    return f"${value:.{decimals}f}"
+
+
+def _median_fields(report) -> dict[str, str]:
+    """``Median <metric>: before → after (change)`` for each metric both runs measured."""
+    before, after = report.baseline_metrics or {}, report.best_metrics or {}
+    fields = {}
+    for key, label, fmt in (
+        ("quality", "Median quality", "{:.2f}".format),
+        ("latency_s", "Median latency", "{:.1f}s".format),
+        ("cost_usd", "Median cost per request", _usd),
+    ):
+        old, new = before.get(key), after.get(key)
+        if old is None or new is None:
+            continue
+        change = f" ({(new - old) / old:+.0%})" if old else ""
+        fields[label] = f"{fmt(old)} → {fmt(new)}{change}"
+    return fields
+
+
 def _render_report(report) -> None:
     """The upgrade's result: what would change per role, the score change, and what to do next."""
     # Every candidate is a system.ai model, so the tables drop the shared prefix to stay readable.
@@ -640,6 +664,7 @@ def _render_report(report) -> None:
         "Score (quality, latency, cost)": (
             f"{report.baseline_score:.3f} → {report.best_score:.3f} ({delta:+.3f})"
         ),
+        **_median_fields(report),
         "Models switched": str(sum(rec.changed for rec in report.recommendations.values())),
         "Prompts rewritten": ", ".join(report.prompt_changes) or "none",
     }

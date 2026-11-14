@@ -1,4 +1,4 @@
-"""Candidate scores must describe the backend that actually handled inference."""
+"""Candidate scores must come from the candidate's own clones, which each serve one fixed model."""
 
 import time
 from types import SimpleNamespace
@@ -10,10 +10,12 @@ from databricks_agentkit.model_upgrades import optimization as opt
 
 pytestmark = pytest.mark.route_readiness
 
+HAIKU_CLONE = "main.agent.llm_exp_test_haiku"
+SONNET_CLONE = "main.agent.llm_exp_test_sonnet"
+
 
 def _fake_time(monkeypatch, **overrides):
-    # Swap only this module's clock: patching the shared time module would let other threads'
-    # sleeps advance it (or drain it) mid-test.
+    # Isolate the optimizer's clock from sleeps in background MLflow threads.
     clock = SimpleNamespace(
         monotonic=time.monotonic, perf_counter=time.perf_counter, sleep=time.sleep
     )
@@ -23,7 +25,7 @@ def _fake_time(monkeypatch, **overrides):
 
 
 def _state():
-    return opt._State(
+    state = opt._State(
         predict_fn=Mock(return_value="answer"),
         prompt_targets=[],
         endpoint_targets=[opt._EndpointTarget("main.agent.llm", ["haiku"], "sonnet", "test")],
@@ -36,6 +38,8 @@ def _state():
         reflection_model="unused",
         token_costs={},
     )
+    opt._sync_destinations({"model:main.agent.llm": "haiku"}, state)
+    return state
 
 
 @pytest.fixture
@@ -48,116 +52,53 @@ def gateway(monkeypatch):
     )
     api = Mock()
     monkeypatch.setattr(opt, "_client", lambda: SimpleNamespace(api_client=api))
-    monkeypatch.setattr(opt, "_set_endpoint_model", Mock())
     return api
 
 
-def _trace(model, *, service="main.agent.llm_exp_test"):
-    span = SimpleNamespace(inputs={"model": service}, outputs={"model": model})
-    return SimpleNamespace(data=SimpleNamespace(spans=[span]))
+def _run(monkeypatch, state, *calls):
+    """Score one record whose prediction sends LLM calls to ``calls`` through the redirect."""
+    state.predict_fn = Mock(side_effect=lambda inputs: state.redirected_calls.extend(calls) or "a")
+    monkeypatch.setattr(opt, "_get_active_trace", lambda previous_trace_id: None)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda trace: {})
+    return opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
 
 
-def test_sync_waits_for_consecutive_inference_matches_not_destination_readback(gateway):
+def test_new_clone_not_found_is_retried_until_it_answers(gateway):
+    from databricks.sdk.errors import NotFound, TemporarilyUnavailable
+
+    gateway.do.side_effect = [NotFound("propagating"), TemporarilyUnavailable("warming"), {}]
+    opt._wait_until_serving(HAIKU_CLONE)
+    assert gateway.do.call_count == 3
+    assert {call.kwargs["body"]["model"] for call in gateway.do.call_args_list} == {HAIKU_CLONE}
+
+
+def test_permission_errors_surface_instead_of_waiting(gateway):
+    from databricks.sdk.errors import PermissionDenied
+
+    gateway.do.side_effect = PermissionDenied("not allowed")
+    with pytest.raises(PermissionDenied, match="not allowed"):
+        opt._wait_until_serving(HAIKU_CLONE)
+
+
+def test_a_clone_that_never_answers_times_out(gateway):
+    from databricks.sdk.errors import NotFound
+
+    gateway.do.side_effect = NotFound("propagating")
+    with pytest.raises(TimeoutError, match="did not start serving"):
+        opt._wait_until_serving(HAIKU_CLONE, timeout=6.0)
+
+
+def test_readiness_failure_still_cleans_up_every_clone(monkeypatch):
     state = _state()
-    # One direct control, then mixed old/new replicas before three consecutive matches.
-    identities = [
-        "haiku-id",
-        "sonnet-id",
-        "haiku-id",
-        "sonnet-id",
-        "haiku-id",
-        "haiku-id",
-        "haiku-id",
-    ]
-    gateway.do.side_effect = [{"model": model} for model in identities]
-    candidate = {"model:main.agent.llm": "haiku"}
-
-    opt._sync_destinations(candidate, state, use_exp=True)
-
-    assert gateway.do.call_count == len(identities)
-    assert gateway.do.call_args_list[0].kwargs["body"]["model"] == "system.ai.haiku"
-    assert {call.kwargs["body"]["model"] for call in gateway.do.call_args_list[1:]} == {
-        "main.agent.llm_exp_test"
-    }
-    assert state.last_gateway_synced == {"main.agent.llm_exp_test": "haiku"}
-    assert state.expected_backends == {"main.agent.llm_exp_test": "haiku-id"}
-    opt._sync_destinations(candidate, state, use_exp=True)
-    assert gateway.do.call_count == len(identities)
-
-
-def test_timeout_invalidates_previous_ready_route_and_does_not_predict(gateway, monkeypatch):
-    monkeypatch.setattr(opt, "_ROUTE_READY_TIMEOUT_S", 4.0, raising=False)
-    state = _state()
-    state.last_gateway_synced["main.agent.llm_exp_test"] = "sonnet"
-    gateway.do.side_effect = lambda *args, **kwargs: {
-        "model": "haiku-id" if kwargs["body"]["model"] == "system.ai.haiku" else "sonnet-id"
-    }
-
-    with pytest.raises(TimeoutError, match="main.agent.llm_exp_test.*haiku-id.*sonnet-id"):
-        opt._AgentAdapter(state).evaluate(
-            [{"inputs": {}, "expectations": {}}], {"model:main.agent.llm": "haiku"}
-        )
-
-    assert state.last_gateway_synced == {}
-    state.predict_fn.assert_not_called()
-    state.scorers[0].assert_not_called()
-
-
-@pytest.mark.parametrize("response", [{}, {"model": ""}, {"model": None}])
-def test_missing_control_identity_fails_closed(gateway, response):
-    gateway.do.return_value = response
-    state = _state()
-    with pytest.raises(RuntimeError, match="backend model identity"):
-        opt._sync_destinations({"model:main.agent.llm": "haiku"}, state, use_exp=True)
-    assert state.last_gateway_synced == {}
-
-
-def test_wrong_backend_after_readiness_is_retried_before_scoring(monkeypatch):
-    state = _state()
-    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
-    monkeypatch.setattr(
-        opt, "_get_active_trace", Mock(side_effect=[_trace("sonnet-id"), _trace("haiku-id")])
-    )
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
-    wait = Mock()
-    monkeypatch.setattr(opt, "_wait_for_endpoint_model", wait, raising=False)
-    adapter = opt._AgentAdapter(state)
-
-    score, _, _, _, _ = adapter._run_one({"model:main.agent.llm": "haiku"}, {}, {})
-
-    assert score == 1.0
-    assert state.predict_fn.call_count == 2
-    assert state.scorers[0].call_count == 1
-    assert adapter._model_history["main.agent.llm"]["haiku"] == [1.0]
-    assert wait.call_args.args == ("main.agent.llm_exp_test", "haiku-id")
-
-
-@pytest.mark.parametrize(
-    "trace", [None, _trace(None), _trace("haiku-id", service="system.ai.sonnet")]
-)
-def test_unverifiable_evaluation_never_reaches_scorers(monkeypatch, trace):
-    state = _state()
-    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: trace)
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
-
-    with pytest.raises(RuntimeError, match="verify.*backend"):
-        opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
-    state.scorers[0].assert_not_called()
-
-
-def test_ready_probe_failure_still_cleans_up_experimental_service(monkeypatch):
-    state = _state()
+    state.active_clones.clear()
     monkeypatch.setattr(opt, "_build_state", lambda *args: state)
     monkeypatch.setattr(opt, "_client", Mock())
     monkeypatch.setattr(opt.model_services, "create", Mock())
     delete = Mock()
     monkeypatch.setattr(opt.model_services, "delete", delete)
-    monkeypatch.setattr(
-        opt, "_sync_destinations", Mock(side_effect=TimeoutError("route not ready"))
-    )
+    monkeypatch.setattr(opt, "_wait_until_serving", Mock(side_effect=TimeoutError("not serving")))
 
-    with pytest.raises(TimeoutError, match="route not ready"):
+    with pytest.raises(TimeoutError, match="not serving"):
         opt.optimize_prompts_and_models(
             state.predict_fn,
             [{"inputs": {}, "expectations": {}}],
@@ -165,109 +106,97 @@ def test_ready_probe_failure_still_cleans_up_experimental_service(monkeypatch):
             scorers=state.scorers,
             max_metric_calls=1,
         )
-    assert delete.call_args.args[1] == "main.agent.llm_exp_test"
+    assert sorted(call.args[1] for call in delete.call_args_list) == [HAIKU_CLONE, SONNET_CLONE]
 
 
-def test_mixed_backends_after_probing_time_out_without_scoring(gateway, monkeypatch):
-    monkeypatch.setattr(opt, "_ROUTE_READY_TIMEOUT_S", 8.0)
+def test_a_call_to_the_active_clone_is_scored(monkeypatch):
     state = _state()
-    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
-    gateway.do.return_value = {"model": "haiku-id"}
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: _trace("sonnet-id"))
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
-    adapter = opt._AgentAdapter(state)
+    score, _, _, _, _ = _run(monkeypatch, state, HAIKU_CLONE)
+    assert score == 1.0
+    assert state.predict_fn.call_count == 1
 
-    with pytest.raises(TimeoutError, match="Candidate evaluation stopped"):
-        adapter._run_one({"model:main.agent.llm": "haiku"}, {}, {})
-    assert state.predict_fn.call_count > 1
+
+@pytest.mark.parametrize(
+    "calls, error",
+    [
+        ((), "no LLM call was redirected"),  # the agent bypassed the OpenAI client
+        ((SONNET_CLONE,), "reached " + SONNET_CLONE),  # another candidate's clone
+        ((HAIKU_CLONE, SONNET_CLONE), "reached " + SONNET_CLONE),
+    ],
+)
+def test_misrouted_or_unverifiable_predictions_never_reach_scorers(monkeypatch, calls, error):
+    state = _state()
+    with pytest.raises(RuntimeError, match=error):
+        _run(monkeypatch, state, *calls)
     state.scorers[0].assert_not_called()
-    assert not adapter._model_history["main.agent.llm"]
 
 
-def test_wrong_call_cannot_hide_behind_another_matching_call():
-    first = _trace("sonnet-id").data.spans[0]
-    second = _trace("haiku-id").data.spans[0]
-    trace = SimpleNamespace(data=SimpleNamespace(spans=[first, second]))
-    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {
-        "main.agent.llm_exp_test": "sonnet-id"
-    }
-
-
-def test_trace_check_allows_conditional_roles_that_are_not_called():
-    assert (
-        opt._candidate_route_mismatches(
-            _trace("haiku-id"),
-            {"main.agent.llm_exp_test": "haiku-id", "main.agent.unused_exp_test": "other-id"},
-        )
-        == {}
-    )
-
-
-def test_new_service_not_found_is_retried_but_permission_errors_surface(gateway):
-    from databricks.sdk.errors import NotFound, PermissionDenied
-
-    gateway.do.side_effect = [NotFound("route propagating"), *[{"model": "haiku-id"}] * 3]
-    opt._wait_for_endpoint_model("main.agent.llm_exp_test", "haiku-id")
-    assert gateway.do.call_count == 4
-    gateway.do.side_effect = PermissionDenied("not allowed")
-    with pytest.raises(PermissionDenied, match="not allowed"):
-        opt._wait_for_endpoint_model("main.agent.llm_exp_test", "haiku-id")
-
-
-def test_stale_attempt_latency_is_excluded(monkeypatch):
+def test_calls_from_the_previous_prediction_do_not_count(monkeypatch):
     state = _state()
-    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
-    clock = iter([0.0, 100.0, 110.0, 111.0])
-    _fake_time(monkeypatch, perf_counter=lambda: next(clock))
-    monkeypatch.setattr(
-        opt, "_get_active_trace", Mock(side_effect=[_trace("sonnet-id"), _trace("haiku-id")])
+    state.redirected_calls.append(HAIKU_CLONE)
+    with pytest.raises(RuntimeError, match="no LLM call was redirected"):
+        _run(monkeypatch, state)
+
+
+def test_roles_the_agent_does_not_call_are_not_required(monkeypatch):
+    state = _state()
+    unused = opt._EndpointTarget("main.agent.unused", ["haiku"], "sonnet", "test")
+    state.endpoint_targets.append(unused)
+    opt._sync_destinations(
+        {"model:main.agent.llm": "haiku", "model:main.agent.unused": "haiku"}, state
     )
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
-    monkeypatch.setattr(opt, "_wait_for_endpoint_model", Mock())
-    score, objectives, _, _, _ = opt._AgentAdapter(state)._run_one(
+    score, _, _, _, _ = _run(monkeypatch, state, HAIKU_CLONE)
+    assert score == 1.0
+
+
+def test_a_failed_prediction_is_scored_zero_without_a_routing_check(monkeypatch):
+    state = _state()
+    state.predict_fn = Mock(side_effect=RuntimeError("agent crashed"))
+    monkeypatch.setattr(opt, "_get_active_trace", lambda previous_trace_id: None)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda trace: {})
+    score, _, _, feedback, _ = opt._AgentAdapter(state)._run_one(
         {"model:main.agent.llm": "haiku"}, {}, {}
     )
-    assert score == 1.0
-    assert objectives["latency"] == pytest.approx(1 - 1 / 60)
+    assert score == 0.0
+    assert "prediction failed" in feedback
 
 
-def test_previous_predictions_trace_cannot_verify_an_untraced_record(monkeypatch):
+def test_untraced_prediction_does_not_reuse_the_previous_predictions_trace(monkeypatch):
     state = _state()
-    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
-    previous = _trace("haiku-id")
-    previous.info = SimpleNamespace(trace_id="previous-record")
-    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: "previous-record")
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: previous)
-    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
-    with pytest.raises(RuntimeError, match="fresh.*trace"):
-        opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
-    state.scorers[0].assert_not_called()
-
-
-def test_request_model_attribute_and_serialized_span_payloads_are_supported():
-    trace = _trace("haiku-id")
-    span = trace.data.spans[0]
-    span.inputs = "{}"
-    span.outputs = '{"model": "haiku-id"}'
-    span.attributes = {"mlflow.llm.model": "main.agent.llm_exp_test"}
-    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}
-
-
-def test_request_model_get_attribute_is_supported():
+    state.token_costs = {"haiku": {"input": 1.0, "output": 0.0}}
+    active_id = [None]
     span = SimpleNamespace(
+        name="chat",
+        span_type="LLM",
         inputs={},
-        outputs={"model": "haiku-id"},
-        get_attribute=lambda key: "main.agent.llm_exp_test",
+        outputs={"model": "haiku"},
+        attributes={opt._TOKEN_USAGE_KEY: {"input_tokens": 1_000_000, "output_tokens": 0}},
     )
     trace = SimpleNamespace(data=SimpleNamespace(spans=[span]))
-    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}
+    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: active_id[0])
+    monkeypatch.setattr(opt.mlflow, "flush_trace_async_logging", Mock())
+    get_trace = Mock(return_value=trace)
+    monkeypatch.setattr(opt.mlflow, "get_trace", get_trace)
+    scorer = Mock(return_value=1.0)
+    monkeypatch.setattr(opt, "_run_scorers", scorer)
 
+    def predict(inputs):
+        state.redirected_calls.append(HAIKU_CLONE)
+        if inputs["traced"]:
+            active_id[0] = "tr-fresh"
+        return "answer"
 
-def test_unrelated_text_and_non_string_models_do_not_hide_candidate_calls():
-    spans = [
-        SimpleNamespace(inputs="plain text", outputs="plain text"),
-        SimpleNamespace(inputs={"model": []}, outputs={}),
-        *_trace("haiku-id").data.spans,
-    ]
-    trace = SimpleNamespace(data=SimpleNamespace(spans=spans))
-    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}
+    state.predict_fn = predict
+    adapter = opt._AgentAdapter(state)
+    candidate = {"model:main.agent.llm": "haiku"}
+    first = adapter._run_one(candidate, {"traced": True}, {})
+    assert first[4]["total_tokens"]["input"] == 1_000_000
+    assert scorer.call_args.kwargs["trace"] is trace
+    assert adapter._last_metrics["cost_usd"] == pytest.approx(0.07)
+
+    second = adapter._run_one(candidate, {"traced": False}, {})
+    assert second[0] == 1.0  # Redirect verification works without tracing.
+    assert second[4] == {}
+    assert scorer.call_args.kwargs["trace"] is None
+    assert adapter._last_metrics["cost_usd"] == pytest.approx(500 / 1_000_000 * 0.07)
+    get_trace.assert_called_once_with("tr-fresh")
