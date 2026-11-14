@@ -1,8 +1,13 @@
-# Dispatcher (service mode) as a Databricks App. See README.md in this folder.
+# Dispatcher as a Databricks App. See README.md here.
+#
+# Targets:
+#   dev, prod                  user mode (the standard deploy): service mode plus sessions that run as the signed-in
+#                              user (needs a user environment, an Anthropic API key and Lakebase)
+#   dev-service, prod-service  service mode only (sessions run as the App's service principal)
 #
 #   app/scripts/deploy.sh <target> <profile> <environment id> [--store-secrets [KEY_ENV_VAR]] [-- <bundle args>]
 # builds the wheel, deploys, stores the secrets, and starts the App, with the CLI attributed to the connector.
-# Example bundle args: --var export_volume=/Volumes/main/agents/session_outputs --var mcp=
+# Example bundle args: --var user_environment_id=env_... --var export_volume=/Volumes/main/agents/session_outputs
 bundle:
   name: cma-dispatcher
 
@@ -18,6 +23,24 @@ variables:
   export_volume:
     description: Optional UC Volume folder for outputs/ (empty to disable)
     default: ""
+  user_environment_id:
+    description: User ("U") self-hosted environment id, used only in user mode; must differ from environment_id
+    default: ""
+  user_agents:
+    description: Comma-separated agent ids users may start in user mode
+    default: ""
+  lakebase_branch:
+    description: User mode's Lakebase branch (projects/<project>/branches/<branch>), attached as a postgres resource
+    default: ""
+  lakebase_database:
+    description: User mode's Lakebase database on that branch (.../branches/<branch>/databases/<database>)
+    default: ""
+  lakebase_endpoint:
+    description: That branch's read-write endpoint (.../endpoints/<endpoint>); the App mints its Postgres password for it
+    default: ""
+  scope_manager:
+    description: The principal allowed to manage the secret scope (MANAGE); the App only gets READ on its keys
+    default: ${workspace.current_user.userName}
 
 sync:
   include:
@@ -27,15 +50,30 @@ resources:
   secret_scopes:
     cma_secrets:
       name: ${var.secret_scope}
+      # Pinned so a redeploy can't widen access: only the manager may write secrets. The App's own READ
+      # comes from its secret resources below, not from this scope ACL.
+      permissions:
+        - user_name: ${var.scope_manager}
+          level: MANAGE
 
   apps:
     cma_dispatcher:
       name: cma-dispatcher-${bundle.target}
-      description: Claude Managed Agents dispatcher (service mode) for Databricks Sandbox
+      description: Claude Managed Agents dispatcher for Databricks Sandbox
       source_code_path: .
       # One instance: the queue claim plus idempotent launch keep a redeploy overlap safe (design doc §7).
       compute_min_instances: 1
       compute_max_instances: 1
+      # On-behalf-of: users who open the App consent to these scopes, and the App receives their downscoped
+      # token in x-forwarded-access-token. Service mode doesn't use it; user mode does.
+      user_api_scopes:
+        - sandbox                  # create and run the user's sandboxes
+        - genie                    # Genie One, as the user
+        - ai-gateway               # Genie One's MCP endpoint is served under /ai-gateway
+        - sql                      # the SQL Genie runs and that tools issue
+        - catalog.catalogs:read    # Unity Catalog reads (the user's grants still apply)
+        - catalog.schemas:read
+        - catalog.tables:read
       config:
         command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
         env:
@@ -75,13 +113,70 @@ resources:
             key: sandbox-id-hmac-key
             permission: READ
 
+# User mode (M2), added to the App by the dev and prod targets below (target overrides append to these lists).
+# Its keys are secret resources, so the SDK never auto-attaches them to env S calls: the Anthropic key is
+# CMA_ANTHROPIC_API_KEY, not ANTHROPIC_API_KEY.
+x-user-mode: &user_mode_app
+  config:
+    env:
+      - name: CMA_USER_MODE
+        value: "1"
+      - name: CMA_USER_ENVIRONMENT_ID
+        value: ${var.user_environment_id}
+      - name: ANTHROPIC_USER_ENVIRONMENT_KEY
+        value_from: user-environment-key
+      - name: CMA_ANTHROPIC_API_KEY
+        value_from: anthropic-api-key
+      - name: CMA_USER_AGENTS
+        value: ${var.user_agents}
+      - name: LAKEBASE_ENDPOINT
+        value: ${var.lakebase_endpoint}
+      - name: CMA_MAX_SESSIONS_PER_USER
+        value: "20"
+  resources:
+    - name: user-environment-key
+      secret:
+        scope: ${resources.secret_scopes.cma_secrets.name}
+        key: env-u-key
+        permission: READ
+    - name: anthropic-api-key
+      secret:
+        scope: ${resources.secret_scopes.cma_secrets.name}
+        key: api-key
+        permission: READ
+    # The state store (bindings, sign-in codes, audit): the App's service principal gets a Lakebase role and
+    # creates and owns schema cma_dispatcher. Connection settings are injected as PG* variables.
+    - name: lakebase
+      postgres:
+        branch: ${var.lakebase_branch}
+        database: ${var.lakebase_database}
+        permission: CAN_CONNECT_AND_CREATE
+
 targets:
   # The workspace comes from the CLI profile passed to deploy.sh (--profile).
   dev:
     default: true
     variables:
       secret_scope: claude-managed-agents-dev
+      user_agents: agent_012cqa1VsvCcUFxinxKSXCiN,agent_016a2QNxxFjkLabk63CKfhXc
+      lakebase_branch: projects/prasadkona-db/branches/production
+      lakebase_database: projects/prasadkona-db/branches/production/databases/databricks-postgres
+      lakebase_endpoint: projects/prasadkona-db/branches/production/endpoints/primary
+    resources:
+      apps:
+        cma_dispatcher: *user_mode_app
+  dev-service:
+    # Its own App (cma-dispatcher-dev-service) and scope: each target's bundle state owns its resources.
+    variables:
+      secret_scope: claude-managed-agents-dev-service
   prod:
-    # Deploy prod from CI, or with a two-person rule for CAN_MANAGE on the App.
+    # Deploy prod from CI, or with a two-person rule for CAN_MANAGE on the App. Pass user_environment_id,
+    # user_agents and the lakebase_* variables.
     variables:
       secret_scope: claude-managed-agents
+    resources:
+      apps:
+        cma_dispatcher: *user_mode_app
+  prod-service:
+    variables:
+      secret_scope: claude-managed-agents-service

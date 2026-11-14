@@ -34,12 +34,40 @@ def main() -> None:
         help="variable holding the environment key",
     )
     p.add_argument("--rotate-hmac", action="store_true")
+    p.add_argument(
+        "--secret",
+        action="append",
+        default=[],
+        metavar="NAME=ENV_VAR",
+        help="also store secret NAME from environment variable ENV_VAR (repeatable), e.g. "
+        "api-key=CMA_ANTHROPIC_API_KEY or env-u-key=ANTHROPIC_USER_ENVIRONMENT_KEY",
+    )
+    p.add_argument(
+        "--only-secrets",
+        action="store_true",
+        help="store only the --secret values (leave env-s-key and the HMAC key alone)",
+    )
     args = p.parse_args()
 
+    extra = []
+    for item in args.secret:
+        name, sep, var = item.partition("=")
+        if not sep or not name or not var:
+            raise SystemExit(f"--secret takes NAME=ENV_VAR, not {item!r}")
+        value = os.environ.get(var)
+        if not value:
+            raise SystemExit(f"{var} is not set (needed for secret {name})")
+        extra.append((name, value))
+
+    w = WorkspaceClient(config=Config(profile=args.profile))  # global product (set on import)
+    for name, value in extra:
+        w.secrets.put_secret(args.scope, name, string_value=value)
+        print(f"stored {name} in {args.scope}")
+    if args.only_secrets:
+        return
     key = os.environ.get(args.key_env) or getpass.getpass(f"{args.key_env} (not echoed): ")
     if not key:
         raise SystemExit(f"no environment key: set {args.key_env} or enter it at the prompt")
-    w = WorkspaceClient(config=Config(profile=args.profile))  # global product (set on import)
     w.secrets.put_secret(args.scope, "env-s-key", string_value=key)
     print(f"stored env-s-key in {args.scope}")
     existing = {s.key for s in w.secrets.list_secrets(args.scope)}

@@ -1,13 +1,15 @@
-"""Hosted dispatcher for Claude Managed Agents on Databricks Sandbox, as a Databricks App (M1, service mode).
+"""Hosted dispatcher for Claude Managed Agents on Databricks Sandbox, as a Databricks App.
 
-Routes (all behind the Apps proxy, so only users with CAN_USE on the App reach them):
+Service mode (M1) always runs: the App's service principal long-polls the service environment ("S") and serves its
+sessions. Routes (all behind the Apps proxy, so only users with CAN_USE on the App reach them):
 
   GET /            read-only status page
   GET /api/status  the same counters as JSON
   GET /api/health  200 while the poll loop runs, 503 otherwise (the Apps proxy answers /healthz itself)
 
-There are no write routes in M1: sessions are created in the Claude Console or with the Anthropic API on the
-service-mode environment, and this App serves them. See app/README.md.
+With CMA_USER_MODE=1 (user mode, M2) the App also watches the user environment ("U") and serves the sign-in link
+page in ``user_mode.py`` (``/connect``, ``/api/connect``). Sessions on env U run as the Databricks user who signs in.
+See app/README.md.
 """
 
 from __future__ import annotations
@@ -15,11 +17,13 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from service import DispatcherService, from_environment
+from user_mode import USER_MODE_ENV, add_routes, user_mode_from_environment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 # Request and header logging stays off: headers carry the forwarded user token.
@@ -35,11 +39,28 @@ SECURITY_HEADERS = {
 }
 
 
-def create_app(make_service=from_environment) -> FastAPI:
+def create_app(make_service=from_environment, make_user_mode=user_mode_from_environment) -> FastAPI:
+    user_enabled = os.environ.get(USER_MODE_ENV) == "1"
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         service: DispatcherService = make_service()
         app.state.service = service
+        if user_enabled:
+            # Misconfigured user mode fails the start-up here, not on the first user request.
+            app.state.user = make_user_mode(service)
+            try:
+                await asyncio.to_thread(app.state.user.store.ensure_schema)
+            except Exception as e:  # noqa: BLE001 - user routes answer 503 until the store works
+                # StoreUnavailable messages are fixed strings (missing variable names, error types): safe.
+                reason = str(e) if type(e).__name__ == "StoreUnavailable" else type(e).__name__
+                log.warning("user-mode store not ready at start-up: %s", reason)
+            app.state.user.start()
+            log.info(
+                "user mode: watching environment=%s; sign-in links %s",
+                app.state.user.config.environment_id,
+                "on" if app.state.user.app_url else "off (no App URL)",
+            )
         service.start()
         log.info(
             "dispatcher started: environment=%s prefix=%s",
@@ -50,6 +71,8 @@ def create_app(make_service=from_environment) -> FastAPI:
         try:
             yield
         finally:
+            if user_enabled:
+                await app.state.user.stop()
             await service.stop()
 
     app = FastAPI(
@@ -63,8 +86,13 @@ def create_app(make_service=from_environment) -> FastAPI:
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
-        response.headers.update(SECURITY_HEADERS)
+        # setdefault: a route may set its own policy (the /connect page's CSP allows its own script).
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
         return response
+
+    if user_enabled:
+        add_routes(app)
 
     @app.get("/api/health")
     async def healthz(request: Request):

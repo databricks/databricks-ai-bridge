@@ -7,3 +7,5 @@ brotli==1.2.1
 protobuf==7.36.2
 fastapi==0.162.2
 uvicorn==0.54.0
+psycopg[binary]==3.3.8
+psycopg-binary==3.3.8
