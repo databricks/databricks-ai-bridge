@@ -25,3 +25,6 @@ docs/build
 
 # Local Agent Bricks CLI playground (editable venv, source, and live run records).
 /.agentbricks-playground/
+# MLflow SQLite files created by local trace tests.
+**/mlflow.db
+**/mlflow.db-*
