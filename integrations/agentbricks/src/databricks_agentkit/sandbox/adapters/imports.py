@@ -105,13 +105,19 @@ def warm_imports(state_dir, timings):
             # Remember actual imports on retained disk; /tmp is cleared on Stop.
             try:
                 paths = set()
+                prefix_text = str(prefix) + os.sep
                 for module in tuple(sys.modules.values()):
                     attributes = vars(module) if module is not None else {}
                     name = attributes.get("__cached__") or attributes.get("__file__")
-                    if isinstance(name, str):
-                        path = Path(name)
-                        if path.is_relative_to(prefix) and path.suffix in {".py", ".pyc", ".so"}:
-                            paths.add(str(path.relative_to(prefix)))
+                    if (
+                        isinstance(name, str)
+                        and name.startswith(prefix_text)
+                        and name.endswith((".py", ".pyc", ".so"))
+                    ):
+                        # Normal import paths already use the interpreter prefix.
+                        # Avoid thousands of Path objects on the readiness path;
+                        # read() still resolves and validates every cached entry.
+                        paths.add(name[len(prefix_text) :])
                 state_dir.mkdir(parents=True, exist_ok=True)
                 temporary = manifest.with_suffix(".tmp")
                 temporary.write_text(
