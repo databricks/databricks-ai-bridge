@@ -510,6 +510,7 @@ const TIMING_LABELS = {
   project_build: "Build wheel", project_install: "Install project", import_check: "Import check",
   prepare: "Handler preparation", agent_execution: "Agent execution",
   import_cache: "Import cache setup", framework_import: "Framework imports", project_import: "Agent project imports",
+  agentkit_import: "AgentKit imports", tracing_import: "Tracing imports",
   bindings: "Source bindings", configuration: "Agent configuration", session_open: "Session setup",
   agent_build: "Agent construction", mcp_discovery: "MCP tool discovery",
 };
