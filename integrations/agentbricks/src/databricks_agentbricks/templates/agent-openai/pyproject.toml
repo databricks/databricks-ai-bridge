@@ -31,6 +31,8 @@ dev = [
 ]
 
 [tool.uv]
+# Compile during installation so a new worker can load bytecode directly.
+compile-bytecode = true
 default-groups = ["dev"]
 
 [tool.pytest.ini_options]

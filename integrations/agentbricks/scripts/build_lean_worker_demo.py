@@ -32,6 +32,9 @@ def main():
     )
     parser.add_argument("--output", type=Path, required=True, help="New output directory")
     parser.add_argument("--suffix", default="1114", help="Unique suffix for demo resources")
+    parser.add_argument(
+        "--compile-bytecode", action="store_true", help="Compile Python during source installation"
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     wheels = args.output / "wheels"
@@ -119,6 +122,7 @@ def main():
             + "\n\n"
             + '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n\n'
             + '[tool.hatch.build.targets.wheel]\npackages = ["agent", "runtime"]\n\n'
+            + ("[tool.uv]\ncompile-bytecode = true\n\n" if args.compile_bytecode else "")
             + "[tool.uv.sources]\n"
             + sources
             + '\n\n[[tool.uv.index]]\nurl = "https://pypi.org/simple"\ndefault = true\n'

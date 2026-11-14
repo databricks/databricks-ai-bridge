@@ -17,7 +17,6 @@ def installed(tmp_path, monkeypatch):
     library = prefix / "lib/python3.12/site-packages"
     library.mkdir(parents=True)
     monkeypatch.setattr(sys, "prefix", str(prefix))
-    monkeypatch.setattr(imports.sysconfig, "get_path", lambda name: str(library))
     monkeypatch.setattr(imports, "_prefetched", False)
     monkeypatch.delenv("AGENTBRICKS_IMPORT_PREFETCH", raising=False)
     state = tmp_path / "session"
@@ -35,7 +34,7 @@ def installed(tmp_path, monkeypatch):
     return prefix, library, state, opened, read_started
 
 
-def test_new_worker_reads_installed_code_and_learns_for_next_process(installed, monkeypatch):
+def test_new_worker_skips_inventory_and_learns_for_next_process(installed, monkeypatch):
     prefix, library, state, opened, read_started = installed
     code = library / "example.py"
     code.write_text("raise AssertionError('read-ahead must not execute code')")
@@ -49,8 +48,8 @@ def test_new_worker_reads_installed_code_and_learns_for_next_process(installed, 
     monkeypatch.setitem(sys.modules, module.__name__, module)
     timings = {}
     with imports.warm_imports(state, timings):
-        assert read_started.wait(2)
-    assert native in opened and code not in opened
+        assert not opened
+    assert not opened
     manifest = json.loads((state / "import-files.json").read_text())
     assert manifest == {"prefix": str(prefix), "files": [str(code.relative_to(prefix))]}
     assert timings["import_cache"] >= 0
@@ -62,7 +61,6 @@ def test_new_worker_reads_installed_code_and_learns_for_next_process(installed, 
     assert opened == []
     # A replacement worker can use the learned list without RECORD discovery.
     monkeypatch.setattr(imports, "_prefetched", False)
-    monkeypatch.setattr(imports, "_inventory", lambda prefix: pytest.fail("cache not reused"))
     with imports.warm_imports(state, {}):
         assert read_started.wait(2)
     assert code in opened
@@ -131,14 +129,14 @@ def test_read_ahead_has_a_byte_budget_and_an_opt_out(installed, monkeypatch):
         pass
 
 
-@pytest.mark.parametrize("failure", ["inventory", "executor"])
+@pytest.mark.parametrize("failure", ["manifest", "executor"])
 def test_read_ahead_setup_failure_still_runs_agent_once(installed, monkeypatch, failure):
     _, _, state, _, _ = installed
 
     def fail(*args, **kwargs):
         raise RuntimeError("cache setup unavailable")
 
-    monkeypatch.setattr(imports, "_paths" if failure == "inventory" else "ThreadPoolExecutor", fail)
+    monkeypatch.setattr(imports, "_paths" if failure == "manifest" else "ThreadPoolExecutor", fail)
     calls = []
     with imports.warm_imports(state, {}):
         calls.append("normal imports")
