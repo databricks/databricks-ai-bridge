@@ -6,8 +6,9 @@ from typing import Any
 async def read_history(session_id: str, actor: str | None = None) -> dict[str, Any]:
     """Restore transcript items using invocation's native session backend.
 
-    User-authenticated callers supply private session and actor identifiers. A paused OpenAI
-    run is held separately in process, so this transcript reader never reports durable interrupts.
+    User-authenticated callers supply private session and actor identifiers. The example harness
+    stores paused OpenAI runs separately from transcripts, durably when a Session Store is bound.
+    This transcript reader does not load those checkpoints and never reports pending interrupts.
     """
     from databricks_agentkit.openai.sessions import session_store
 
