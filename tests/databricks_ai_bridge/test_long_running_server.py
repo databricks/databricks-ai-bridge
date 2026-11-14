@@ -1029,32 +1029,51 @@ class TestBuildProseRecoveryMessage:
 class TestRotateConversationId:
     def test_rotate_drops_thread_id_and_sets_rotated_context(self):
         r = {"custom_inputs": {"thread_id": "t1", "user_id": "u"}, "context": {}}
-        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_abcdef0123456789")
         assert "thread_id" not in out["custom_inputs"]
         assert out["custom_inputs"]["user_id"] == "u"
-        assert out["context"]["conversation_id"] == "t1::attempt-2"
+        assert out["context"]["conversation_id"] == "t1::r-abcdef01-2"
 
     def test_rotate_drops_session_id(self):
         r = {"custom_inputs": {"session_id": "s1"}, "context": {}}
-        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_abcdef0123456789")
         assert "session_id" not in out["custom_inputs"]
-        assert out["context"]["conversation_id"] == "s1::attempt-2"
+        assert out["context"]["conversation_id"] == "s1::r-abcdef01-2"
 
     def test_rotate_falls_back_to_context_conversation_id(self):
         r = {"custom_inputs": {}, "context": {"conversation_id": "c-abc"}}
-        out = _rotate_conversation_id(r, new_attempt_number=3, response_id="resp_x")
-        assert out["context"]["conversation_id"] == "c-abc::attempt-3"
+        out = _rotate_conversation_id(r, new_attempt_number=3, response_id="resp_abcdef0123456789")
+        assert out["context"]["conversation_id"] == "c-abc::r-abcdef01-3"
 
     def test_rotate_falls_back_to_response_id_as_last_resort(self):
         r = {"custom_inputs": {}, "context": {}}
-        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
-        assert out["context"]["conversation_id"] == "resp_x::attempt-2"
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_abcdef0123456789")
+        # Anchor falls back to response_id; suffix is a self-prefix.
+        assert out["context"]["conversation_id"] == "resp_abcdef0123456789::r-abcdef01-2"
 
     def test_rotate_handles_missing_custom_inputs_key(self):
         r = {"context": {"conversation_id": "c-abc"}}
-        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
-        assert out["context"]["conversation_id"] == "c-abc::attempt-2"
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_abcdef0123456789")
+        assert out["context"]["conversation_id"] == "c-abc::r-abcdef01-2"
         assert out["custom_inputs"] == {}
+
+    def test_rotate_no_collision_across_turns_at_same_attempt(self):
+        """Two different responses (turns) on the same base conv_id, both at
+        attempt 2, must produce DIFFERENT rotated ids — otherwise turn 2's
+        rotation would land on turn 1's just-rotated session and re-poison it.
+        """
+        base = {"custom_inputs": {}, "context": {"conversation_id": "chat-xyz"}}
+        a = _rotate_conversation_id(
+            dict(base, context=dict(base["context"])),
+            new_attempt_number=2,
+            response_id="resp_aaaaaaaa11111111",
+        )
+        b = _rotate_conversation_id(
+            dict(base, context=dict(base["context"])),
+            new_attempt_number=2,
+            response_id="resp_bbbbbbbb22222222",
+        )
+        assert a["context"]["conversation_id"] != b["context"]["conversation_id"]
 
 
 class TestHandleBackgroundRequestPersistsDurabilityState:
@@ -1204,6 +1223,7 @@ class TestTryClaimAndResume:
                 return_value=[_msg(0, None, {}), _msg(1, None, {})],
             ),
             patch(f"{MODULE}.append_message", side_effect=fake_append),
+            patch(f"{MODULE}.upsert_conversation_alias", new_callable=AsyncMock),
             patch("asyncio.create_task") as mock_create_task,
         ):
             attempt = await server._try_claim_and_resume("resp_x", resp)
@@ -1256,6 +1276,7 @@ class TestTryClaimAndResume:
             patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
             patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
             patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch(f"{MODULE}.upsert_conversation_alias", new_callable=AsyncMock),
             patch("asyncio.create_task", side_effect=capture_task),
             patch.object(server, "_run_background_stream", new_callable=AsyncMock) as mock_run,
         ):
@@ -1282,8 +1303,10 @@ class TestTryClaimAndResume:
         assert "thread_id" not in (dumped["custom_inputs"] or {})
         # Other custom_inputs keys are preserved.
         assert dumped["custom_inputs"]["user_id"] == "u"
-        # conversation_id is rotated to a per-attempt value anchored on t1.
-        assert dumped["context"]["conversation_id"] == "t1::attempt-2"
+        # conversation_id is rotated to a per-rotation-unique value anchored
+        # on t1 with the response_id baked in (so multi-turn rotations don't
+        # collide at the same attempt number).
+        assert dumped["context"]["conversation_id"] == "t1::r-x-2"
         assert kwargs.get("attempt_number") == 2
 
     @pytest.mark.asyncio
@@ -1323,6 +1346,7 @@ class TestTryClaimAndResume:
             patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=3),
             patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
             patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch(f"{MODULE}.upsert_conversation_alias", new_callable=AsyncMock),
             patch("asyncio.create_task", side_effect=capture_task),
             patch.object(server, "_run_background_stream", new_callable=AsyncMock) as mock_run,
         ):
@@ -1340,7 +1364,7 @@ class TestTryClaimAndResume:
         # Rotation anchors on the stored context.conversation_id (priority 2).
         # Note: re-rotating in a subsequent attempt would re-anchor on the
         # ORIGINAL stored value, not the previous rotation — no stacking.
-        assert dumped["context"]["conversation_id"] == "resp_x::attempt-3"
+        assert dumped["context"]["conversation_id"] == "resp_x::r-x-3"
 
 
 class TestRetrieveTriggersLazyClaim:
