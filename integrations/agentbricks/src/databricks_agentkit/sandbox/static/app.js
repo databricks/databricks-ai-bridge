@@ -6,7 +6,7 @@ const ACTIVE = new Set(["queued", "running"]);
 const API_TIMEOUTS = { stop: 210000, status: 15000 };
 const state = {
   config: null, agents: [], agent: null, context: null, sessions: [], runs: [],
-  preparation: null, preparationTimer: null, warmPool: null,
+  preparation: null, preparationTimer: null, preparationSource: null, warmPool: null,
   pending: null, sandbox: null, busy: false, loading: false, recovery: null,
   source: null, pollTimer: null, messages: new Map(), historyUnavailable: false,
   stopOperations: new Map(), sandboxRequests: new Map(), sandboxes: new Map(),
@@ -645,6 +645,8 @@ function renderLifecycle() {
   updateControls();
 }
 function closeWatch() {
+  state.preparationSource?.close();
+  state.preparationSource = null;
   state.source?.close();
   state.source = null;
   clearTimeout(state.preparationTimer);
@@ -705,7 +707,7 @@ async function beginPreparation(ctx) {
     const result = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, { session_id: ctx.sessionId, retry: true }, ctx, 20000);
     if (!current(ctx)) return;
     state.preparation = result;
-    await pollPreparation(ctx);
+    watchPreparation(ctx);
     void refreshSessions(ctx).catch(() => {});
   } catch (error) {
     if (!current(ctx)) return;
@@ -714,28 +716,71 @@ async function beginPreparation(ctx) {
     renderLifecycle();
   }
 }
+function applyPreparation(ctx, result) {
+  if (!current(ctx)) return;
+  state.preparation = result;
+  const prepared = result.result;
+  if (result.status === "ready" && prepared?.sandbox_id) {
+    // The completed preparation already verified compute and worker readiness.
+    // Enable Send before the optional status refresh makes another remote call.
+    nextSandboxRequest(ctx);
+    state.sandbox = {
+      ...state.sandbox, agent_id: ctx.agentId, session_id: ctx.sessionId,
+      sandbox_id: prepared.sandbox_id, status: "running", preparation: result,
+      source_hash: prepared.source_hash,
+      initial_bootstrap_timings_ms: prepared.initial_bootstrap_timings_ms,
+    };
+    state.sandboxes.set(stopKey(ctx), state.sandbox);
+  } else if (result.sandbox_id) {
+    state.sandbox = { ...state.sandbox, sandbox_id: result.sandbox_id };
+  }
+  if (result.error) notice(result.error);
+  else notice();
+  renderLifecycle();
+  if (!["queued", "preparing"].includes(result.status)) void refreshSandbox(ctx);
+}
+function watchPreparation(ctx) {
+  if (!current(ctx)) return;
+  state.preparationSource?.close();
+  clearTimeout(state.preparationTimer);
+  if (!("EventSource" in window)) { void pollPreparation(ctx); return; }
+  const source = new EventSource(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions/${encodeURIComponent(ctx.sessionId)}/events`);
+  state.preparationSource = source;
+  const close = () => {
+    source.close();
+    if (state.preparationSource === source) state.preparationSource = null;
+  };
+  const fallback = () => {
+    close();
+    if (current(ctx)) void pollPreparation(ctx);
+  };
+  source.addEventListener("preparation", event => {
+    if (!current(ctx)) { close(); return; }
+    try {
+      const result = JSON.parse(event.data);
+      if (result.agent_id !== ctx.agentId || result.session_id !== ctx.sessionId) throw new Error("Unexpected session preparation");
+      applyPreparation(ctx, result);
+      if (!["queued", "preparing"].includes(result.status)) close();
+    } catch { fallback(); }
+  });
+  source.onerror = fallback;
+}
 async function pollPreparation(ctx) {
   if (!current(ctx)) return;
   clearTimeout(state.preparationTimer);
   try {
     const result = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions/${encodeURIComponent(ctx.sessionId)}`, undefined, ctx, API_TIMEOUTS.status);
     if (!current(ctx)) return;
-    state.preparation = result;
-    if (result.sandbox_id) state.sandbox = { ...state.sandbox, sandbox_id: result.sandbox_id };
+    applyPreparation(ctx, result);
     if (["queued", "preparing"].includes(result.status)) {
       state.preparationTimer = setTimeout(() => { void pollPreparation(ctx); }, 1000);
-    } else {
-      await refreshSandbox(ctx);
-      if (!current(ctx)) return;
-      if (result.error) notice(result.error);
-      else notice();
     }
   } catch (error) {
     if (!current(ctx)) return;
     state.preparation = { ...state.preparation, status: "unknown" };
     notice(`Preparation status unavailable: ${error.message}`, "prepare-status");
+    renderLifecycle();
   }
-  if (current(ctx)) renderLifecycle();
 }
 async function newSession() {
   if (!state.agent) return;
@@ -779,7 +824,7 @@ async function selectSession(sessionId) {
   if (state.pending) notice("The last submission was not confirmed. Reconnect with its original invocation ID before sending another message.", "submit");
   else if (row && ACTIVE.has(row.status)) watchRun(row, ctx);
   else if (row?.error) notice(row.error, ["failed", "interrupted"].includes(row.status) ? "failed" : null);
-  if (preparing()) void pollPreparation(ctx);
+  if (preparing()) watchPreparation(ctx);
   else if (state.preparation?.error && !row) notice(state.preparation.error);
   renderLifecycle();
 }

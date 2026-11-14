@@ -148,6 +148,42 @@ with (state_dir / "worker.lock").open("a") as lease:
 
 WORKER_VERSION = hashlib.sha256(DAEMON_SCRIPT.encode()).hexdigest()
 
+# Inspect installation and worker identity in one command. Never start a worker
+# or call user initialization code while validating an unassigned spare.
+ATTACH_SCRIPT = r"""
+import hashlib
+import json
+from pathlib import Path
+import socket
+import sys
+
+expected = json.load(sys.stdin)
+bootstrap = json.loads((Path(expected["root"]) / "ready.json").read_text())
+if (bootstrap["source_hash"] != expected["source_hash"]
+    or bootstrap["python"] != expected["python"]
+    or bootstrap.get("artifact_hash") != expected["artifact_hash"]):
+    raise RuntimeError("Prepared installation identity mismatch")
+state_dir = str(Path(expected["state_dir"]).resolve())
+key = hashlib.sha256(state_dir.encode()).hexdigest()[:32]
+address = str(Path("/tmp") / ("ab-worker-" + key) / "rpc.sock")
+identity = hashlib.sha256(json.dumps([
+    state_dir, expected["entrypoint"], expected["python"], expected["worker_version"]
+]).encode()).hexdigest()
+with socket.socket(socket.AF_UNIX) as connection:
+    connection.settimeout(.5)
+    connection.connect(address)
+    connection.sendall(b'{"op":"ping"}\n')
+    with connection.makefile("rb") as reply:
+        line = reply.readline(65537)
+    if len(line) > 65536 or not line.endswith(b"\n"):
+        raise RuntimeError("Invalid prepared worker response")
+    worker = json.loads(line)
+if (not worker.get("prepared") or worker.get("invocation_count") != 0
+    or worker.get("identity") != identity or worker.get("id") != expected["worker_id"]):
+    raise RuntimeError("Prepared worker identity mismatch")
+print(json.dumps({"bootstrap": bootstrap, "worker": worker}), flush=True)
+"""
+
 CLIENT_SCRIPT = (
     "DAEMON_SCRIPT = "
     + repr(DAEMON_SCRIPT)

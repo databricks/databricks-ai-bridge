@@ -612,6 +612,19 @@ def controller(registry, *, size=1, generation=1):
     )
     pool.store.initialize()
     pool.healthy = MagicMock(return_value=True)
+    from databricks_agentkit.sandbox.session_client import PreparedSandbox
+
+    pool.inspect = MagicMock(
+        side_effect=lambda slot: PreparedSandbox(
+            sandbox={"sandboxId": slot["metadata"]["sandbox_id"], "status": "Running"},
+            home="/home/sandbox",
+            bootstrap={},
+            state_dir="/unused",
+            entrypoint="agent:run",
+            worker={},
+            result={},
+        )
+    )
 
     def prepare(slot_id, **kwargs):
         sandbox_id = "sandbox-" + slot_id
@@ -622,6 +635,7 @@ def controller(registry, *, size=1, generation=1):
             "sandbox_id": sandbox_id,
             "worker": {"id": slot_id},
             "pool_worker": {},
+            "result": {},
             "entrypoint": "agent:run",
             "timings_ms": {},
         }

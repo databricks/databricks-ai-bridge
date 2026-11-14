@@ -389,6 +389,33 @@ def preparation_status(agent_id: str, session_id: str):
     return app.state.preparations.get(agent_id, session_id)
 
 
+@app.get("/api/agents/{agent_id}/sessions/{session_id}/events")
+def preparation_events(agent_id: str, session_id: str):
+    app.state.control.agent(agent_id)
+    app.state.preparations.get(agent_id, session_id)
+
+    async def events():
+        watch = app.state.preparations.watch(agent_id, session_id)
+        previous = None
+        try:
+            while (row := await run_in_threadpool(lambda: next(watch, None))) is not None:
+                payload = json.dumps(jsonable_encoder(row))
+                if payload != previous:
+                    yield f"event: preparation\ndata: {payload}\n\n"
+                    previous = payload
+                else:
+                    yield ": keepalive\n\n"
+        finally:
+            with CancelScope(shield=True):
+                await run_in_threadpool(watch.close)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/agents/{agent_id}/sandbox")
 def session_sandbox(agent_id: str, session_id: str):
     """Read the current session mapping and compute status without starting it."""

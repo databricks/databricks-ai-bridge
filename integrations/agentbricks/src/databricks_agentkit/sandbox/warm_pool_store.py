@@ -182,7 +182,8 @@ class WarmPoolStore:
                 return False
             # Checking never starts/resumes a worker. A failed probe quarantines
             # the spare; the ordinary session allocation path remains available.
-            if not healthy(slot):
+            prepared = healthy(slot)
+            if not prepared:
                 db.execute(
                     "UPDATE warm_pool_slots SET status='retiring',error='Worker health check failed',"
                     "updated_at=now() WHERE namespace=%s AND slot_id=%s",
@@ -227,7 +228,7 @@ class WarmPoolStore:
                 "WHERE namespace=%s AND slot_id=%s",
                 (session.key, self.registry.namespace, slot["slot_id"]),
             )
-            return True
+            return prepared
 
     def prune(self):
         with self.registry.connect() as db:

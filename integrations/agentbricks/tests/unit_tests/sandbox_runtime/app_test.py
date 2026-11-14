@@ -580,3 +580,27 @@ def test_invoke_while_preparing_returns_conflict(client):
     response = client.post("/api/runs", json={"agent_id": "revision", "session_id": "new"})
     assert response.status_code == 409
     app.state.control.create_run.assert_not_called()
+
+
+def test_preparation_events_deliver_terminal_snapshot_without_starting_work(client):
+    rows = [
+        {"agent_id": "a", "session_id": "s", "status": "preparing"},
+        {"agent_id": "a", "session_id": "s", "status": "ready", "result": {"sandbox_id": "sb"}},
+    ]
+    app.state.preparations.watch.return_value = (row for row in rows)
+    response = client.get("/api/agents/a/sessions/s/events")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    delivered = [
+        json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")
+    ]
+    assert delivered == rows
+    app.state.preparations.create.assert_not_called()
+    app.state.orchestrator.invoke.assert_not_called()
+
+
+def test_preparation_subscription_validates_agent_before_streaming(client):
+    app.state.control.agent.side_effect = KeyError("Agent not found")
+    response = client.get("/api/agents/missing/sessions/s/events")
+    assert response.status_code == 404
+    app.state.preparations.watch.assert_not_called()

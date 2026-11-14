@@ -1620,3 +1620,69 @@ def test_warm_pool_panel_explains_capacity_and_session_assignment(ui):
     runtime.warm_pool.update(ready=2, preparing=0)
     page.evaluate("refreshWarmPool()")
     playwright.expect(page.locator("#warm-pool-status")).to_contain_text("2 ready")
+
+
+def test_readiness_stream_enables_composer_without_waiting_for_status_refresh(ui):
+    runtime, page, open_page = ui
+    runtime.config["capabilities"] = ["session-preparation"]
+    open_page()
+    received = []
+
+    def preparation_events(route):
+        session = urlsplit(route.request.url).path.split("/")[-2]
+        row = runtime.preparations[session]
+        row.update(
+            status="ready",
+            stage="Session prepared",
+            result={
+                "sandbox_id": "prepared-spare",
+                "source_hash": runtime.agent["source_hash"],
+                "warm_pool_hit": True,
+            },
+        )
+        received.append(session)
+        route.fulfill(
+            content_type="text/event-stream",
+            body="event: preparation\ndata: " + json.dumps(row) + "\n\n",
+        )
+
+    page.route("**/sessions/*/events", preparation_events)
+    # Hold the optional status refresh: readiness must come from the SSE result.
+    page.route(
+        "**/sandbox?*", lambda route: None if runtime.preparation_posts else runtime.route(route)
+    )
+    page.locator("#new-session").click()
+    page.locator("#prompt-input").fill("hello")
+    playwright.expect(page.locator("#send-button")).to_be_enabled(timeout=5000)
+    playwright.expect(page.locator("#session-readiness")).to_be_hidden()
+    assert received
+    assert page.evaluate("state.sandbox.sandbox_id") == "prepared-spare"
+    assert runtime.posts == []
+
+
+def test_switching_sessions_closes_readiness_stream_and_ignores_late_events(ui):
+    runtime, page, open_page = ui
+    runtime.config["capabilities"] = ["session-preparation"]
+    page.add_init_script("""window.sources = []; window.EventSource = class extends EventTarget {
+      constructor(url) { super(); this.url = url; window.sources.push(this); }
+      close() { this.closed = true; }
+    };""")
+    open_page()
+    page.locator("#new-session").click()
+    page.wait_for_function("window.sources.length === 1")
+    first = runtime.preparation_posts[0]["session_id"]
+    page.locator("#new-session").click()
+    page.wait_for_function("window.sources.length === 2")
+    second = runtime.preparation_posts[1]["session_id"]
+    assert first != second
+    assert page.evaluate("window.sources[0].closed")
+    page.evaluate(
+        """row => window.sources[0].dispatchEvent(new MessageEvent('preparation', {
+          data: JSON.stringify(row)
+        }))""",
+        {"agent_id": "agent-one", "session_id": first, "status": "ready"},
+    )
+    assert page.evaluate("state.preparation.session_id") == second
+    playwright.expect(page.locator("#session-readiness")).to_be_visible()
+    page.locator("#prompt-input").fill("Wait for my own session")
+    playwright.expect(page.locator("#send-button")).to_be_disabled()

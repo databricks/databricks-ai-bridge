@@ -13,7 +13,12 @@ from unittest.mock import ANY
 
 import pytest
 
-from databricks_agentkit.sandbox.persistent import CLIENT_SCRIPT, DAEMON_SCRIPT, WORKER_VERSION
+from databricks_agentkit.sandbox.persistent import (
+    ATTACH_SCRIPT,
+    CLIENT_SCRIPT,
+    DAEMON_SCRIPT,
+    WORKER_VERSION,
+)
 
 
 @pytest.fixture
@@ -351,3 +356,51 @@ def test_blocking_shutdown_is_bounded_and_preserves_successful_reply(worker, tmp
     assert second[0] == 0, second[2]
     assert first[1]["worker"]["id"] != second[1]["worker"]["id"]
     assert second[1]["result"]["disk"] == 2
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, "source_hash", "worker_id", "artifact_hash", "used", "dead"]
+)
+def test_prepared_attachment_checks_disk_and_live_worker_without_initializing(
+    worker, tmp_path, invalid
+):
+    prepared = worker(prepare=True)
+    assert prepared[0] == 0, prepared[2]
+    live = prepared[1]["worker"]
+    root = tmp_path / "installation"
+    root.mkdir()
+    bootstrap = {"source_hash": "revision", "python": sys.executable, "timings_ms": {}}
+    (root / "ready.json").write_text(json.dumps(bootstrap))
+    expected = {
+        "root": str(root),
+        "source_hash": "revision",
+        "artifact_hash": None,
+        "python": sys.executable,
+        "state_dir": str(tmp_path / "session"),
+        "entrypoint": "test_agent:invoke",
+        "worker_version": WORKER_VERSION,
+        "worker_id": live["id"],
+    }
+    if invalid in {"source_hash", "worker_id", "artifact_hash"}:
+        expected[invalid] = "wrong"
+    elif invalid == "used":
+        assert worker()[0] == 0
+    elif invalid == "dead":
+        os.killpg(live["pid"], signal.SIGKILL)
+    checked = subprocess.run(
+        [sys.executable, "-c", ATTACH_SCRIPT],
+        input=json.dumps(expected),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if invalid:
+        assert checked.returncode != 0
+    else:
+        assert checked.returncode == 0, checked.stderr
+        result = json.loads(checked.stdout)
+        assert result["bootstrap"] == bootstrap
+        assert result["worker"]["id"] == live["id"]
+        assert result["worker"]["invocation_count"] == 0
+    if invalid != "used":
+        assert not (tmp_path / "session/count").exists()

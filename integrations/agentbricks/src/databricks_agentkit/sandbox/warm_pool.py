@@ -12,7 +12,8 @@ import logging
 import shlex
 import threading
 
-from databricks_agentkit.sandbox.persistent import CLIENT_SCRIPT, WORKER_VERSION
+from databricks_agentkit.sandbox.persistent import ATTACH_SCRIPT, WORKER_VERSION
+from databricks_agentkit.sandbox.session_client import PreparedSandbox
 from databricks_agentkit.sandbox.store import SessionBusy
 from databricks_agentkit.sandbox.warm_pool_store import WarmPoolStore
 
@@ -37,6 +38,7 @@ class WarmPool:
                     self.sandboxes.execution_principal(),
                     WORKER_VERSION,
                     orchestrator.lakebox.idle_timeout,
+                    "prepared-attachment-v1",
                 ],
                 sort_keys=True,
             ).encode()
@@ -61,34 +63,52 @@ class WarmPool:
     def claim(self, session, source_hash, source_revision):
         if source_hash != self.bundle.digest or source_revision != self.manifest["agent_id"]:
             return False
-        result = self.store.claim(session, self.healthy)
+        result = self.store.claim(session, self.inspect)
         self.wake.set()
         return result
 
     def healthy(self, slot):
+        return self.inspect(slot) is not None
+
+    def inspect(self, slot):
         try:
             details = slot["metadata"]
             lakebox = self.orchestrator.lakebox
             sandbox = lakebox.get(details["sandbox_id"])
             if not sandbox or sandbox.get("status", "").lower() != "running":
-                return False
+                return None
             handle = details["pool_worker"]
+            expected = {
+                **handle,
+                "source_hash": self.bundle.digest,
+                "artifact_hash": (self.manifest.get("execution_artifact") or {}).get("sha256"),
+                "entrypoint": details["entrypoint"],
+                "worker_version": WORKER_VERSION,
+                "worker_id": details["worker"]["id"],
+            }
             with lakebox.connect(sandbox) as remote:
                 output = remote.run(
-                    f"python3 -c {shlex.quote(CLIENT_SCRIPT)} {shlex.quote(handle['state_dir'])} "
-                    f"{shlex.quote(details['entrypoint'])} {shlex.quote(handle['python'])} --probe",
+                    f"python3 -c {shlex.quote(ATTACH_SCRIPT)}",
+                    json.dumps(expected).encode(),
                     timeout=10,
                 )
-            worker = json.loads(output.strip().splitlines()[-1])
-            return bool(
-                worker
-                and worker.get("prepared")
-                and worker.get("invocation_count") == 0
-                and worker["id"] == details["worker"]["id"]
-                and worker["identity"] == details["worker"]["identity"]
+            checked = json.loads(output.strip().splitlines()[-1])
+            return PreparedSandbox(
+                sandbox=sandbox,
+                home=handle["home"],
+                bootstrap=checked["bootstrap"],
+                state_dir=handle["state_dir"],
+                entrypoint=details["entrypoint"],
+                worker={
+                    **checked["worker"],
+                    "mode": "persistent",
+                    "reused": True,
+                    "retiring": False,
+                },
+                result=details["result"],
             )
         except Exception:
-            return False
+            return None
 
     def retire(self, slot):
         key = slot["slot_id"]
@@ -169,6 +189,7 @@ class WarmPool:
                             "pool_worker",
                             "entrypoint",
                             "timings_ms",
+                            "result",
                         )
                     }
                     if not self.store.current() or self.stopping.is_set():
