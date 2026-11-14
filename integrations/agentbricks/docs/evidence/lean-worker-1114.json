@@ -1,0 +1,2038 @@
+{
+  "tested_worker_code_commit": "0b9ffc41358be63ee0412bf81e03ae884c7f6a7f",
+  "orchestrator_commit": "307200f2e55819d51c23fa6138ae90886dacce67",
+  "orchestrator_version": "0.10.0.dev0+sandbox.a1e2b00761e032bb",
+  "model": "system.ai.gpt-5-mini",
+  "started_at": "2026-11-14T00:20:53.905204+00:00",
+  "method": "Three fresh sessions per variant, sequential full/lean/lean/full/full/lean; zero App-managed warm spares; two real streamed turns per session. Identical wheel files and shared package versions. Cold agent environment, not a claim about provider VM/cache state.",
+  "summary": {
+    "full": {
+      "handler_s": {
+        "median": 14.875860000000001,
+        "min": 14.75006,
+        "max": 15.18277,
+        "values": [
+          15.18277,
+          14.75006,
+          14.875860000000001
+        ]
+      },
+      "dependency_install_s": {
+        "median": 5.09958,
+        "min": 4.78106,
+        "max": 5.2602,
+        "values": [
+          5.09958,
+          4.78106,
+          5.2602
+        ]
+      },
+      "preparation_s": {
+        "median": 25.40759,
+        "min": 24.76695,
+        "max": 25.45943,
+        "values": [
+          25.45943,
+          24.76695,
+          25.40759
+        ]
+      },
+      "warm_first_text_s": {
+        "median": 2.576282003079541,
+        "min": 2.2825971429701895,
+        "max": 2.6561909399461,
+        "values": [
+          2.6561909399461,
+          2.2825971429701895,
+          2.576282003079541
+        ]
+      },
+      "first_tool_turn_first_text_s": {
+        "median": 5.636726033058949,
+        "min": 5.4450933169573545,
+        "max": 31.728743897983804,
+        "values": [
+          31.728743897983804,
+          5.636726033058949,
+          5.4450933169573545
+        ]
+      },
+      "stop_s": {
+        "median": 75.96221680601593,
+        "min": 22.58433501899708,
+        "max": 77.96558287693188,
+        "values": [
+          22.58433501899708,
+          77.96558287693188,
+          75.96221680601593
+        ]
+      },
+      "handler_import_medians_s": {
+        "bindings": 0.5724400000000001,
+        "import_cache": 0.78212,
+        "configuration": 0.15522,
+        "project_import": 4.3209,
+        "tracing_import": 4.62737,
+        "agentkit_import": 2.69496,
+        "framework_import": 0.99417
+      }
+    },
+    "lean": {
+      "handler_s": {
+        "median": 10.377030000000001,
+        "min": 10.08836,
+        "max": 10.488370000000002,
+        "values": [
+          10.377030000000001,
+          10.08836,
+          10.488370000000002
+        ]
+      },
+      "dependency_install_s": {
+        "median": 1.69983,
+        "min": 1.6050799999999998,
+        "max": 2.1551,
+        "values": [
+          1.6050799999999998,
+          1.69983,
+          2.1551
+        ]
+      },
+      "preparation_s": {
+        "median": 17.36281,
+        "min": 16.46308,
+        "max": 19.133599999999998,
+        "values": [
+          17.36281,
+          16.46308,
+          19.133599999999998
+        ]
+      },
+      "warm_first_text_s": {
+        "median": 2.542286602081731,
+        "min": 2.4304471460636705,
+        "max": 2.795163925969973,
+        "values": [
+          2.795163925969973,
+          2.542286602081731,
+          2.4304471460636705
+        ]
+      },
+      "first_tool_turn_first_text_s": {
+        "median": 5.240351693937555,
+        "min": 5.116947761038318,
+        "max": 5.676644560066052,
+        "values": [
+          5.240351693937555,
+          5.116947761038318,
+          5.676644560066052
+        ]
+      },
+      "stop_s": {
+        "median": 21.579096573987044,
+        "min": 21.53921162104234,
+        "max": 22.584315170999616,
+        "values": [
+          22.584315170999616,
+          21.53921162104234,
+          21.579096573987044
+        ]
+      },
+      "handler_import_medians_s": {
+        "bindings": 0.32461,
+        "import_cache": 0.4694,
+        "configuration": 0.06397,
+        "project_import": 4.22613,
+        "tracing_import": 0.89826,
+        "agentkit_import": 2.79909,
+        "framework_import": 0.8180499999999999
+      }
+    }
+  },
+  "samples": [
+    {
+      "variant": "full",
+      "session_id": "lean-profile-51ecfd0cb23a483abb98b50397933dd4",
+      "sandbox_id": "groovy-dealfish-9260",
+      "source_hash": "01f7d6461094e37761bd1ad1ebea42394472b83173a8a6877a8b0f70122f7f79",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:21:59.738279+00:00",
+            "duration_ms": 1214.47
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 17.63,
+              "toolchain": 0.08,
+              "import_check": 260.28,
+              "project_build": 572.66,
+              "project_install": 19.84,
+              "dependency_install": 5099.58
+            },
+            "started_at": "2026-11-14T00:22:01.058394+00:00",
+            "duration_ms": 6330.92
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:21:57.566585+00:00",
+            "duration_ms": 2055.16
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 581.6,
+              "import_cache": 781.86,
+              "configuration": 161.61,
+              "project_import": 4373.66,
+              "tracing_import": 4690.52,
+              "agentkit_import": 2847.31,
+              "framework_import": 1031.15
+            },
+            "started_at": "2026-11-14T00:22:07.736878+00:00",
+            "duration_ms": 15182.77
+          }
+        },
+        "preparation_ms": 25459.43
+      },
+      "bootstrap_ms": {
+        "extract": 17.63,
+        "toolchain": 0.08,
+        "import_check": 260.28,
+        "project_build": 572.66,
+        "project_install": 19.84,
+        "dependency_install": 5099.58
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:aff9819c5c7ca522ecb3eaa5f3cb19aaae73e506abdeed87983f31a3497ab173",
+          "first_text_s": 31.728743897983804,
+          "wall_s": 33.09741913003381,
+          "text_updates": 2,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 79.89,
+            "bindings": 0.3,
+            "agent_build": 12.94,
+            "session_open": 66.5,
+            "configuration": 0.0,
+            "project_import": 0.01,
+            "agent_execution": 30785.2,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-649691e424180083d70d4460d0b88bec",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:776e11f5488c7a4773001766ab63e6c7a15044cb6529cd2cb3ade7e985ddeb9c",
+          "first_text_s": 2.6561909399461,
+          "wall_s": 2.9553956870222464,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.78,
+            "bindings": 0.32,
+            "agent_build": 5.33,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1695.16,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-7429e640ac6f2e612270da109ef19d32",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "groovy-dealfish-9260",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 225.0,
+          "sandbox_lookup": 45.94,
+          "stop_request": 120.71,
+          "wait_until_stopped": 21922.54,
+          "total": 22322.52
+        }
+      },
+      "stop_client_s": 22.58433501899708
+    },
+    {
+      "variant": "lean",
+      "session_id": "lean-profile-4ad3bc13a6bd4d22a87a0837c8c248a0",
+      "sandbox_id": "dazzling-snake-3601",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:23:26.093243+00:00",
+            "duration_ms": 1075.83
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 17.41,
+              "toolchain": 0.11,
+              "import_check": 256.32,
+              "project_build": 589.19,
+              "project_install": 17.69,
+              "dependency_install": 1605.08
+            },
+            "started_at": "2026-11-14T00:23:27.285857+00:00",
+            "duration_ms": 2837.41
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:23:23.625537+00:00",
+            "duration_ms": 2346.51
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 324.61,
+              "import_cache": 477.41,
+              "configuration": 63.42,
+              "project_import": 4321.05,
+              "tracing_import": 901.78,
+              "agentkit_import": 2821.31,
+              "framework_import": 775.68
+            },
+            "started_at": "2026-11-14T00:23:30.495524+00:00",
+            "duration_ms": 10377.03
+          }
+        },
+        "preparation_ms": 17362.81
+      },
+      "bootstrap_ms": {
+        "extract": 17.41,
+        "toolchain": 0.11,
+        "import_check": 256.32,
+        "project_build": 589.19,
+        "project_install": 17.69,
+        "dependency_install": 1605.08
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:4621d430ba2bafa6041651a46c767a34558d621b414b11aa4407e376b5c95f99",
+          "first_text_s": 5.240351693937555,
+          "wall_s": 5.7841280329739675,
+          "text_updates": 3,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 60.7,
+            "bindings": 0.27,
+            "agent_build": 10.78,
+            "session_open": 49.52,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4417.99,
+            "framework_import": 0.04
+          },
+          "managed_history": true,
+          "trace_id": "tr-378b2bfaa042cc384c5b80605cb12c07",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:c42ce04a683b376174e5a5a56d50b76b1ebc46ffe23ab661ad40a48677b84f7a",
+          "first_text_s": 2.795163925969973,
+          "wall_s": 3.098891300964169,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.49,
+            "bindings": 0.27,
+            "agent_build": 5.11,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1897.78,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-ee16bf468106a7f9c932c28d0e64b3a3",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "dazzling-snake-3601",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 218.87,
+          "sandbox_lookup": 42.38,
+          "stop_request": 106.69,
+          "wait_until_stopped": 21977.78,
+          "total": 22356.27
+        }
+      },
+      "stop_client_s": 22.584315170999616
+    },
+    {
+      "variant": "lean",
+      "session_id": "lean-profile-4ec241daef5e4450988a1c62daf133f5",
+      "sandbox_id": "rewarded-whale-1722",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:24:16.594513+00:00",
+            "duration_ms": 1065.89
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 15.5,
+              "toolchain": 0.07,
+              "import_check": 258.74,
+              "project_build": 580.06,
+              "project_install": 18.53,
+              "dependency_install": 1699.83
+            },
+            "started_at": "2026-11-14T00:24:17.764972+00:00",
+            "duration_ms": 2900.9
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:24:14.710488+00:00",
+            "duration_ms": 1792.81
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 301.55,
+              "import_cache": 466.4,
+              "configuration": 63.97,
+              "project_import": 4179.72,
+              "tracing_import": 864.49,
+              "agentkit_import": 2717.76,
+              "framework_import": 818.05
+            },
+            "started_at": "2026-11-14T00:24:20.982955+00:00",
+            "duration_ms": 10088.36
+          }
+        },
+        "preparation_ms": 16463.08
+      },
+      "bootstrap_ms": {
+        "extract": 15.5,
+        "toolchain": 0.07,
+        "import_check": 258.74,
+        "project_build": 580.06,
+        "project_install": 18.53,
+        "dependency_install": 1699.83
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:11033c7adc6af715a5eae55ed2351e839f8a956e051e8ffe1d3433c0efe5e3a4",
+          "first_text_s": 5.116947761038318,
+          "wall_s": 6.506033206009306,
+          "text_updates": 2,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 65.56,
+            "bindings": 0.28,
+            "agent_build": 10.77,
+            "session_open": 54.39,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4167.86,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-f5b93fc1295eeaae9aadea3a66723064",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:5275edb136cbb7b34de5d6590a631f7f13472d8714f0abd6756ff2638ab27e3a",
+          "first_text_s": 2.542286602081731,
+          "wall_s": 3.8970861290581524,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.65,
+            "bindings": 0.29,
+            "agent_build": 5.23,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1588.39,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-2f45456f0c846debadc105929fd3a4af",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "rewarded-whale-1722",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 226.32,
+          "sandbox_lookup": 43.56,
+          "stop_request": 100.23,
+          "wait_until_stopped": 20905.82,
+          "total": 21290.49
+        }
+      },
+      "stop_client_s": 21.53921162104234
+    },
+    {
+      "variant": "full",
+      "session_id": "lean-profile-60f3b92338cc48feb2ba3be96879052f",
+      "sandbox_id": "adroit-terrapin-9427",
+      "source_hash": "01f7d6461094e37761bd1ad1ebea42394472b83173a8a6877a8b0f70122f7f79",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:25:07.107721+00:00",
+            "duration_ms": 1430.02
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 17.51,
+              "toolchain": 0.06,
+              "import_check": 263.96,
+              "project_build": 594.83,
+              "project_install": 19.97,
+              "dependency_install": 4781.06
+            },
+            "started_at": "2026-11-14T00:25:08.640312+00:00",
+            "duration_ms": 6007.68
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:25:05.066772+00:00",
+            "duration_ms": 1923.12
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 572.44,
+              "import_cache": 782.12,
+              "configuration": 155.22,
+              "project_import": 4290.56,
+              "tracing_import": 4512.18,
+              "agentkit_import": 2645.17,
+              "framework_import": 969.37
+            },
+            "started_at": "2026-11-14T00:25:14.960484+00:00",
+            "duration_ms": 14750.06
+          }
+        },
+        "preparation_ms": 24766.95
+      },
+      "bootstrap_ms": {
+        "extract": 17.51,
+        "toolchain": 0.06,
+        "import_check": 263.96,
+        "project_build": 594.83,
+        "project_install": 19.97,
+        "dependency_install": 4781.06
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:cdcd719c32abcf540eabab29d219fd83784134add9c0376fbbd5fea6d965977f",
+          "first_text_s": 5.636726033058949,
+          "wall_s": 7.000501706032082,
+          "text_updates": 2,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 65.71,
+            "bindings": 0.29,
+            "agent_build": 12.43,
+            "session_open": 52.86,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4737.77,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-e115ad2e7866b6cf1967f515f1180bc2",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:a3cb4eaad2ff05930e16d80a775fa2ebc7c2d9a14ad820046b522ae7b070990b",
+          "first_text_s": 2.2825971429701895,
+          "wall_s": 2.6388319940306246,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.69,
+            "bindings": 0.29,
+            "agent_build": 5.29,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1296.45,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-288d2d961f0a42984495ae4ad5900fd0",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "adroit-terrapin-9427",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 230.42,
+          "sandbox_lookup": 44.69,
+          "stop_request": 108.62,
+          "wait_until_stopped": 77336.67,
+          "total": 77730.66
+        }
+      },
+      "stop_client_s": 77.96558287693188
+    },
+    {
+      "variant": "full",
+      "session_id": "lean-profile-6174cfac85f24dc39beaeabae0df1c69",
+      "sandbox_id": "familiar-tigerfish-4742",
+      "source_hash": "01f7d6461094e37761bd1ad1ebea42394472b83173a8a6877a8b0f70122f7f79",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:27:01.300334+00:00",
+            "duration_ms": 1402.45
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 17.48,
+              "toolchain": 0.06,
+              "import_check": 251.41,
+              "project_build": 564.2,
+              "project_install": 17.79,
+              "dependency_install": 5260.2
+            },
+            "started_at": "2026-11-14T00:27:02.807055+00:00",
+            "duration_ms": 6533.62
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:26:59.266766+00:00",
+            "duration_ms": 1924.53
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 557.69,
+              "import_cache": 785.18,
+              "configuration": 149.09,
+              "project_import": 4320.9,
+              "tracing_import": 4627.37,
+              "agentkit_import": 2694.96,
+              "framework_import": 994.17
+            },
+            "started_at": "2026-11-14T00:27:09.688623+00:00",
+            "duration_ms": 14875.86
+          }
+        },
+        "preparation_ms": 25407.59
+      },
+      "bootstrap_ms": {
+        "extract": 17.48,
+        "toolchain": 0.06,
+        "import_check": 251.41,
+        "project_build": 564.2,
+        "project_install": 17.79,
+        "dependency_install": 5260.2
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:553924d692ba1d6a2a7b3745444f21f3c61c0f97731bddbb96f512d69d9386cb",
+          "first_text_s": 5.4450933169573545,
+          "wall_s": 6.798169013927691,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 64.27,
+            "bindings": 0.31,
+            "agent_build": 12.4,
+            "session_open": 51.42,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4572.34,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-c4acfb6bcbc8eba86362da87afe96a87",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:62f646c3d661aaffabfae7d8d39ba2b86a58d1ae6d5b23fc7c2c070e0c84fabf",
+          "first_text_s": 2.576282003079541,
+          "wall_s": 2.875447791069746,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.6,
+            "bindings": 0.3,
+            "agent_build": 5.18,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1629.67,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-f40bf3f0da5e3e77780932cde0dcc378",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "familiar-tigerfish-4742",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 228.48,
+          "sandbox_lookup": 42.22,
+          "stop_request": 111.71,
+          "wait_until_stopped": 75312.82,
+          "total": 75707.48
+        }
+      },
+      "stop_client_s": 75.96221680601593
+    },
+    {
+      "variant": "lean",
+      "session_id": "lean-profile-df2fc50329874f9384ad99becc74e5c2",
+      "sandbox_id": "impish-wren-2097",
+      "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+      "warm_pool_hit": false,
+      "worker_reused_at_preparation": false,
+      "lifecycle": {
+        "steps": {
+          "agent_run": {
+            "status": "skipped"
+          },
+          "source_copy": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:28:55.385933+00:00",
+            "duration_ms": 1577.8
+          },
+          "install_build": {
+            "status": "completed",
+            "details_ms": {
+              "extract": 16.87,
+              "toolchain": 0.07,
+              "import_check": 244.62,
+              "project_build": 577.96,
+              "project_install": 17.63,
+              "dependency_install": 2155.1
+            },
+            "started_at": "2026-11-14T00:28:57.079571+00:00",
+            "duration_ms": 3397.62
+          },
+          "sandbox_start": {
+            "status": "completed",
+            "started_at": "2026-11-14T00:28:52.289108+00:00",
+            "duration_ms": 2971.92
+          },
+          "handler_prepare": {
+            "status": "completed",
+            "details_ms": {
+              "bindings": 492.92,
+              "import_cache": 469.4,
+              "configuration": 67.59,
+              "project_import": 4226.13,
+              "tracing_import": 898.26,
+              "agentkit_import": 2799.09,
+              "framework_import": 872.93
+            },
+            "started_at": "2026-11-14T00:29:00.830571+00:00",
+            "duration_ms": 10488.37
+          }
+        },
+        "preparation_ms": 19133.6
+      },
+      "bootstrap_ms": {
+        "extract": 16.87,
+        "toolchain": 0.07,
+        "import_check": 244.62,
+        "project_build": 577.96,
+        "project_install": 17.63,
+        "dependency_install": 2155.1
+      },
+      "turns": [
+        {
+          "invocation_id": "sandbox:83b3d5737f9e632d7f8fbb81cc1075923ee954d4b8f583d5120d4de1f1b159af",
+          "first_text_s": 5.676644560066052,
+          "wall_s": 7.043774969060905,
+          "text_updates": 2,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 70.32,
+            "bindings": 0.28,
+            "agent_build": 11.06,
+            "session_open": 58.86,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 4818.29,
+            "framework_import": 0.04
+          },
+          "managed_history": true,
+          "trace_id": "tr-4d4c7ee6de49a673dc72bfbd88d44c10",
+          "tool_calls": [
+            "get_current_time"
+          ],
+          "codeword_recalled": true
+        },
+        {
+          "invocation_id": "sandbox:0a550bdf796652be8ea72bb0b5a264ca87ac2fd97e18e6ddf1ed0adfef6d8919",
+          "first_text_s": 2.4304471460636705,
+          "wall_s": 2.7356827380135655,
+          "text_updates": 1,
+          "worker_reused": true,
+          "worker_timings_ms": {
+            "prepare": 5.59,
+            "bindings": 0.3,
+            "agent_build": 5.17,
+            "session_open": 0.0,
+            "configuration": 0.0,
+            "project_import": 0.0,
+            "agent_execution": 1579.04,
+            "framework_import": 0.05
+          },
+          "managed_history": true,
+          "trace_id": "tr-8da83af5dd566faf6d4d10cde35b23f8",
+          "tool_calls": [],
+          "codeword_recalled": true
+        }
+      ],
+      "stop": {
+        "sandbox_id": "impish-wren-2097",
+        "status": "stopped",
+        "timings_ms": {
+          "registry_connect_and_lock": 216.05,
+          "sandbox_lookup": 41.4,
+          "stop_request": 107.28,
+          "wait_until_stopped": 20911.06,
+          "total": 21284.82
+        }
+      },
+      "stop_client_s": 21.579096573987044
+    }
+  ],
+  "traces": [
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:aff9819c5c7ca522ecb3eaa5f3cb19aaae73e506abdeed87983f31a3497ab173",
+      "session_id": "lean-profile-51ecfd0cb23a483abb98b50397933dd4",
+      "trace_id": "tr-649691e424180083d70d4460d0b88bec",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 29960.69
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 29936.55
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1487.15
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1480.83
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.51
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 5.3
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.18
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1615.73
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1611.73
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.65
+        }
+      ]
+    },
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:776e11f5488c7a4773001766ab63e6c7a15044cb6529cd2cb3ade7e985ddeb9c",
+      "session_id": "lean-profile-51ecfd0cb23a483abb98b50397933dd4",
+      "trace_id": "tr-7429e640ac6f2e612270da109ef19d32",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1694.66
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1692.93
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1198.87
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1194.76
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.57
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:4621d430ba2bafa6041651a46c767a34558d621b414b11aa4407e376b5c95f99",
+      "session_id": "lean-profile-4ad3bc13a6bd4d22a87a0837c8c248a0",
+      "trace_id": "tr-378b2bfaa042cc384c5b80605cb12c07",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4195.69
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4154.53
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1527.44
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1521.17
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.7
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4.94
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.24
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1192.64
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1188.61
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.6
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:c42ce04a683b376174e5a5a56d50b76b1ebc46ffe23ab661ad40a48677b84f7a",
+      "session_id": "lean-profile-4ad3bc13a6bd4d22a87a0837c8c248a0",
+      "trace_id": "tr-ee16bf468106a7f9c932c28d0e64b3a3",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1897.27
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1895.29
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1408.68
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1404.46
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.77
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:11033c7adc6af715a5eae55ed2351e839f8a956e051e8ffe1d3433c0efe5e3a4",
+      "session_id": "lean-profile-4ec241daef5e4450988a1c62daf133f5",
+      "trace_id": "tr-f5b93fc1295eeaae9aadea3a66723064",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3965.97
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3924.77
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1241.19
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1234.73
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.59
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 5.78
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.38
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1457.24
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1453.58
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.41
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:5275edb136cbb7b34de5d6590a631f7f13472d8714f0abd6756ff2638ab27e3a",
+      "session_id": "lean-profile-4ec241daef5e4450988a1c62daf133f5",
+      "trace_id": "tr-2f45456f0c846debadc105929fd3a4af",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1587.86
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1586.04
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1104.21
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1100.05
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.53
+        }
+      ]
+    },
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:cdcd719c32abcf540eabab29d219fd83784134add9c0376fbbd5fea6d965977f",
+      "session_id": "lean-profile-60f3b92338cc48feb2ba3be96879052f",
+      "trace_id": "tr-e115ad2e7866b6cf1967f515f1180bc2",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3923.69
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3900.59
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1376.56
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1370.18
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.43
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 5.3
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.19
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1378.75
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1375.14
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.46
+        }
+      ]
+    },
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:a3cb4eaad2ff05930e16d80a775fa2ebc7c2d9a14ad820046b522ae7b070990b",
+      "session_id": "lean-profile-60f3b92338cc48feb2ba3be96879052f",
+      "trace_id": "tr-288d2d961f0a42984495ae4ad5900fd0",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1296.02
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1294.58
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 965.6
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 962.15
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.28
+        }
+      ]
+    },
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:553924d692ba1d6a2a7b3745444f21f3c61c0f97731bddbb96f512d69d9386cb",
+      "session_id": "lean-profile-6174cfac85f24dc39beaeabae0df1c69",
+      "trace_id": "tr-c4acfb6bcbc8eba86362da87afe96a87",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3771.58
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 3750.27
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1297.28
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1291.11
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.41
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4.39
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.03
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1454.58
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1451.16
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.4
+        }
+      ]
+    },
+    {
+      "variant": "full",
+      "invocation_id": "sandbox:62f646c3d661aaffabfae7d8d39ba2b86a58d1ae6d5b23fc7c2c070e0c84fabf",
+      "session_id": "lean-profile-6174cfac85f24dc39beaeabae0df1c69",
+      "trace_id": "tr-f40bf3f0da5e3e77780932cde0dcc378",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1629.17
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1627.66
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1280.34
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1276.75
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.44
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:83b3d5737f9e632d7f8fbb81cc1075923ee954d4b8f583d5120d4de1f1b159af",
+      "session_id": "lean-profile-df2fc50329874f9384ad99becc74e5c2",
+      "trace_id": "tr-4d4c7ee6de49a673dc72bfbd88d44c10",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4611.53
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 4570.48
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1238.35
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1231.93
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.68
+        },
+        {
+          "name": "tools",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 5.42
+        },
+        {
+          "name": "get_current_time",
+          "type": "TOOL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.25
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 2025.33
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 2021.76
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.35
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "invocation_id": "sandbox:0a550bdf796652be8ea72bb0b5a264ca87ac2fd97e18e6ddf1ed0adfef6d8919",
+      "session_id": "lean-profile-df2fc50329874f9384ad99becc74e5c2",
+      "trace_id": "tr-8da83af5dd566faf6d4d10cde35b23f8",
+      "status": "TraceStatus.OK",
+      "spans": [
+        {
+          "name": "sandbox.invoke",
+          "type": "UNKNOWN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1578.56
+        },
+        {
+          "name": "LangGraph",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1576.56
+        },
+        {
+          "name": "model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1189.36
+        },
+        {
+          "name": "_RoutedChatDatabricks",
+          "type": "CHAT_MODEL",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1185.25
+        },
+        {
+          "name": "HumanInTheLoopMiddleware.after_model",
+          "type": "CHAIN",
+          "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+          "duration_ms": 1.42
+        }
+      ]
+    }
+  ],
+  "publications": [
+    {
+      "variant": "full",
+      "url": "https://agent-bricks-sb-full-1114-6051921418418893.staging.aws.databricksapps.com",
+      "source": {
+        "bundle_bytes": 1220978,
+        "created_at": "2026-11-14T00:20:57.490859+00:00",
+        "entrypoint": "runtime.sandbox_entry:invoke",
+        "execution_artifact": null,
+        "file_count": 21,
+        "git_source": null,
+        "id": "514700dd70d3282fd471ffddc10ca41e",
+        "name": "environment:agent-bricks-sb-full-1114-d0d30d0a5309cca6",
+        "source_archive": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-full-1114/catalog/sources/514700dd70d3282fd471ffddc10ca41e.tar.gz",
+        "source_hash": "01f7d6461094e37761bd1ad1ebea42394472b83173a8a6877a8b0f70122f7f79",
+        "source_kind": "workspace",
+        "source_path": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-full-1114/revisions/d0d30d0a5309cca6adefc0c32b5d2168ed470e0ad75c4a87221526d5fd50f6eb/source"
+      },
+      "config": {
+        "workspace": "https://e2-dogfood.staging.cloud.databricks.com",
+        "service_principal": "3e44c1ef-abde-43c9-93f8-62610bfa2a43",
+        "runtime_store": "runtime-stores/agent-bricks-sb-full-1114",
+        "example_workspace_path": "",
+        "default_entrypoint": "runtime.sandbox_entry:invoke",
+        "default_environment": "agent-bricks-sb-full-1114-d0d30d0a5309cca6",
+        "default_agent_id": "514700dd70d3282fd471ffddc10ca41e",
+        "sandbox_idle_timeout_seconds": 600,
+        "sandbox_warm_pool_size": 0,
+        "sandbox_scope": "session",
+        "environment_mode": "on-demand",
+        "capabilities": [
+          "git-revisions",
+          "session-pinning",
+          "source-snapshots",
+          "text-streaming",
+          "session-sandboxes",
+          "session-ssh",
+          "session-preparation"
+        ],
+        "workbench": {
+          "framework": "langgraph",
+          "sessions": {
+            "mode": "managed",
+            "store": "sb-full-1114-sessions"
+          },
+          "tracing": {
+            "configured": true,
+            "experiment_name": "/Shared/agentbricks_traces/sb-full-1114",
+            "experiment_id": "1476495253353174",
+            "url": "https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253353174/traces"
+          },
+          "tools": []
+        }
+      },
+      "deployment": {
+        "create_time": "2026-11-14T00:21:05Z",
+        "creator": "james.wu@databricks.com",
+        "deployment_artifacts": {
+          "source_code_path": "/Workspace/Users/3e44c1ef-abde-43c9-93f8-62610bfa2a43/src/01f1dfc147ec13d18c748a0a7425b6c4"
+        },
+        "deployment_id": "01f1dfc147ec13d18c748a0a7425b6c4",
+        "mode": "SNAPSHOT",
+        "source_code_path": "/Workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-full-1114/app/rollouts/91791523ea5f42fe9b6abe12caf75b1f",
+        "status": {
+          "message": "App started successfully",
+          "state": "SUCCEEDED"
+        },
+        "update_time": "2026-11-14T00:21:16Z"
+      },
+      "source_readers": [
+        {
+          "group": "users",
+          "levels": [
+            "WorkspaceObjectPermissionLevel.CAN_READ"
+          ]
+        }
+      ]
+    },
+    {
+      "variant": "lean",
+      "url": "https://agent-bricks-sb-lean-1114-6051921418418893.staging.aws.databricksapps.com",
+      "source": {
+        "bundle_bytes": 1179236,
+        "created_at": "2026-11-14T00:21:40.330079+00:00",
+        "entrypoint": "runtime.sandbox_entry:invoke",
+        "execution_artifact": null,
+        "file_count": 21,
+        "git_source": null,
+        "id": "1bf79fceafb80bc94850be1a8b2cbe84",
+        "name": "environment:agent-bricks-sb-lean-1114-fa6cbaa68f55c205",
+        "source_archive": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-1114/catalog/sources/1bf79fceafb80bc94850be1a8b2cbe84.tar.gz",
+        "source_hash": "ca41c6b1414f488e7ee81547a2425dbea094d31c8fd78c541d3e88578769530c",
+        "source_kind": "workspace",
+        "source_path": "/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-1114/revisions/fa6cbaa68f55c20596d1cd5218f7806e1de1a6e3c88e16282678b084400e2fca/source"
+      },
+      "config": {
+        "workspace": "https://e2-dogfood.staging.cloud.databricks.com",
+        "service_principal": "cf42003e-8fb4-495a-92a0-ce234066949b",
+        "runtime_store": "runtime-stores/agent-bricks-sb-lean-1114",
+        "example_workspace_path": "",
+        "default_entrypoint": "runtime.sandbox_entry:invoke",
+        "default_environment": "agent-bricks-sb-lean-1114-fa6cbaa68f55c205",
+        "default_agent_id": "1bf79fceafb80bc94850be1a8b2cbe84",
+        "sandbox_idle_timeout_seconds": 600,
+        "sandbox_warm_pool_size": 0,
+        "sandbox_scope": "session",
+        "environment_mode": "on-demand",
+        "capabilities": [
+          "git-revisions",
+          "session-pinning",
+          "source-snapshots",
+          "text-streaming",
+          "session-sandboxes",
+          "session-ssh",
+          "session-preparation"
+        ],
+        "workbench": {
+          "framework": "langgraph",
+          "sessions": {
+            "mode": "managed",
+            "store": "sb-lean-1114-sessions"
+          },
+          "tracing": {
+            "configured": true,
+            "experiment_name": "/Shared/agentbricks_traces/sb-lean-1114",
+            "experiment_id": "1476495253353374",
+            "url": "https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253353374/traces"
+          },
+          "tools": []
+        }
+      },
+      "deployment": {
+        "create_time": "2026-11-14T00:21:46Z",
+        "creator": "james.wu@databricks.com",
+        "deployment_artifacts": {
+          "source_code_path": "/Workspace/Users/cf42003e-8fb4-495a-92a0-ce234066949b/src/01f1dfc160b614609d8c11eedbce06b1"
+        },
+        "deployment_id": "01f1dfc160b614609d8c11eedbce06b1",
+        "mode": "SNAPSHOT",
+        "source_code_path": "/Workspace/Users/james.wu@databricks.com/agentbricks_deployments/agent-bricks-sb-lean-1114/app/rollouts/8214e228dd444430954a972b4c457c50",
+        "status": {
+          "message": "App started successfully",
+          "state": "SUCCEEDED"
+        },
+        "update_time": "2026-11-14T00:21:58Z"
+      },
+      "source_readers": [
+        {
+          "group": "users",
+          "levels": [
+            "WorkspaceObjectPermissionLevel.CAN_READ"
+          ]
+        }
+      ]
+    }
+  ],
+  "builder_cleanup": [
+    {
+      "sandbox_id": "alert-threadfin-5425",
+      "status": "Stopped"
+    },
+    {
+      "sandbox_id": "tolerant-fennec-6558",
+      "status": "Stopped"
+    },
+    {
+      "sandbox_id": "perpetual-ouzel-9754",
+      "status": "Stopped"
+    }
+  ],
+  "packages": {
+    "full": {
+      "packages": {
+        "opentelemetry-sdk": "1.45.2",
+        "propcache": "0.5.4",
+        "threadpoolctl": "3.8.0",
+        "sqlparse": "0.6.1",
+        "jsonschema-specifications": "2025.9.1",
+        "setuptools": "84.2.1",
+        "databricks-agentbricks": "0.10.0.dev0+lean.9fd969491273",
+        "joblib": "1.6.0",
+        "langgraph-checkpoint-sqlite": "3.1.3",
+        "openai": "2.54.0",
+        "yarl": "1.25.1",
+        "tenacity": "9.2.1",
+        "gitdb": "4.0.12",
+        "annotated-doc": "0.0.6",
+        "unitycatalog-client": "0.4.0",
+        "blinker": "1.9.0",
+        "SQLAlchemy": "2.1.8",
+        "unitycatalog-openai": "0.2.0",
+        "aiosignal": "1.4.0",
+        "aiohttp": "3.14.5",
+        "truststore": "0.10.5",
+        "markdown-it-py": "4.3.0",
+        "langchain-protocol": "0.0.21",
+        "unitycatalog-langchain": "0.3.0",
+        "mlflow-skinny": "3.18.0",
+        "Flask": "3.1.3",
+        "multidict": "7.2.1",
+        "googleapis-common-protos": "1.76.0",
+        "deprecation": "2.1.0",
+        "databricks-sdk": "0.166.0",
+        "databricks-ai-bridge": "0.22.0+lean.0959379c78c7",
+        "itsdangerous": "2.2.0",
+        "uuid_utils": "0.19.0",
+        "langgraph-sdk": "0.4.14",
+        "opentelemetry-semantic-conventions": "0.66b2",
+        "click": "8.5.1",
+        "h11": "0.16.0",
+        "cloudpickle": "3.1.2",
+        "fastapi": "0.162.7",
+        "aiohttp-retry": "2.9.1",
+        "opentelemetry-exporter-otlp-proto-grpc": "1.45.2",
+        "mcp": "1.30.0",
+        "urllib3": "2.8.0",
+        "jiter": "0.19.0",
+        "flask-cors": "6.0.5",
+        "rich": "15.0.0",
+        "databricks-connect": "17.0.10",
+        "grpcio-status": "1.85.1",
+        "packaging": "26.3",
+        "langchain": "1.4.9",
+        "skops": "0.16.0",
+        "langchain-community": "0.4.2",
+        "zstandard": "0.25.0",
+        "docker": "7.2.0",
+        "GitPython": "3.2.1",
+        "gunicorn": "26.2.0",
+        "pydantic-settings": "2.16.3",
+        "pycparser": "3.12",
+        "httpx2": "2.16.0",
+        "databricks-openai": "0.18.0+lean.7c22d48642db",
+        "opentelemetry-exporter-otlp-proto-common": "1.45.2",
+        "Pygments": "2.21.0",
+        "aiohappyeyeballs": "2.7.1",
+        "sse-starlette": "3.7.0",
+        "jsonpointer": "3.12",
+        "unitycatalog-ai": "0.3.2",
+        "scikit-learn": "1.9.1",
+        "tiktoken": "0.14.0",
+        "langsmith": "0.14.17",
+        "nest-asyncio": "1.6.0",
+        "mypy_extensions": "1.2.0",
+        "typing-inspection": "0.4.5",
+        "jsonpatch": "1.47",
+        "boto3": "1.44.3",
+        "marshmallow": "3.26.2",
+        "python-multipart": "0.0.33",
+        "certifi": "2026.10.23",
+        "cryptography": "50.0.2",
+        "psycopg-binary": "3.3.9",
+        "psycopg-pool": "3.3.3",
+        "mdurl": "0.1.2",
+        "langgraph-prebuilt": "1.1.1",
+        "pyparsing": "3.3.3",
+        "databricks-mcp": "0.9.2+lean.276ec7df83f4",
+        "grpcio": "1.85.1",
+        "tqdm": "4.70.1",
+        "google-auth": "2.62.2",
+        "matplotlib": "3.11.2",
+        "pandas": "3.1.1",
+        "idna": "3.20",
+        "langgraph": "1.2.20",
+        "psycopg": "3.3.9",
+        "orjson": "3.13.0",
+        "mlflow": "3.18.0",
+        "pyasn1_modules": "0.4.2",
+        "greenlet": "3.5.6",
+        "xxhash": "4.1.0",
+        "uvicorn": "0.54.0",
+        "httpx-sse": "0.4.3",
+        "graphql-core": "3.2.14",
+        "langchain-core": "1.7.6",
+        "regex": "2026.11.9",
+        "databricks-langchain": "0.22.0+lean.59a6fa2b2820",
+        "databricks-ai-search": "0.83",
+        "langchain-classic": "1.0.8",
+        "importlib_metadata": "10.2.0",
+        "attrs": "26.1.0",
+        "prettytable": "3.18.0",
+        "pyarrow": "26.0.1",
+        "opentelemetry-proto": "1.45.2",
+        "botocore": "1.44.3",
+        "requests": "2.34.2",
+        "graphene": "3.4.3",
+        "Werkzeug": "3.1.9",
+        "langchain-text-splitters": "1.1.3",
+        "pillow": "13.0.0",
+        "agent-langgraph": "0.1.0",
+        "six": "1.17.0",
+        "graphql-relay": "3.2.0",
+        "ormsgpack": "1.13.1",
+        "tomli": "2.5.0",
+        "scipy": "1.18.1",
+        "jmespath": "1.1.0",
+        "griffelib": "2.4.1",
+        "cycler": "0.12.1",
+        "sqlite-vec": "0.1.9",
+        "PyJWT": "2.15.1",
+        "wcwidth": "0.9.4",
+        "tomlkit": "0.15.2",
+        "opentelemetry-api": "1.45.2",
+        "referencing": "0.37.0",
+        "opentelemetry-exporter-otlp-common": "0.66b2",
+        "Mako": "1.4.3",
+        "typing_extensions": "4.16.0",
+        "python-dateutil": "2.9.0.post0",
+        "python-dotenv": "1.2.4",
+        "pydantic_core": "2.50.4",
+        "dataclasses-json": "0.6.7",
+        "kiwisolver": "1.5.1",
+        "aiosqlite": "0.22.1",
+        "httpcore2": "2.16.0",
+        "langgraph-checkpoint": "4.3.1",
+        "zipp": "4.1.2",
+        "typing-inspect": "0.9.0",
+        "sniffio": "1.3.1",
+        "httpcore": "1.0.9",
+        "jsonschema": "4.26.0",
+        "langchain-mcp-adapters": "0.3.2",
+        "tabulate": "0.10.0",
+        "alembic": "1.20.1",
+        "charset-normalizer": "3.5.2",
+        "websockets": "16.1.1",
+        "requests-toolbelt": "1.0.0",
+        "protobuf": "7.36.2",
+        "starlette": "1.10.0",
+        "rpds-py": "2026.9.1",
+        "mlflow-tracing": "3.18.0",
+        "huey": "3.5.4",
+        "pydantic": "2.14.3",
+        "MarkupSafe": "3.0.4",
+        "frozenlist": "1.8.0",
+        "cachetools": "7.3.1",
+        "py4j": "0.10.9.9",
+        "pyasn1": "0.6.5",
+        "narwhals": "2.28.0",
+        "contourpy": "1.4.0",
+        "fonttools": "4.68.0",
+        "PyYAML": "6.0.3",
+        "annotated-types": "0.8.0",
+        "numpy": "2.5.4",
+        "httpx": "0.28.1",
+        "smmap": "5.0.3",
+        "cffi": "2.1.1",
+        "anyio": "4.16.0",
+        "openai-agents": "0.20.0",
+        "lazy-importer": "0.1.0",
+        "s3transfer": "0.19.3",
+        "Jinja2": "3.1.6",
+        "distro": "1.9.0",
+        "databricks-agents": "1.13.0"
+      },
+      "heavy": {
+        "pyspark": true,
+        "pyarrow": true,
+        "numpy": true,
+        "pandas": true
+      }
+    },
+    "lean": {
+      "packages": {
+        "opentelemetry-sdk": "1.45.2",
+        "jsonschema-specifications": "2025.9.1",
+        "databricks-agentbricks": "0.10.0.dev0+lean.9fd969491273",
+        "langgraph-checkpoint-sqlite": "3.1.3",
+        "openai": "2.54.0",
+        "tenacity": "9.2.1",
+        "annotated-doc": "0.0.6",
+        "SQLAlchemy": "2.1.8",
+        "truststore": "0.10.5",
+        "markdown-it-py": "4.3.0",
+        "langchain-protocol": "0.0.21",
+        "googleapis-common-protos": "1.76.0",
+        "databricks-sdk": "0.166.0",
+        "databricks-ai-bridge": "0.22.0+lean.0959379c78c7",
+        "uuid_utils": "0.19.0",
+        "langgraph-sdk": "0.4.14",
+        "opentelemetry-semantic-conventions": "0.66b2",
+        "click": "8.5.1",
+        "h11": "0.16.0",
+        "fastapi": "0.162.7",
+        "opentelemetry-exporter-otlp-proto-grpc": "1.45.2",
+        "mcp": "1.30.0",
+        "urllib3": "2.8.0",
+        "jiter": "0.19.0",
+        "rich": "15.0.0",
+        "packaging": "26.3",
+        "langchain": "1.4.9",
+        "zstandard": "0.25.0",
+        "pydantic-settings": "2.16.3",
+        "pycparser": "3.12",
+        "httpx2": "2.16.0",
+        "databricks-openai": "0.18.0+lean.7c22d48642db",
+        "opentelemetry-exporter-otlp-proto-common": "1.45.2",
+        "Pygments": "2.21.0",
+        "sse-starlette": "3.7.0",
+        "jsonpointer": "3.12",
+        "langsmith": "0.14.17",
+        "typing-inspection": "0.4.5",
+        "jsonpatch": "1.47",
+        "python-multipart": "0.0.33",
+        "certifi": "2026.10.23",
+        "cryptography": "50.0.2",
+        "psycopg-binary": "3.3.9",
+        "psycopg-pool": "3.3.3",
+        "mdurl": "0.1.2",
+        "langgraph-prebuilt": "1.1.1",
+        "databricks-mcp": "0.9.2+lean.276ec7df83f4",
+        "grpcio": "1.85.1",
+        "tqdm": "4.70.1",
+        "google-auth": "2.62.2",
+        "idna": "3.20",
+        "langgraph": "1.2.20",
+        "psycopg": "3.3.9",
+        "orjson": "3.13.0",
+        "pyasn1_modules": "0.4.2",
+        "greenlet": "3.5.6",
+        "xxhash": "4.1.0",
+        "uvicorn": "0.54.0",
+        "httpx-sse": "0.4.3",
+        "langchain-core": "1.7.6",
+        "databricks-langchain": "0.22.0+lean.59a6fa2b2820",
+        "attrs": "26.1.0",
+        "opentelemetry-proto": "1.45.2",
+        "requests": "2.34.2",
+        "agent-langgraph": "0.1.0",
+        "ormsgpack": "1.13.1",
+        "tomli": "2.5.0",
+        "griffelib": "2.4.1",
+        "sqlite-vec": "0.1.9",
+        "PyJWT": "2.15.1",
+        "tomlkit": "0.15.2",
+        "opentelemetry-api": "1.45.2",
+        "referencing": "0.37.0",
+        "opentelemetry-exporter-otlp-common": "0.66b2",
+        "typing_extensions": "4.16.0",
+        "python-dotenv": "1.2.4",
+        "pydantic_core": "2.50.4",
+        "aiosqlite": "0.22.1",
+        "httpcore2": "2.16.0",
+        "langgraph-checkpoint": "4.3.1",
+        "sniffio": "1.3.1",
+        "httpcore": "1.0.9",
+        "jsonschema": "4.26.0",
+        "langchain-mcp-adapters": "0.3.2",
+        "charset-normalizer": "3.5.2",
+        "websockets": "16.1.1",
+        "requests-toolbelt": "1.0.0",
+        "protobuf": "7.36.2",
+        "starlette": "1.10.0",
+        "rpds-py": "2026.9.1",
+        "mlflow-tracing": "3.18.0",
+        "pydantic": "2.14.3",
+        "cachetools": "7.3.1",
+        "pyasn1": "0.6.5",
+        "PyYAML": "6.0.3",
+        "annotated-types": "0.8.0",
+        "httpx": "0.28.1",
+        "cffi": "2.1.1",
+        "anyio": "4.16.0",
+        "openai-agents": "0.20.0",
+        "distro": "1.9.0"
+      },
+      "heavy": {
+        "pyspark": false,
+        "pyarrow": false,
+        "numpy": false,
+        "pandas": false
+      }
+    }
+  },
+  "locks": {
+    "full": "fcb6a17dae306b35efa80039c25a947abc3ec1d96d605f0ea9ec9b6de1305c8d",
+    "lean": "9599dbb1a22254a16dbf66e58cd8528226f1c6c9a0198e59fc8b482a5948ce56"
+  },
+  "wheels": {
+    "databricks-ai-bridge": {
+      "version": "0.22.0+lean.0959379c78c7",
+      "wheel": "databricks_ai_bridge-0.22.0+lean.0959379c78c7-py3-none-any.whl",
+      "sha256": "12032de22627ef797138df8e5d4e217172b1bf6aaf01d813c68f522e206c876e"
+    },
+    "databricks-agentbricks": {
+      "version": "0.10.0.dev0+lean.9fd969491273",
+      "wheel": "databricks_agentbricks-0.10.0.dev0+lean.9fd969491273-py3-none-any.whl",
+      "sha256": "13198c6e0e8c421e246a8e30507797b23074db78f64764903fa6c10eec91ed89"
+    },
+    "databricks-langchain": {
+      "version": "0.22.0+lean.59a6fa2b2820",
+      "wheel": "databricks_langchain-0.22.0+lean.59a6fa2b2820-py3-none-any.whl",
+      "sha256": "fbc1de392b9e772e1ab83c9f78158af78f0cf2861d9996485a93a368c179ce9e"
+    },
+    "databricks-openai": {
+      "version": "0.18.0+lean.7c22d48642db",
+      "wheel": "databricks_openai-0.18.0+lean.7c22d48642db-py3-none-any.whl",
+      "sha256": "a937453afcdb87832ee0318d0f43fd348ecb3c09c422982e1c140e61f78c97d2"
+    },
+    "databricks-mcp": {
+      "version": "0.9.2+lean.276ec7df83f4",
+      "wheel": "databricks_mcp-0.9.2+lean.276ec7df83f4-py3-none-any.whl",
+      "sha256": "c27a759d848d9366822c495b41ef599a295839234f153566a1ce3942e2bc4a66"
+    }
+  },
+  "limitations": [
+    "Small sample; these are not production latency percentiles.",
+    "Full control uses the same new integration code as lean, not the exact older released demo wheels.",
+    "Optional Genie, direct UC, vector-search, model-logging and CLI compatibility matrices were not exercised. OpenAI imports passed; only LangGraph was invoked live.",
+    "First full tool turn took 31.7 s to first text. Its trace has ~3.1 s of model spans; most delay is outside those spans. No attribution to dependency reduction is established.",
+    "Stop samples are variable and dominated by waiting for provider status; do not infer a reliable stop improvement.",
+    "No UI source changed in this PR; live API/SSE behavior was exercised, not a new browser recording."
+  ],
+  "control_app_cleanup": {
+    "app": "agent-bricks-sb-full-1114",
+    "compute_status": {
+      "message": "Start the app compute to deploy the app.",
+      "state": "STOPPED"
+    },
+    "data_retained": true
+  }
+}
