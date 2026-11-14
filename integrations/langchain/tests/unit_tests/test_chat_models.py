@@ -4,8 +4,9 @@ import json
 import time
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import mlflow  # noqa: F401
 import pytest
 from databricks import sdk
@@ -27,6 +28,7 @@ from langchain_core.messages.content import create_text_block
 from langchain_core.messages.tool import ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableBinding, RunnableMap
+from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -192,6 +194,75 @@ def test_chat_model_predict(llm: ChatDatabricks) -> None:
         ]
     )
     assert res.content == _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
+
+
+@pytest.mark.parametrize("response", ["not JSON", None, {}, [], b"not JSON"])
+def test_chat_model_unsupported_response(llm: ChatDatabricks, response: Any) -> None:
+    cast(Mock, llm.client.chat.completions.create).side_effect = lambda **kwargs: response
+
+    with pytest.raises(
+        ValueError,
+        match=f"expected a ChatCompletion response, but received {type(response).__name__}",
+    ) as error:
+        llm.invoke("Hi")
+
+    assert f"Response: {response!r}" in str(error.value)
+
+
+def test_chat_model_long_unsupported_response(llm: ChatDatabricks) -> None:
+    response = "a" * 600
+    cast(Mock, llm.client.chat.completions.create).side_effect = lambda **kwargs: response
+
+    with pytest.raises(ValueError, match="received str") as error:
+        llm.invoke("Hi")
+
+    message = str(error.value)
+    assert "a" * 400 in message
+    assert response not in message
+    assert message.endswith("... (truncated)")
+    assert len(message) < 750
+
+
+@pytest.mark.parametrize(
+    "content_type, body",
+    [
+        ("text/html", "<!DOCTYPE html><html><body>unexpected-response-content</body></html>"),
+        ("text/plain", "unexpected-response-content"),
+    ],
+)
+def test_chat_model_non_json_response(llm: ChatDatabricks, content_type: str, body: str) -> None:
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.url.path == "/response":
+            return httpx.Response(200, headers={"content-type": content_type}, text=body)
+        return httpx.Response(303, headers={"location": "/response"})
+
+    with OpenAI(
+        api_key="test",
+        base_url="https://workspace.example/serving-endpoints",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond), follow_redirects=True),
+    ) as client:
+        llm.client = client
+        with pytest.raises(ValueError, match="received str") as error:
+            llm.invoke("Hi")
+
+    assert requests == [("POST", "/serving-endpoints/chat/completions"), ("GET", "/response")]
+    assert "OpenAI-compatible chat completion" in str(error.value)
+    assert f"Response: {body!r}" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_chat_model_async_html_response(llm: ChatDatabricks) -> None:
+    client = AsyncMock()
+    client.chat.completions.create.return_value = "<html><body>Sign in</body></html>"
+
+    with patch("databricks_langchain.chat_models.get_async_openai_client", return_value=client):
+        with pytest.raises(ValueError, match="received str") as error:
+            await llm.ainvoke("Hi")
+
+    assert "Response: '<html><body>Sign in</body></html>'" in str(error.value)
 
 
 def test_chat_model_stream(llm: ChatDatabricks) -> None:
