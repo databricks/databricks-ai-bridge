@@ -84,7 +84,8 @@ with (state_dir / "worker.lock").open("a") as lease:
                             raise ValueError("Invalid worker request")
                         request = json.loads(line)
                         if request.get("op") == "ping":
-                            send(connection, {"identity": identity, "id": worker_id, "pid": os.getpid()})
+                            send(connection, {"identity": identity, "id": worker_id, "pid": os.getpid(),
+                                "prepared": _preparation is not None, "invocation_count": count})
                             continue
                         if request.get("op") == "shutdown":
                             send(connection, {"stopped": True})
@@ -228,6 +229,10 @@ def ensure_worker():
                 raise RuntimeError("Session worker failed to start; inspect worker.log")
             time.sleep(.05)
         raise TimeoutError("Session worker did not become ready; invocation was not submitted")
+
+if "--probe" in sys.argv[4:]:
+    print(json.dumps(probe()), flush=True)
+    sys.exit(0)
 
 ensure_worker()
 request = json.load(sys.stdin)

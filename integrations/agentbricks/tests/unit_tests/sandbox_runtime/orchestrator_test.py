@@ -349,3 +349,19 @@ def test_app_execution_publishes_descriptor_without_owning_a_tail_reader(setup, 
     follower.assert_not_called()
     orchestrator.invoke("session", "call", {}, stream_ready=descriptors.append)
     assert descriptors[0]["path"] != descriptors[1]["path"]
+
+
+def test_pool_assignment_keeps_physical_worker_path_and_skips_install(setup):
+    orchestrator, registry, lakebox, remote = setup
+    registry.record.save(build_bundle(orchestrator.source).digest, "sandbox-one", "ready")
+    registry.record.row["bootstrap_metrics"] = {"worker_state_key": "b" * 64}
+    remote.run.side_effect = [
+        "/home/sandbox",
+        json.dumps({"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}),
+        json.dumps({"reply": "hello"}),
+    ]
+    result = orchestrator.invoke("assigned-session", "first-turn", {})
+    assert result["environment_reused"]
+    assert "sessions/" + "b" * 64 in remote.run.call_args.args[0]
+    assert json.loads(remote.run.call_args.args[1])["session_id"] == "assigned-session"
+    lakebox.create.assert_not_called()

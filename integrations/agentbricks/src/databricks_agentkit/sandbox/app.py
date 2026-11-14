@@ -116,12 +116,33 @@ async def lifespan(app):
                 _allow_install=False,
             )
     app.state.runs = RunManager(app.state.control, app.state.orchestrator)
+    app.state.warm_pool = None
+    pool_size = int(os.getenv("SANDBOX_WARM_POOL_SIZE", "0"))
+    if pool_size and not on_demand(app.state.prepared_environment or {}):
+        raise ValueError("Warm pools require an on-demand source deployment")
+    if (
+        os.getenv("SANDBOX_WARM_POOL_GENERATION")
+        and on_demand(app.state.prepared_environment or {})
+        and (pool_size or app.state.orchestrator.sandbox_scope == "session")
+    ):
+        from databricks_agentkit.sandbox.warm_pool import WarmPool
+
+        app.state.warm_pool = WarmPool(
+            app.state.orchestrator,
+            prepared,
+            bundle,
+            size=pool_size,
+            generation=int(os.environ["SANDBOX_WARM_POOL_GENERATION"]),
+        )
+        app.state.warm_pool.start()
     app.state.runs.start()
     app.state.preparations = SessionPreparation(app.state.control, app.state.orchestrator)
     app.state.preparations.start()
     try:
         yield
     finally:
+        if app.state.warm_pool:
+            app.state.warm_pool.stop()
         app.state.preparations.stop()
         app.state.runs.stop()
         app.state.control.close()
@@ -278,6 +299,7 @@ def configuration():
             "agent_id"
         ),
         "sandbox_idle_timeout_seconds": app.state.orchestrator.lakebox.idle_timeout,
+        "sandbox_warm_pool_size": int(os.getenv("SANDBOX_WARM_POOL_SIZE", "0")),
         "sandbox_scope": app.state.orchestrator.sandbox_scope,
         "environment_mode": (
             "on-demand" if on_demand(app.state.prepared_environment) else "prepared"
@@ -295,6 +317,16 @@ def configuration():
         ],
         "workbench": (getattr(app.state, "prepared_environment", None) or {}).get("workbench"),
     }
+
+
+@app.get("/api/warm-pool")
+def warm_pool_status():
+    pool = getattr(app.state, "warm_pool", None)
+    return (
+        pool.store.status()
+        if pool
+        else {"maximum": 0, "ready": 0, "preparing": 0, "retiring": 0, "error": None}
+    )
 
 
 @app.get("/api/agents")
@@ -374,6 +406,7 @@ def session_sandbox(agent_id: str, session_id: str):
         "sandbox_id": sandbox_id,
         "status": status,
         "execution_principal": owner,
+        "warm_pool": ((row or {}).get("bootstrap_metrics") or {}).get("warm_pool"),
         "source_hash": row["source_hash"] if row else agent["source_hash"],
         "initial_bootstrap_timings_ms": ((row or {}).get("bootstrap_metrics") or {}).get(
             "timings_ms"

@@ -30,6 +30,8 @@ class SessionSandbox:
     created: bool
     replaced: bool
     installation_status: str
+    state_key: str | None = None
+    pool_hit: bool = False
 
     @property
     def id(self):
@@ -40,6 +42,7 @@ class SessionSandboxClient:
     def __init__(self, registry, lakebox, namespace):
         self.registry, self.lakebox, self.namespace = registry, lakebox, namespace
         self._principal = None
+        self.warm_pool = None
 
     def execution_principal(self):
         if self._principal is None:
@@ -81,6 +84,7 @@ class SessionSandboxClient:
         allow_create=True,
         progress=None,
         metrics=None,
+        use_pool=True,
     ):
         metrics = metrics if metrics is not None else {}
         report = progress or (lambda stage: None)
@@ -94,6 +98,18 @@ class SessionSandboxClient:
                 )
             if not row or row.get("execution_principal") != self.execution_principal():
                 session.bind_owner(self.execution_principal())
+            pool_hit = False
+            if (
+                use_pool
+                and allow_create
+                and not (row or {}).get("sandbox_id")
+                and (not row or row["status"] == "pending")
+                and self.warm_pool
+            ):
+                pool_hit = self.warm_pool.claim(session, source_hash, source_revision)
+                if pool_hit:
+                    row = session.get()
+                    report("Using prepared sandbox from warm pool")
             sandbox_id = row["sandbox_id"] if row else None
             with timed(metrics, "sandbox_lookup"):
                 sandbox = self.lakebox.get(sandbox_id) if sandbox_id else None
@@ -132,7 +148,14 @@ class SessionSandboxClient:
                     sandbox = self.lakebox.get(sandbox_id)
                     if sandbox is None:
                         raise RuntimeError("Sandbox disappeared while starting")
-            return SessionSandbox(sandbox, created, replaced, row["status"] if row else "creating")
+            return SessionSandbox(
+                sandbox,
+                created,
+                replaced,
+                row["status"] if row else "creating",
+                ((row or {}).get("bootstrap_metrics") or {}).get("worker_state_key"),
+                pool_hit,
+            )
 
     @staticmethod
     def _save(session, digest, sandbox_id, status, revision=None, metrics=None):

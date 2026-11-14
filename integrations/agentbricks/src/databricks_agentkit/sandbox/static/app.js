@@ -6,7 +6,7 @@ const ACTIVE = new Set(["queued", "running"]);
 const API_TIMEOUTS = { stop: 210000, status: 15000 };
 const state = {
   config: null, agents: [], agent: null, context: null, sessions: [], runs: [],
-  preparation: null, preparationTimer: null,
+  preparation: null, preparationTimer: null, warmPool: null,
   pending: null, sandbox: null, busy: false, loading: false, recovery: null,
   source: null, pollTimer: null, messages: new Map(), historyUnavailable: false,
   stopOperations: new Map(), sandboxRequests: new Map(), sandboxes: new Map(),
@@ -510,6 +510,7 @@ const TIMING_LABELS = {
   project_build: "Build wheel", project_install: "Install project", import_check: "Import check",
   prepare: "Handler preparation", agent_execution: "Agent execution",
   import_cache: "Import cache setup", framework_import: "Framework imports", project_import: "Agent project imports",
+  agentkit_import: "AgentKit imports", tracing_import: "Tracing imports",
   bindings: "Source bindings", configuration: "Agent configuration", session_open: "Session setup",
   agent_build: "Agent construction", mcp_discovery: "MCP tool discovery",
 };
@@ -605,6 +606,14 @@ function renderTimings(row) {
   }
 }
 function renderLifecycle() {
+  const pool = state.warmPool;
+  $("warm-pool-status").hidden = !state.config?.sandbox_warm_pool_size;
+  $("warm-pool-status").textContent = pool
+    ? `Warm pool: ${pool.ready} ready · ${pool.preparing} preparing · ${pool.retiring} retiring · maximum ${pool.maximum}${pool.error ? " · replenishment needs attention" : ""}`
+    : "Warm pool: checking readiness…";
+  const assigned = state.sandbox?.warm_pool;
+  $("warm-pool-allocation").hidden = !assigned;
+  $("warm-pool-allocation").textContent = "This session received a prepared sandbox from the warm pool.";
   const row = latestRun();
   const active = row && ACTIVE.has(row.status);
   const operation = stopping();
@@ -999,6 +1008,7 @@ function resizeComposer() {
 async function initialize() {
   try {
     state.config = await api("/api/config");
+    void refreshWarmPool();
     void loadModels();
     renderCapabilities();
     const shared = state.config.sandbox_scope === "environment";
@@ -1077,6 +1087,13 @@ $("source-kind").addEventListener("change", () => {
 document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => {
   $("prompt-input").value = button.dataset.prompt; resizeComposer(); $("prompt-input").focus();
 }));
+async function refreshWarmPool() {
+  if (!state.config?.sandbox_warm_pool_size || document.hidden) return;
+  try { state.warmPool = await api("/api/warm-pool", undefined, undefined, API_TIMEOUTS.status); }
+  catch { state.warmPool = null; }
+  if (state.context) renderLifecycle();
+}
+setInterval(() => { void refreshWarmPool(); }, 10000);
 setInterval(() => { if (state.context) renderLifecycle(); }, 500);
 window.addEventListener("pagehide", closeWatch);
 void initialize();

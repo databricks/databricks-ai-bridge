@@ -201,6 +201,7 @@ def test_deployment_packages_orchestrator_without_agent_source(tmp_path, monkeyp
         "app-principal",
         index_url="https://pypi.org/simple/",
         sandbox_idle_timeout=1800,
+        sandbox_warm_pool_size=2,
     )
     assert {p.name for p in tmp_path.iterdir()} == {
         "databricks_agentbricks-0.3.0-py3-none-any.whl",
@@ -215,6 +216,8 @@ def test_deployment_packages_orchestrator_without_agent_source(tmp_path, monkeyp
     ] == "1800"
     assert "sandbox" in (tmp_path / "requirements.txt").read_text()
     env = {item["name"]: item["value"] for item in config["env"]}
+    assert env["SANDBOX_WARM_POOL_SIZE"] == "2"
+    assert int(env["SANDBOX_WARM_POOL_GENERATION"]) > 0
     if managed:
         assert env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_DATABASE"] == "managed-db"
         assert env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_USERNAME"] == "app-principal"

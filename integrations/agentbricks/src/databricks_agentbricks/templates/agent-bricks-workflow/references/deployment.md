@@ -66,8 +66,13 @@ the agreed checks pass, or report the concrete failure and remaining limitation.
 
 Use `agentbricks deploy APP --sandbox --source PROJECT` to upload
 source and deploy the generic App orchestrator in one command. No `environment create`
-step is required. Optional `--git-revision` selects committed source. Deploy provisions the
-App-owned managed Runtime Store; only the App connects to SQL and creates its two tables.
+step is required. Deploy generates a missing `uv.lock` using Python 3.12 before source
+upload, without installing the agent locally; existing locks are preserved. Optional
+`--git-revision` selects committed source and requires the lockfile in that commit.
+Record custom package indexes in the project's `pyproject.toml` or `uv.toml` so
+sandbox installation can use the same configuration with `uv sync --locked`.
+Deploy provisions the
+App-owned managed Runtime Store; only the App connects to SQL and initializes runtime tables.
 The workspace must support managed Runtime Store provisioning; there is no manual Lakebase
 configuration path. Historical state is retained without migration.
 Workspace stores the frozen source archive and revision manifests. Lakebase stores only
@@ -83,6 +88,15 @@ commands below. The environment group provides inspection, invocation and debugg
 Use `--sandbox-idle-timeout SECONDS` to configure Lakebox idle shutdown (default 900,
 range 60–86400). Existing sandboxes adopt the policy on their next prepare/invoke after
 redeploy; the resident worker has no separate idle timer.
+
+Optional `--sandbox-warm-pool-size N` prepares up to N unused sandboxes in the background,
+including source installation and handler initialization. Default 0 disables the pool;
+the prototype accepts 0–10. Each new session claims one healthy spare or falls back to cold
+preparation. Assigned sandboxes never return to the pool. The limit is deployment-wide
+across App replicas and excludes assigned sessions. Check the Sandbox tab for pool
+readiness; deploy completion does not mean the pool is full. Redeploy with 0 to drain
+unassigned spares. This spends idle compute to move initialization before session creation;
+custom preparation hooks must be safe to run without a user request.
 
 Sandbox invocations use the existing durable runtime's invocation and event tables;
 there are no changes to those table schemas. Failed invocations stay terminal: inspect

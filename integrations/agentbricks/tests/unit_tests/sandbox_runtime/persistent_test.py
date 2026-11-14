@@ -63,6 +63,7 @@ def worker(tmp_path):
         script=CLIENT_SCRIPT,
         wait=True,
         prepare=False,
+        probe=False,
     ):
         directory = tmp_path / state
         states.add(directory)
@@ -78,6 +79,7 @@ def worker(tmp_path):
                 "--stream-file",
                 str(stream),
                 *(["--prepare"] if prepare else []),
+                *(["--probe"] if probe else []),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -289,6 +291,22 @@ def test_prepare_hook_runs_once_per_resident_worker(worker, tmp_path):
     assert (tmp_path / "session/initialized").read_text() == "1"
     invoked = worker(invocation="real")
     assert first[1]["result"]["details"]["loop"] == invoked[1]["result"]["loop"]
+
+
+def test_pool_probe_never_starts_worker_and_reports_unused_prepared_process(worker, tmp_path):
+    code, result, error, _ = worker(probe=True)
+    assert code == 0 and result is None, error
+    assert not (tmp_path / "session/worker.log").exists()
+    prepared = worker(prepare=True)[1]
+    probe = worker(probe=True)[1]
+    assert probe["prepared"] and probe["invocation_count"] == 0
+    assert probe["id"] == prepared["worker"]["id"]
+    invoked = worker(invocation="real-session-first-turn")[1]
+    assert invoked["worker"]["id"] == probe["id"]
+    assert worker(probe=True)[1]["invocation_count"] == 1
+    os.kill(probe["pid"], signal.SIGKILL)
+    time.sleep(0.05)
+    assert worker(probe=True)[1] is None
 
 
 def test_shutdown_hook_runs_after_turns_and_on_termination(worker, tmp_path):

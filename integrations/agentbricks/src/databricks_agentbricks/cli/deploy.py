@@ -210,6 +210,12 @@ def _ignore_hangup() -> None:
 )
 @click.option("--git-revision", help="Local Git commit, tag, or branch to publish with --sandbox.")
 @click.option(
+    "--sandbox-warm-pool-size",
+    type=click.IntRange(0, 10),
+    default=0,
+    help="Maximum unassigned prepared sandboxes for --sandbox (default: 0, disabled).",
+)
+@click.option(
     "--entrypoint",
     help="Installed module:function for --sandbox; defaults to the template adapter.",
 )
@@ -222,8 +228,8 @@ def _ignore_hangup() -> None:
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local project directory (app.yaml for App execution; pyproject.toml and uv.lock "
-    "for --sandbox). Defaults to the current directory.",
+    help="Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, "
+    "which generates uv.lock if missing). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",
@@ -275,6 +281,7 @@ def deploy(
     name,
     sandbox,
     sandbox_idle_timeout,
+    sandbox_warm_pool_size,
     git_revision,
     entrypoint,
     prepared_environment,
@@ -323,11 +330,15 @@ def deploy(
 
     With --sandbox, deploy uploads a frozen source revision and publishes the generic App
     orchestrator in one command. No environment create step or agent image build is required.
+    If uv.lock is missing, deploy runs uv lock with Python 3.12 before uploading source;
+    existing lockfiles are preserved. --git-revision requires a committed lockfile.
     Deploy provisions an App-owned Runtime Store automatically; the workspace must
     support managed Runtime Store provisioning.
     The App installs one sandbox per session during explicit session preparation or first invocation.
     --sandbox-idle-timeout sets Lakebox idle shutdown in seconds (default 900). Reuse --sandbox
-    on redeploy; --git-revision optionally selects committed source. This prototype mode
+    on redeploy. --sandbox-warm-pool-size keeps up to N unassigned prepared sandboxes
+    in the background (default 0, disabled); assigned sessions remain dedicated.
+    --git-revision optionally selects committed source. This prototype mode
     requires an editable installation with the sandbox extra and does not support --no-wait.
     """
     if sandbox:
@@ -356,7 +367,7 @@ def deploy(
 
         started = time.monotonic()
         result = SandboxDeployService(
-            _workspace_client(obj.profile), partial(deploy_prepared, obj)
+            _workspace_client(obj.profile), partial(deploy_prepared, obj), reporter=ClickReporter()
         ).deploy(
             SandboxDeployRequest(
                 name=name,
@@ -364,6 +375,7 @@ def deploy(
                 sandbox_idle_timeout=sandbox_idle_timeout
                 if sandbox_idle_timeout is not None
                 else 900,
+                sandbox_warm_pool_size=sandbox_warm_pool_size,
                 git_revision=git_revision,
                 entrypoint=entrypoint,
                 workspace_path=workspace_path,
@@ -375,9 +387,14 @@ def deploy(
             result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
         )
         return
-    if any(value is not None for value in (git_revision, entrypoint, sandbox_idle_timeout)):
+    if (
+        any(value is not None for value in (git_revision, entrypoint, sandbox_idle_timeout))
+        or click.get_current_context().get_parameter_source("sandbox_warm_pool_size")
+        != click.core.ParameterSource.DEFAULT
+    ):
         raise click.UsageError(
-            "--git-revision, --entrypoint and --sandbox-idle-timeout require --sandbox."
+            "--git-revision, --entrypoint, --sandbox-idle-timeout and "
+            "--sandbox-warm-pool-size require --sandbox."
         )
     if prepared_environment:
         if not name:

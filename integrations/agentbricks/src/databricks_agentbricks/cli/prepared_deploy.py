@@ -38,7 +38,9 @@ from databricks_agentkit.sandbox.environment import (
 from databricks_agentkit.sandbox.features import source_features
 
 
-def stage_runtime(target, manifest, principal, *, index_url, sandbox_idle_timeout=900):
+def stage_runtime(
+    target, manifest, principal, *, index_url, sandbox_idle_timeout=900, sandbox_warm_pool_size=0
+):
     """Bundle the installed editable SDK; never read the local agent project."""
     package = Path(__file__).resolve().parents[3]
     if not (package / "pyproject.toml").exists():
@@ -88,6 +90,8 @@ def stage_runtime(target, manifest, principal, *, index_url, sandbox_idle_timeou
         or f"/Shared/agentbricks-runtime/{manifest['namespace']}",
         "SANDBOX_TRANSPORT": "https",
         "SANDBOX_IDLE_TIMEOUT_SECONDS": str(sandbox_idle_timeout),
+        "SANDBOX_WARM_POOL_SIZE": str(sandbox_warm_pool_size),
+        "SANDBOX_WARM_POOL_GENERATION": str(time.time_ns()),
         "AGENTBRICKS_ENVIRONMENT_FILE": "environment.json",
         "PIP_INDEX_URL": index_url,
         "UV_DEFAULT_INDEX": index_url,
@@ -129,6 +133,7 @@ def deploy_prepared(
     workspace_path=None,
     instances=None,
     sandbox_idle_timeout=900,
+    sandbox_warm_pool_size=0,
     index_url="https://pypi.org/simple/",
 ):
     from databricks_agentbricks.services.deployment.names import DeploymentName, _prefixed_name
@@ -201,7 +206,7 @@ def deploy_prepared(
             _allow_install=False,
         )
     features = source_features(bundle_contents(bundle.data).get("agent.toml"))
-    click.echo(f"Deploying orchestrator {name} for environment {manifest['name']}", err=True)
+    click.echo(f"Deploying agent {name} to agentbricks runtime", err=True)
     resources = list(app.resources or [] if app else [])
     if not managed:
         resource = apps.AppResource(
@@ -303,6 +308,7 @@ def deploy_prepared(
             app.service_principal_client_id,
             index_url=index_url,
             sandbox_idle_timeout=sandbox_idle_timeout,
+            sandbox_warm_pool_size=sandbox_warm_pool_size,
         )
         workspace.workspace.mkdirs(remote)
         for file in target.iterdir():
@@ -335,6 +341,7 @@ def deploy_prepared(
                     "url": app.url,
                     "environment": manifest["name"],
                     "manifest_path": manifest["manifest_path"],
+                    "sandbox_warm_pool_size": sandbox_warm_pool_size,
                     "sandbox_id": (manifest.get("preparation") or {}).get("sandbox_id"),
                     "installation": "on session preparation or first invocation"
                     if lazy
