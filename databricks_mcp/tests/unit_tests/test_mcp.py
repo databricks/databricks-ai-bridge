@@ -16,6 +16,7 @@ from databricks_mcp.mcp import (
     _is_databricks_apps_url,
     _is_oauth_auth,
 )
+from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 
 def _patch_mcp_session(mock_session):
@@ -240,6 +241,48 @@ class TestDatabricksMCPClient:
             assert result == mock_result
             mock_session.call_tool.assert_called_once_with("test_tool", {"arg": "value"})
 
+    @pytest.mark.asyncio
+    async def test_get_tools_async_forwards_timeout(self):
+        """Test that _get_tools_async forwards its timeout to _open_mcp_session."""
+        mock_tools = [_make_tool("test_tool", "Test tool")]
+        mock_session = AsyncMock()
+        mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=mock_tools))
+
+        @asynccontextmanager
+        async def _fake_session(*args, **kwargs):
+            assert kwargs.get("timeout") == 42.0
+            yield mock_session
+
+        with patch("databricks_mcp.mcp._open_mcp_session", _fake_session):
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            tools = await client._get_tools_async(timeout=42.0)
+
+            assert tools == mock_tools
+
+    @pytest.mark.asyncio
+    async def test_call_tools_async_forwards_timeout(self):
+        """Test that _call_tools_async forwards its timeout to _open_mcp_session."""
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
+        mock_session = AsyncMock()
+        mock_session.call_tool = AsyncMock(return_value=mock_result)
+
+        @asynccontextmanager
+        async def _fake_session(*args, **kwargs):
+            assert kwargs.get("timeout") == 120.0
+            yield mock_session
+
+        with patch("databricks_mcp.mcp._open_mcp_session", _fake_session):
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            result = await client._call_tools_async("test_tool", {"arg": "value"}, timeout=120.0)
+
+            assert result == mock_result
+
     def test_list_tools(self):
         """Test synchronous tool listing."""
         mock_tools = [_make_tool("test_tool", "Test tool")]
@@ -253,6 +296,43 @@ class TestDatabricksMCPClient:
 
             assert tools == mock_tools
 
+    def test_list_tools_forwards_timeout(self):
+        """Test that list_tools() forwards an explicit timeout to _get_tools_async."""
+        mock_tools = [_make_tool("test_tool", "Test tool")]
+
+        with patch.object(
+            DatabricksMCPClient, "_get_tools_async", return_value=mock_tools
+        ) as mock_get_tools:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            tools = client.list_tools(timeout=90.0)
+
+            assert tools == mock_tools
+            mock_get_tools.assert_called_once_with(
+                timeout=90.0, terminate_on_close=None, client_kwargs=None
+            )
+
+    def test_list_tools_forwards_terminate_on_close_and_client_kwargs(self):
+        """Test that list_tools() forwards terminate_on_close and client_kwargs (e.g. headers)."""
+        mock_tools = [_make_tool("test_tool", "Test tool")]
+        headers = {"Accept-Encoding": "identity"}
+
+        with patch.object(
+            DatabricksMCPClient, "_get_tools_async", return_value=mock_tools
+        ) as mock_get_tools:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            tools = client.list_tools(terminate_on_close=False, client_kwargs={"headers": headers})
+
+            assert tools == mock_tools
+            mock_get_tools.assert_called_once_with(
+                timeout=None, terminate_on_close=False, client_kwargs={"headers": headers}
+            )
+
     def test_call_tool(self):
         """Test synchronous tool calling."""
         mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
@@ -265,6 +345,151 @@ class TestDatabricksMCPClient:
             result = client.call_tool("test_tool", {"arg": "value"})
 
             assert result == mock_result
+
+    def test_call_tool_forwards_timeout(self):
+        """Test that call_tool() forwards an explicit timeout to _call_tools_async."""
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
+
+        with patch.object(
+            DatabricksMCPClient, "_call_tools_async", return_value=mock_result
+        ) as mock_call:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            result = client.call_tool("test_tool", {"arg": "value"}, timeout=60.0)
+
+            assert result == mock_result
+            mock_call.assert_called_once_with(
+                "test_tool",
+                {"arg": "value"},
+                timeout=60.0,
+                terminate_on_close=None,
+                client_kwargs=None,
+            )
+
+    def test_call_tool_forwards_terminate_on_close_and_client_kwargs(self):
+        """Test that call_tool() forwards terminate_on_close and client_kwargs (e.g. headers)."""
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
+        headers = {"Accept-Encoding": "identity"}
+
+        with patch.object(
+            DatabricksMCPClient, "_call_tools_async", return_value=mock_result
+        ) as mock_call:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            result = client.call_tool(
+                "test_tool",
+                {"arg": "value"},
+                terminate_on_close=False,
+                client_kwargs={"headers": headers},
+            )
+
+            assert result == mock_result
+            mock_call.assert_called_once_with(
+                "test_tool",
+                {"arg": "value"},
+                timeout=None,
+                terminate_on_close=False,
+                client_kwargs={"headers": headers},
+            )
+
+    @pytest.mark.asyncio
+    async def test_alist_tools_forwards_timeout(self):
+        """Test that alist_tools() forwards an explicit timeout to _get_tools_async."""
+        mock_tools = [_make_tool("test_tool", "Test tool")]
+
+        with patch.object(
+            DatabricksMCPClient, "_get_tools_async", return_value=mock_tools
+        ) as mock_get_tools:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            tools = await client.alist_tools(timeout=15.0)
+
+            assert tools == mock_tools
+            mock_get_tools.assert_called_once_with(
+                timeout=15.0, terminate_on_close=None, client_kwargs=None
+            )
+
+    @pytest.mark.asyncio
+    async def test_acall_tool_forwards_timeout(self):
+        """Test that acall_tool() forwards an explicit timeout to _call_tools_async."""
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
+
+        with patch.object(
+            DatabricksMCPClient, "_call_tools_async", return_value=mock_result
+        ) as mock_call:
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+            )
+            result = await client.acall_tool("test_tool", {"arg": "value"}, timeout=75.0)
+
+            assert result == mock_result
+            mock_call.assert_called_once_with(
+                "test_tool",
+                {"arg": "value"},
+                timeout=75.0,
+                terminate_on_close=None,
+                client_kwargs=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_open_mcp_session_client_kwargs_reach_httpx_client(self):
+        """Test that client_kwargs (e.g. headers) reach the underlying httpx2 client,
+        without clobbering the explicit auth/follow_redirects/timeout kwargs, on mcp>=2.0.0."""
+        from databricks_mcp.mcp import _MCP_V2, _open_mcp_session
+
+        if not _MCP_V2:
+            pytest.skip("This assertion targets the mcp>=2.0.0 (httpx2) code path")
+
+        captured_client_kwargs = {}
+        captured_transport_kwargs = {}
+        mock_session = AsyncMock()
+
+        class _FakeAsyncClient:
+            def __init__(self, **kwargs):
+                captured_client_kwargs.update(kwargs)
+
+            async def __aenter__(self):
+                return MagicMock()
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        @asynccontextmanager
+        async def _fake_client_session(*args, **kwargs):
+            yield mock_session
+
+        def _fake_streamable_http_client(server_url, **kwargs):
+            captured_transport_kwargs.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("databricks_mcp.mcp.httpx2.AsyncClient", _FakeAsyncClient),
+            patch("databricks_mcp.mcp.streamable_http_client", _fake_streamable_http_client),
+            patch("databricks_mcp.mcp.Client", _fake_client_session),
+        ):
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            auth = DatabricksOAuthClientProvider(workspace_client)
+            async with _open_mcp_session(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema",
+                auth,
+                timeout=42.0,
+                terminate_on_close=False,
+                client_kwargs={"headers": {"Accept-Encoding": "identity"}},
+            ) as session:
+                assert session is mock_session
+
+        assert captured_client_kwargs["auth"] is auth
+        assert captured_client_kwargs["follow_redirects"] is True
+        assert captured_client_kwargs["timeout"] == 42.0
+        assert captured_client_kwargs["headers"] == {"Accept-Encoding": "identity"}
+        assert captured_transport_kwargs["terminate_on_close"] is False
 
     @pytest.mark.parametrize(
         "mcp_type,tool_names,expected_resource_names",
