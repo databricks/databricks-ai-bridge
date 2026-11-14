@@ -5,7 +5,12 @@ to ``build_mcp_servers`` to offer more; ``agent.py`` passes them to ``mcp_tools`
 with the ``agent.toml`` servers and fetches their tools each request.
 """
 
-from databricks_langchain import DatabricksMCPServer
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from databricks_langchain import DatabricksMCPServer
 
 
 def build_mcp_servers() -> list[DatabricksMCPServer]:
@@ -14,6 +19,7 @@ def build_mcp_servers() -> list[DatabricksMCPServer]:
     Example (a Databricks-managed MCP, authed as the app service principal)::
 
         from databricks.sdk import WorkspaceClient
+        from databricks_langchain import DatabricksMCPServer
 
         host = WorkspaceClient().config.host
         return [

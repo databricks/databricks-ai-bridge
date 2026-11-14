@@ -81,3 +81,17 @@ Candidate branch: `codex/agentbricks-worker-startup-1113`, based on `827dda3c`. 
 [Measured evidence and inspected traces](evidence/sandbox-worker-startup-1113.json). Reproduction scripts remain at `/home/james.wu/agentbricks-demo/worker-startup-20261113/`. `build-and-method.json` records exact source hashes and limitations; per-variant directories contain timing JSON, import profiles, and live verification. `investigate.py`, `patch_imports.py`, and `verify_agent.py` reproduce the experiments. `cleanup.json` confirms all six dedicated sandboxes stopped. The benchmark changed no live App configuration.
 
 Validation: 15 integration import/utility tests passed; 34 sandbox adapter/worker tests passed, with one framework-dependent test skipped. Chat/MCP-client/vector-store regression tests completed 199 passes and two skips before the separate MCP suite entered an SDK retry against its synthetic host; that interrupted run is not a full-suite pass. Lint and whitespace checks passed. Live minimal-runtime traces include `tr-437b20053775e797ead3776f4b44e412` (tool turn) and `tr-a1082e943685c2f2dd9dea1bcad02060` (history turn), with successful persisted spans inspected.
+
+## Clean dependency prototype
+
+The [lean worker prototype](lean-worker-prototype.md) follows up with ordinary
+wheel metadata and locked installs, without excluding declared dependencies.
+Three fresh App sessions per variant measured 14.88 → 10.38 s median handler
+preparation and 25.41 → 17.36 s total preparation. All 12 streamed tool/history
+invocations and inspected traces passed. The report includes the live App, source,
+reproduction commands, exact artifacts, and remaining limitations.
+
+The [five-second handler follow-up](lean-worker-five-seconds.md) adds install-time
+bytecode compilation, defers unconfigured MCP imports, and reduces import-cache
+bookkeeping. It reports the handler reduction separately from total session
+readiness: most of the improvement moves compilation into installation.

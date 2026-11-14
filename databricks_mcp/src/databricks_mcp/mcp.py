@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 from contextlib import asynccontextmanager
 from functools import wraps
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -30,15 +32,11 @@ if _MCP_V2:
 else:
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamablehttp_client  # ty:ignore[unresolved-import]
-from mlflow.models.resources import (
-    DatabricksFunction,
-    DatabricksGenieSpace,
-    DatabricksResource,
-    DatabricksUCConnection,
-    DatabricksVectorSearchIndex,
-)
 
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
+
+if TYPE_CHECKING:
+    from mlflow.models.resources import DatabricksResource
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +325,13 @@ class DatabricksMCPClient:
         Note that this method only supports detecting resources for Databricks-managed MCP servers.
         For custom MCP servers or other MCP server URLs, this method returns an empty list
         """
+        from mlflow.models.resources import (
+            DatabricksFunction,
+            DatabricksGenieSpace,
+            DatabricksUCConnection,
+            DatabricksVectorSearchIndex,
+        )
+
         try:
             mcp_type = self._get_databricks_managed_mcp_url_type()
             if mcp_type is None:

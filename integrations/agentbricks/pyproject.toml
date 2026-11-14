@@ -16,13 +16,9 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "uvicorn>=0.20.0",
     "databricks-sdk>=0.124.0",
-    # mlflow-skinny is the lightweight MLflow client (tracking + tracing REST APIs, incl. the
-    # Databricks tracking backend) without the full server and numerical dependency stack.
-    # `agentbricks tracing` and dev/deploy experiment provisioning only make thin client calls,
-    # and tracing is on by default, so this is a base dependency. Auth rides on databricks-sdk
-    # (above), so the heavier
-    # mlflow[databricks] extra (boto3/azure/gcs/databricks-agents, for artifact blob I/O) isn't needed.
-    "mlflow-skinny>=3.10.1",
+    # Worker tracing needs neither model logging nor the tracking/registry client.
+    # The CLI's provisioning and prompt commands use the explicit `cli` extra below.
+    "mlflow-tracing>=3.18.0",
     "packaging>=23.2",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
@@ -34,27 +30,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# This prototype separates the worker and developer environments. Install [cli] for the CLI.
+cli = ["mlflow-skinny>=3.18.0"]
+genie = ["databricks-ai-bridge[genie]>=0.22.0"]
 loadtest = [
     "locust>=2.31",
 ]
 sandbox = ["paramiko>=3.5,<6", "grpcio>=1.60", "protobuf>=4.25.8,<7", "websockets>=14,<17"]
-# Framework adapters are optional; the CLI, store SDK, and HTTP runtime install by default.
+# Framework adapters are optional. Worker/store/HTTP code is in the base; CLI users add [cli].
 langgraph = [
-    "databricks-langchain==0.21.0",
+    "databricks-langchain>=0.22.0",
     "langgraph>=1.1.0",
     "langgraph-checkpoint-sqlite>=3.0",
     "langchain>=1.0.0",
     "langchain-mcp-adapters>=0.3.0",
-    "mlflow>=3.10.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
-    "databricks-agents>=1.9.3",
 ]
 openai = [
     "openai-agents>=0.15.0",
     "databricks-openai>=0.13.0",
-    "mlflow>=3.10.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
-    "databricks-agents>=1.9.3",
 ]
 # `databricks_agentkit.model_upgrades` / `agentbricks models upgrade`: the GEPA optimizer and full mlflow
 # (prompt registry, genai scorers, pricing catalog). The upgrade job installs it next to the agent
