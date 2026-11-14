@@ -10,11 +10,9 @@ license = { text="Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "langchain>=1.0.0",
-    "databricks-ai-search>=0.73",
     "databricks-ai-bridge>=0.20.0",
-    "mlflow-skinny>=3.0.0",
+    "mlflow-tracing>=3.18.0",
     "pydantic>2.10.0",
-    "unitycatalog-langchain[databricks]>=0.3.0",
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
     "databricks-openai>=0.14.0",
@@ -23,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Keep direct Spark-backed UC tools and numerical search clients out of chat workers.
+uc = ["unitycatalog-langchain[databricks]>=0.3.0"]
+genie = ["databricks-ai-bridge[genie]>=0.22.0"]
+vector-search = ["databricks-ai-bridge[vector-search]>=0.22.0", "numpy>=1.26.0"]
+model-logging = ["mlflow-skinny>=3.18.0"]
 memory = [
   "langgraph-checkpoint-postgres>=2.0.5",
   "databricks-ai-bridge[memory]>=0.17.0",

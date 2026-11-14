@@ -13,7 +13,6 @@ dependencies = [
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.124.0",
-    "databricks-agents>=1.9.3",
 ]
 
 [build-system]
