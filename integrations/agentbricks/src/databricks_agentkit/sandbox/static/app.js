@@ -696,7 +696,10 @@ function sessionStatus(session) {
 }
 function renderSessions() {
   const target = $("session-list");
-  target.replaceChildren();
+  const scrollTop = target.scrollTop;
+  const focused = target.contains(document.activeElement) ? document.activeElement : null;
+  const existing = new Map([...target.querySelectorAll(".session-open-button")].map(button => [button.dataset.sessionId, button]));
+  const desired = [];
   const query = $("session-search-input").value.trim().toLowerCase();
   const sessions = [...state.sessions];
   if (state.context && !sessions.some(row => row.session_id === state.context.sessionId)) sessions.unshift({ session_id: state.context.sessionId, status: "New chat" });
@@ -704,23 +707,42 @@ function renderSessions() {
   sessions.sort((a, b) => timestamp(b) - timestamp(a) || a.session_id.localeCompare(b.session_id));
   for (const session of sessions.filter(row => row.session_id.toLowerCase().includes(query))) {
     const selected = session.session_id === state.context?.sessionId;
-    const button = node("button", undefined, `session-item session-open-button${selected ? " current" : ""}`);
-    button.type = "button";
-    if (selected) button.setAttribute("aria-current", "true");
-    const top = node("div", undefined, "session-item-top");
-    top.append(node("span", selected ? "Current session" : "Session", "session-item-title"), node("span", sessionStatus(session), "session-item-time"));
-    button.append(top, node("span", session.session_id, "session-item-id"));
-    if (timestamp(session)) {
-      const updated = node("span", `Updated ${new Date(timestamp(session)).toLocaleString()}`, "session-item-id");
-      updated.title = session.updated_at || session.created_at;
-      button.append(updated);
+    let button = existing.get(session.session_id);
+    if (!button) {
+      button = node("button", undefined, "session-item session-open-button");
+      button.type = "button";
+      button.dataset.sessionId = session.session_id;
+      const top = node("div", undefined, "session-item-top");
+      top.append(node("span", "", "session-item-title"), node("span", "", "session-item-time"));
+      button.append(top, node("span", session.session_id, "session-item-id"));
+      button.addEventListener("click", () => {
+        if (session.session_id !== state.context?.sessionId) void selectSession(session.session_id);
+      });
     }
-    if (session.run_id) button.title = `Last invocation: ${session.status}`;
+    button.classList.toggle("current", selected);
+    if (selected) button.setAttribute("aria-current", "true"); else button.removeAttribute("aria-current");
+    button.querySelector(".session-item-title").textContent = selected ? "Current session" : "Session";
+    button.querySelector(".session-item-time").textContent = sessionStatus(session);
+    let updated = button.querySelector(".session-item-updated");
+    if (timestamp(session)) {
+      if (!updated) { updated = node("span", "", "session-item-id session-item-updated"); button.append(updated); }
+      updated.textContent = `Updated ${new Date(timestamp(session)).toLocaleString()}`;
+      updated.title = session.updated_at || session.created_at;
+    } else updated?.remove();
+    button.title = session.run_id ? `Last invocation: ${session.status}` : "";
     if (["queued", "preparing"].includes(session.preparation_status)) button.title = session.preparation_stage || "Preparing session";
-    button.addEventListener("click", () => { if (!selected) void selectSession(session.session_id); });
-    target.append(button);
+    desired.push(button);
   }
-  if (!target.children.length) target.append(node("div", query ? "No sessions match your search." : "No sessions yet.", "state-empty"));
+  // Reconcile existing rows so selection and background refresh never empty the
+  // sidebar or discard the clicked row's focus and scroll position.
+  const keep = new Set(desired);
+  for (const child of [...target.children]) if (!keep.has(child)) child.remove();
+  desired.forEach((button, index) => {
+    if (target.children[index] !== button) target.insertBefore(button, target.children[index] || null);
+  });
+  if (!desired.length) target.append(node("div", query ? "No sessions match your search." : "No sessions yet.", "state-empty"));
+  if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  target.scrollTop = scrollTop;
 }
 async function refreshSessions(ctx) {
   const version = state.sessionsVersion;
