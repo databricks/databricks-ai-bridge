@@ -1714,11 +1714,19 @@ def test_idle_session_resumes_on_composer_activity_but_explicit_stop_stays_stopp
     runtime.preparations["idle"].update(status="ready")
     playwright.expect(page.locator("#session-readiness")).to_be_hidden(timeout=6000)
     playwright.expect(page.locator("#prompt-input")).to_have_value("Resume my conversation")
+    # A second idle shutdown in the same view can resume too.
+    runtime.status["idle"] = "stopped"
+    page.evaluate("refreshSessionList()")
+    playwright.expect(page.locator("#session-readiness")).to_be_visible()
+    assert len(runtime.preparation_posts) == 2
+    runtime.status["idle"] = "running"
+    runtime.preparations["idle"].update(status="ready")
+    playwright.expect(page.locator("#session-readiness")).to_be_hidden(timeout=6000)
     page.locator("#stop-session").click()
     playwright.expect(page.locator("#sandbox-status")).to_have_text("Stopped")
     page.evaluate("refreshSessionList()")
     page.locator("#prompt-input").fill("Do not undo my explicit stop")
-    assert len(runtime.preparation_posts) == 1
+    assert len(runtime.preparation_posts) == 2
     assert not runtime.posts
 
 

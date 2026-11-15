@@ -748,6 +748,7 @@ async function refreshSessionList() {
 async function history(ctx) { return api(contextUrl(ctx, "/api/runs"), undefined, ctx); }
 async function beginPreparation(ctx) {
   if (!current(ctx) || !supportsPreparation() || preparing()) return;
+  ctx.manuallyStopped = false;
   nextSandboxRequest(ctx); // A pre-resume status read cannot overwrite new preparation state.
   state.preparation = { status: "submitting", stage: "Requesting session preparation" };
   updateSession(ctx, { preparation_status: "submitting", preparation_stage: "Preparing…", updated_at: new Date().toISOString() });
@@ -768,6 +769,7 @@ async function beginPreparation(ctx) {
 function applyPreparation(ctx, result) {
   if (!current(ctx)) return;
   state.preparation = result;
+  if (result.status === "ready") ctx.autoResumeAttempted = false;
   updateSession(ctx, {
     preparation_status: result.status, preparation_stage: result.stage,
     sandbox_id: result.result?.sandbox_id || result.sandbox_id,
@@ -844,7 +846,7 @@ async function newSession() {
   if (state.context?.sessionId === id) await beginPreparation(state.context);
 }
 function autoResume(ctx) {
-  if (!current(ctx) || !supportsPreparation() || ctx.autoResumeAttempted || stopping(ctx)
+  if (!current(ctx) || !supportsPreparation() || ctx.autoResumeAttempted || ctx.manuallyStopped || stopping(ctx)
       || state.loading || state.historyUnavailable || state.busy || state.pending || preparing()
       || state.preparation?.error || ACTIVE.has(latestRun()?.status)
       || ["failed", "interrupted", "cancelled", "unknown"].includes(state.preparation?.status)
@@ -1028,7 +1030,7 @@ async function stopSession() {
   const key = stopKey(ctx);
   const operation = { started: Date.now() };
   state.stopOperations.set(key, operation);
-  ctx.autoResumeAttempted = true; // An explicit stop stays stopped in this view.
+  ctx.manuallyStopped = true; // An explicit stop stays stopped in this view.
   updateSession(ctx, { sandbox_status: "stopping", updated_at: new Date().toISOString() });
   nextSandboxRequest(ctx);
   notice(); renderLifecycle();
