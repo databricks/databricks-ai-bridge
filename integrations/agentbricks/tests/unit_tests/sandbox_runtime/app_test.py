@@ -582,6 +582,39 @@ def test_invoke_while_preparing_returns_conflict(client):
     app.state.control.create_run.assert_not_called()
 
 
+def test_session_list_combines_compute_state_with_run_status_and_activity_time(client):
+    from datetime import datetime, timezone
+
+    recent = datetime(2026, 11, 15, 12, 2, tzinfo=timezone.utc)
+    app.state.control.sessions.return_value = [
+        {"session_id": "old-run", "status": "succeeded", "updated_at": "2026-11-15T12:00:00+00:00"},
+        {"session_id": "new-run", "status": "running", "updated_at": "2026-11-15T12:01:00+00:00"},
+    ]
+    app.state.preparations.rows.return_value = [
+        {
+            "preparation": {"session_id": "old-run", "status": "ready"},
+            "sandbox_id": "stopped-sandbox",
+            "installation_status": "ready",
+            "updated_at": recent,
+        },
+        {
+            "preparation": {"session_id": "no-invocation", "status": "preparing"},
+            "sandbox_id": None,
+            "installation_status": "pending",
+            "updated_at": recent,
+        },
+    ]
+    app.state.orchestrator.lakebox.statuses.return_value = {"stopped-sandbox": "stopped"}
+    rows = client.get("/api/agents/revision/sessions").json()
+    assert rows[0]["session_id"] == "old-run"
+    assert rows[0]["status"] == "succeeded"
+    assert rows[0]["sandbox_status"] == "stopped"
+    assert rows[0]["updated_at"] == recent.isoformat()
+    assert rows[1]["session_id"] == "no-invocation"
+    app.state.orchestrator.lakebox.statuses.assert_called_once_with({"stopped-sandbox"})
+    app.state.preparations.create.assert_not_called()
+
+
 def test_preparation_events_deliver_terminal_snapshot_without_starting_work(client):
     rows = [
         {"agent_id": "a", "session_id": "s", "status": "preparing"},

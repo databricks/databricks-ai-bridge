@@ -129,6 +129,26 @@ class Lakebox:
         except NotFound:
             return None
 
+    def statuses(self, sandbox_ids):
+        """Read compute state in pages, without connecting to or waking sandboxes."""
+        missing = set(sandbox_ids)
+        statuses, page = {}, None
+        while missing:
+            result = self.api(
+                "GET",
+                "/sandboxes",
+                query={"page_size": 100, **({"page_token": page} if page else {})},
+            )
+            for sandbox in result.get("sandboxes", []):
+                sandbox_id = sandbox["sandboxId"]
+                if sandbox_id in missing:
+                    statuses[sandbox_id] = sandbox.get("status", "unknown").lower()
+                    missing.remove(sandbox_id)
+            page = result.get("nextPageToken")
+            if not page:
+                break
+        return {**dict.fromkeys(missing, "missing"), **statuses}
+
     def start(self, sandbox_id):
         return self.api(
             "POST",

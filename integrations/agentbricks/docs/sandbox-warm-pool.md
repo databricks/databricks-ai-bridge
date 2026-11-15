@@ -36,6 +36,12 @@ one spare and the panel identifies its pool origin. Send two messages: the secon
 reuse that worker and history. Start another session to get a distinct sandbox. The pool
 refills in the background. A request arriving with no ready spare prepares cold.
 
+Opening a stopped session resumes its sandbox automatically. If the selected session
+became idle while the page was open, returning to the composer resumes it. The readiness
+spinner stays visible until its worker is ready. Explicit Stop stays stopped in that view;
+failed preparation still requires an explicit retry. The session list shows compute state,
+updates from live events and a five-second metadata refresh, and sorts by last activity.
+
 To disable and drain unassigned spares, redeploy the same App/source with
 `--sandbox-warm-pool-size 0`. Stop a session through its normal UI control. Assigned
 sandboxes never return to the spare pool. Stop/resume preserves their disk, but restarts

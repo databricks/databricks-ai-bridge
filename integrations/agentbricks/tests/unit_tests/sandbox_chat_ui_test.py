@@ -155,7 +155,16 @@ class Runtime:
             data = self.preparations.get(path.rsplit("/", 1)[-1], {"status": "not_requested"})
         elif path.endswith("/sessions"):
             data = [
-                {"session_id": row["session_id"], "status": row["status"]}
+                {
+                    "session_id": row["session_id"],
+                    "status": row["status"],
+                    "run_id": row["id"],
+                    "stage": row["stage"],
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                    "sandbox_id": f"sandbox-{row['session_id']}",
+                    "sandbox_status": self.status.get(row["session_id"], "not_created"),
+                }
                 for row in self.runs
                 if row["agent_id"] == path.split("/")[3]
             ]
@@ -1512,8 +1521,7 @@ def test_resume_spinner_waits_for_worker_and_survives_reload(ui):
     runtime.preparations["resume-me"] = {"status": "ready", "stage": "Previous preparation"}
     page.add_init_script("localStorage.setItem('sandbox-chat:session:agent-one', 'resume-me')")
     open_page()
-    playwright.expect(page.locator("#prepare-session")).to_have_text("Resume session")
-    page.locator("#prepare-session").click()
+    playwright.expect(page.locator("#prepare-session")).to_have_text("Preparing session…")
     playwright.expect(page.locator("#session-readiness")).to_be_visible()
     runtime.status["resume-me"] = "running"
     runtime.preparations["resume-me"].update(
@@ -1686,3 +1694,94 @@ def test_switching_sessions_closes_readiness_stream_and_ignores_late_events(ui):
     playwright.expect(page.locator("#session-readiness")).to_be_visible()
     page.locator("#prompt-input").fill("Wait for my own session")
     playwright.expect(page.locator("#send-button")).to_be_disabled()
+
+
+def test_idle_session_resumes_on_composer_activity_but_explicit_stop_stays_stopped(ui):
+    runtime, page, open_page = ui
+    runtime.config["capabilities"] = ["session-preparation"]
+    runtime.complete(runtime.run("idle"))
+    runtime.preparations["idle"] = {"status": "ready", "stage": "Session prepared"}
+    page.add_init_script("localStorage.setItem('sandbox-chat:session:agent-one', 'idle')")
+    open_page()
+    runtime.status["idle"] = "stopped"
+    page.evaluate("refreshSessionList()")
+    playwright.expect(page.locator("#sandbox-status")).to_have_text("Stopped")
+    assert not runtime.preparation_posts  # Observation alone does not defeat idle shutdown.
+    page.locator("#prompt-input").fill("Resume my conversation")
+    playwright.expect(page.locator("#session-readiness")).to_be_visible()
+    assert len(runtime.preparation_posts) == 1
+    runtime.status["idle"] = "running"
+    runtime.preparations["idle"].update(status="ready")
+    playwright.expect(page.locator("#session-readiness")).to_be_hidden(timeout=6000)
+    playwright.expect(page.locator("#prompt-input")).to_have_value("Resume my conversation")
+    # A second idle shutdown in the same view can resume too.
+    runtime.status["idle"] = "stopped"
+    page.evaluate("refreshSessionList()")
+    playwright.expect(page.locator("#session-readiness")).to_be_visible()
+    assert len(runtime.preparation_posts) == 2
+    runtime.status["idle"] = "running"
+    runtime.preparations["idle"].update(status="ready")
+    playwright.expect(page.locator("#session-readiness")).to_be_hidden(timeout=6000)
+    page.locator("#stop-session").click()
+    playwright.expect(page.locator("#sandbox-status")).to_have_text("Stopped")
+    page.evaluate("refreshSessionList()")
+    page.locator("#prompt-input").fill("Do not undo my explicit stop")
+    assert len(runtime.preparation_posts) == 2
+    assert not runtime.posts
+
+
+def test_session_list_refreshes_status_and_sorts_by_last_update(ui):
+    runtime, page, open_page = ui
+    older = runtime.run("older", run_id="older-run", status="succeeded")
+    newer = runtime.run("newer", run_id="newer-run", status="succeeded")
+    older["updated_at"] = "2026-11-15T12:00:00Z"
+    newer["updated_at"] = "2026-11-15T12:01:00Z"
+    runtime.status.update(older="running", newer="running")
+    page.add_init_script("localStorage.setItem('sandbox-chat:session:agent-one', 'newer')")
+    page.clock.install()
+    open_page()
+    buttons = page.locator(".session-open-button")
+    playwright.expect(buttons.first).to_contain_text("newer")
+    playwright.expect(buttons.first).to_contain_text("Ready")
+    older["updated_at"] = "2026-11-15T12:02:00Z"
+    runtime.status["older"] = "stopped"
+    page.clock.fast_forward(5100)
+    playwright.expect(buttons.first).to_contain_text("older")
+    playwright.expect(buttons.first).to_contain_text("Stopped")
+    assert "Last invocation: succeeded" == buttons.first.get_attribute("title")
+    assert not runtime.posts and not runtime.preparation_posts
+
+
+def test_late_session_list_response_cannot_overwrite_live_invocation_state(ui):
+    runtime, page, open_page = ui
+    runtime.complete(runtime.run("live"))
+    page.add_init_script("localStorage.setItem('sandbox-chat:session:agent-one', 'live')")
+    open_page()
+    held = []
+    page.route("**/api/agents/*/sessions", lambda route: held.append(route))
+    page.evaluate("void (window.listRequest = refreshSessions(state.context))")
+    page.wait_for_function("state.context.sessionsRequest > 1")
+    row = runtime.runs[0].copy()
+    row.update(status="running", stage="Running agent", updated_at="2026-11-15T12:05:00Z")
+    page.evaluate("row => mergeRun(row)", row)
+    button = page.locator(".session-open-button", has_text="live")
+    playwright.expect(button.locator(".session-item-time")).to_have_text("Running")
+    assert held
+    runtime.route(held.pop())
+    page.evaluate("window.listRequest")
+    playwright.expect(button.locator(".session-item-time")).to_have_text("Running")
+
+
+@pytest.mark.parametrize("status", ["failed", "interrupted"])
+def test_auto_resume_never_retries_failed_preparation(ui, status):
+    runtime, page, open_page = ui
+    runtime.config["capabilities"] = ["session-preparation"]
+    runtime.status["failed-preparation"] = "stopped"
+    runtime.preparations["failed-preparation"] = {"status": status}
+    page.add_init_script(
+        "localStorage.setItem('sandbox-chat:session:agent-one', 'failed-preparation')"
+    )
+    open_page()
+    page.locator("#prompt-input").fill("Do not replay initialization")
+    assert not runtime.preparation_posts
+    assert not runtime.posts
