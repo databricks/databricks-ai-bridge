@@ -74,10 +74,16 @@ class SessionPreparation:
                 )
             )
             return db.execute(
-                "SELECT bootstrap_metrics->'preparation' AS preparation FROM sessions "
+                "SELECT bootstrap_metrics->'preparation' AS preparation, sandbox_id, "
+                "status AS installation_status, execution_principal, created_at, updated_at "
+                "FROM sessions "
                 "WHERE namespace=%s AND bootstrap_metrics->'preparation'->>'agent_id' "
                 + where
-                + " ORDER BY updated_at ASC LIMIT 100",
+                + (
+                    " ORDER BY updated_at DESC LIMIT 100"
+                    if agent_id
+                    else " ORDER BY updated_at ASC LIMIT 100"
+                ),
                 (self.registry.namespace, *args),
             ).fetchall()
 
@@ -88,7 +94,11 @@ class SessionPreparation:
                 "UPDATE sessions SET bootstrap_metrics=jsonb_set("
                 "COALESCE(bootstrap_metrics, '{}'::jsonb), '{preparation}', %s), updated_at=now() "
                 "WHERE namespace=%s AND session_key=%s",
-                (Jsonb(value), self.registry.namespace, digest),
+                (
+                    Jsonb({**value, "updated_at": datetime.now(timezone.utc).isoformat()}),
+                    self.registry.namespace,
+                    digest,
+                ),
             )
         self.notify()
 

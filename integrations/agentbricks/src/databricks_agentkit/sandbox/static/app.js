@@ -11,6 +11,7 @@ const state = {
   source: null, pollTimer: null, messages: new Map(), historyUnavailable: false,
   stopOperations: new Map(), sandboxRequests: new Map(), sandboxes: new Map(),
   eventFilter: "all", eventSignature: null,
+  sessionsVersion: 0,
   model: "", models: [], modelsLoading: false,
 };
 function node(tag, text, className) {
@@ -412,6 +413,10 @@ function mergeRun(row) {
   if (nearBottom) elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
   $("run-details").textContent = JSON.stringify(row, null, 2);
   renderEvents();
+  updateSession(state.context, {
+    run_id: row.id, status: row.status, stage: row.stage,
+    updated_at: row.updated_at || row.created_at,
+  });
   renderLifecycle();
 }
 function eventsForRun(row) {
@@ -672,36 +677,80 @@ async function refreshSandbox(ctx) {
   }
   if (current(ctx)) renderLifecycle();
 }
+function updateSession(ctx, fields) {
+  if (!current(ctx)) return;
+  const index = state.sessions.findIndex(row => row.session_id === ctx.sessionId);
+  const previous = state.sessions[index] || { session_id: ctx.sessionId };
+  const row = { ...previous, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null)) };
+  if (JSON.stringify(row) === JSON.stringify(previous)) return;
+  if (index < 0) state.sessions.push(row); else state.sessions[index] = row;
+  state.sessionsVersion++;
+  renderSessions();
+}
+function sessionStatus(session) {
+  if (session.session_id === state.context?.sessionId && stopping()) return "Stopping…";
+  if (["submitting", "queued", "preparing"].includes(session.preparation_status)) return "Preparing…";
+  if (ACTIVE.has(session.status)) return session.status === "queued" ? "Queued" : "Running";
+  const labels = { running: "Ready", ready: "Ready", stopped: "Stopped", terminated: "Stopped", stopping: "Stopping…", missing: "Missing", unknown: "Status unavailable", bootstrapping: "Installing…", creating: "Starting…" };
+  return labels[session.sandbox_status] || (session.preparation_status === "failed" ? "Preparation failed" : session.status || "New chat");
+}
 function renderSessions() {
   const target = $("session-list");
   target.replaceChildren();
   const query = $("session-search-input").value.trim().toLowerCase();
   const sessions = [...state.sessions];
   if (state.context && !sessions.some(row => row.session_id === state.context.sessionId)) sessions.unshift({ session_id: state.context.sessionId, status: "New chat" });
+  const timestamp = row => Date.parse(row.updated_at || row.created_at) || 0;
+  sessions.sort((a, b) => timestamp(b) - timestamp(a) || a.session_id.localeCompare(b.session_id));
   for (const session of sessions.filter(row => row.session_id.toLowerCase().includes(query))) {
     const selected = session.session_id === state.context?.sessionId;
     const button = node("button", undefined, `session-item session-open-button${selected ? " current" : ""}`);
     button.type = "button";
     if (selected) button.setAttribute("aria-current", "true");
     const top = node("div", undefined, "session-item-top");
-    top.append(node("span", selected ? "Current session" : "Session", "session-item-title"), node("span", session.status, "session-item-time"));
+    top.append(node("span", selected ? "Current session" : "Session", "session-item-title"), node("span", sessionStatus(session), "session-item-time"));
     button.append(top, node("span", session.session_id, "session-item-id"));
+    if (timestamp(session)) {
+      const updated = node("span", `Updated ${new Date(timestamp(session)).toLocaleString()}`, "session-item-id");
+      updated.title = session.updated_at || session.created_at;
+      button.append(updated);
+    }
+    if (session.run_id) button.title = `Last invocation: ${session.status}`;
+    if (["queued", "preparing"].includes(session.preparation_status)) button.title = session.preparation_stage || "Preparing session";
     button.addEventListener("click", () => { if (!selected) void selectSession(session.session_id); });
     target.append(button);
   }
   if (!target.children.length) target.append(node("div", query ? "No sessions match your search." : "No sessions yet.", "state-empty"));
 }
 async function refreshSessions(ctx) {
-  const rows = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, undefined, ctx);
-  if (!current(ctx)) return;
+  const version = state.sessionsVersion;
+  const request = ctx.sessionsRequest = (ctx.sessionsRequest || 0) + 1;
+  const rows = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, undefined, ctx, API_TIMEOUTS.status);
+  if (!current(ctx) || request !== ctx.sessionsRequest || version !== state.sessionsVersion) return;
   state.sessions = rows;
   renderSessions();
+  const session = rows.find(row => row.session_id === ctx.sessionId);
+  if (session?.sandbox_status && session.sandbox_id === state.sandbox?.sandbox_id && !state.busy && !preparing() && !stopping(ctx)) {
+    state.sandbox = { ...state.sandbox, status: session.sandbox_status };
+    state.sandboxes.set(stopKey(ctx), state.sandbox);
+    renderLifecycle();
+    if ($("prompt-input").value.trim()) autoResume(ctx);
+  }
+}
+async function refreshSessionList() {
+  const ctx = state.context;
+  if (!ctx || document.hidden || state.loading || ctx.refreshingSessions) return;
+  ctx.refreshingSessions = true;
+  try { await refreshSessions(ctx); }
+  catch { /* Keep the last known list during a transient network failure. */ }
+  finally { ctx.refreshingSessions = false; }
 }
 async function history(ctx) { return api(contextUrl(ctx, "/api/runs"), undefined, ctx); }
 async function beginPreparation(ctx) {
   if (!current(ctx) || !supportsPreparation() || preparing()) return;
   nextSandboxRequest(ctx); // A pre-resume status read cannot overwrite new preparation state.
   state.preparation = { status: "submitting", stage: "Requesting session preparation" };
+  updateSession(ctx, { preparation_status: "submitting", preparation_stage: "Preparing…", updated_at: new Date().toISOString() });
   notice(); renderLifecycle(); selectEvidenceTab("sandbox");
   try {
     const result = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, { session_id: ctx.sessionId, retry: true }, ctx, 20000);
@@ -719,6 +768,12 @@ async function beginPreparation(ctx) {
 function applyPreparation(ctx, result) {
   if (!current(ctx)) return;
   state.preparation = result;
+  updateSession(ctx, {
+    preparation_status: result.status, preparation_stage: result.stage,
+    sandbox_id: result.result?.sandbox_id || result.sandbox_id,
+    sandbox_status: result.status === "ready" ? "running" : undefined,
+    updated_at: result.updated_at || result.created_at,
+  });
   const prepared = result.result;
   if (result.status === "ready" && prepared?.sandbox_id) {
     // The completed preparation already verified compute and worker readiness.
@@ -788,13 +843,22 @@ async function newSession() {
   await selectSession(id);
   if (state.context?.sessionId === id) await beginPreparation(state.context);
 }
+function autoResume(ctx) {
+  if (!current(ctx) || !supportsPreparation() || ctx.autoResumeAttempted || stopping(ctx)
+      || state.loading || state.historyUnavailable || state.busy || state.pending || preparing()
+      || state.preparation?.error || ACTIVE.has(latestRun()?.status)
+      || ["failed", "interrupted", "cancelled", "unknown"].includes(state.preparation?.status)
+      || !["stopped", "terminated"].includes(state.sandbox?.status)) return;
+  ctx.autoResumeAttempted = true;
+  void beginPreparation(ctx);
+}
 async function selectSession(sessionId) {
   state.context?.controller.abort();
   closeWatch();
   const ctx = { agentId: state.agent.id, sessionId, controller: new AbortController() };
   state.context = ctx;
   state.preparation = null;
-  state.runs = []; state.sessions = []; state.sandbox = state.sandboxes.get(stopKey(ctx)) || null;
+  state.runs = []; state.sandbox = state.sandboxes.get(stopKey(ctx)) || null;
   state.pending = savedObject(pendingKey(ctx));
   state.loading = true; state.historyUnavailable = false;
   setBusy(false); notice();
@@ -827,6 +891,7 @@ async function selectSession(sessionId) {
   if (preparing()) watchPreparation(ctx);
   else if (state.preparation?.error && !row) notice(state.preparation.error);
   renderLifecycle();
+  autoResume(ctx);
 }
 function clearPending(ctx) {
   try { localStorage.removeItem(pendingKey(ctx)); } catch { /* Keep in-memory identity for this tab. */ }
@@ -963,6 +1028,8 @@ async function stopSession() {
   const key = stopKey(ctx);
   const operation = { started: Date.now() };
   state.stopOperations.set(key, operation);
+  ctx.autoResumeAttempted = true; // An explicit stop stays stopped in this view.
+  updateSession(ctx, { sandbox_status: "stopping", updated_at: new Date().toISOString() });
   nextSandboxRequest(ctx);
   notice(); renderLifecycle();
   try {
@@ -972,7 +1039,10 @@ async function stopSession() {
     nextSandboxRequest(ctx);
     const sandbox = { ...state.sandboxes.get(key), ...result };
     state.sandboxes.set(key, sandbox);
-    if (selected(ctx)) { state.sandbox = sandbox; notice(); }
+    if (selected(ctx)) {
+      state.sandbox = sandbox; notice();
+      updateSession(state.context, { sandbox_status: "stopped", updated_at: new Date().toISOString() });
+    }
   } catch (error) {
     remember(key, JSON.stringify({ unconfirmed: true, elapsed_ms: Date.now() - operation.started }));
     if (selected(ctx)) notice(`Stop was not confirmed: ${error.message} Reconnect to check status.`, "reload");
@@ -1011,6 +1081,7 @@ function renderAgent() {
   $("agent-select").value = agent?.id || "";
 }
 async function selectAgent(agent) {
+  if (state.agent?.id !== agent.id) state.sessions = [];
   if (state.agent?.id !== agent.id) state.model = "";
   state.agent = agent;
   renderModels();
@@ -1107,6 +1178,8 @@ document.querySelectorAll(".event-filter").forEach(button => button.addEventList
   renderEvents();
 }));
 $("prompt-input").addEventListener("input", resizeComposer);
+$("prompt-input").addEventListener("input", () => { if (state.context) autoResume(state.context); });
+$("prompt-input").addEventListener("focus", () => { if (state.context) autoResume(state.context); });
 $("prompt-input").addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -1139,6 +1212,8 @@ async function refreshWarmPool() {
   if (state.context) renderLifecycle();
 }
 setInterval(() => { void refreshWarmPool(); }, 10000);
+setInterval(() => { void refreshSessionList(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshSessionList(); });
 setInterval(() => { if (state.context) renderLifecycle(); }, 500);
 window.addEventListener("pagehide", closeWatch);
 void initialize();

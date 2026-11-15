@@ -367,10 +367,32 @@ def register_agent(request: AgentRegistration):
 def list_sessions(agent_id: str):
     app.state.control.agent(agent_id)
     sessions = {row["session_id"]: row for row in app.state.control.sessions(agent_id)}
-    for row in app.state.preparations.rows(agent_id=agent_id):
+    rows = app.state.preparations.rows(agent_id=agent_id)
+    ids = {row["sandbox_id"] for row in rows if row.get("sandbox_id")}
+    try:
+        statuses = app.state.orchestrator.lakebox.statuses(ids) if ids else {}
+    except DatabricksError:
+        statuses = dict.fromkeys(ids, "unknown")
+    for row in rows:
         prepared = row["preparation"]
-        sessions.setdefault(prepared["session_id"], prepared)
-    return list(sessions.values())
+        session = sessions.setdefault(prepared["session_id"], dict(prepared))
+        session["preparation_status"] = prepared["status"]
+        session["preparation_stage"] = prepared.get("stage")
+        session["sandbox_id"] = row.get("sandbox_id")
+        session["sandbox_status"] = statuses.get(
+            row.get("sandbox_id"), row.get("installation_status", "not_created")
+        )
+        if row.get("updated_at"):
+            session["updated_at"] = max(
+                filter(None, [session.get("updated_at"), row["updated_at"].isoformat()])
+            )
+        if row.get("created_at"):
+            session["created_at"] = row["created_at"].isoformat()
+    return sorted(
+        sessions.values(),
+        key=lambda row: row.get("updated_at") or row.get("created_at") or "",
+        reverse=True,
+    )[:100]
 
 
 class CreateSessionRequest(BaseModel):
