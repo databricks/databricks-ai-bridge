@@ -19,7 +19,13 @@ dependencies = [
     "brotli>=1.2",
     # Imported directly for google.protobuf Duration (also required by databricks-sdk).
     "protobuf>=4.25.8,<8",
+    # The CLI reads its TOML config with tomllib, which arrived in Python 3.11.
+    "tomli; python_version<'3.11'",
 ]
+
+[project.scripts]
+# The local dispatcher: databricks-anthropic init / doctor / run / list / cleanup
+databricks-anthropic = "databricks_anthropic.cli.main:main"
 
 [project.optional-dependencies]
 # Declare Databricks managed MCP servers (e.g. Genie One) as agent custom tools.
@@ -65,6 +71,8 @@ extend = "../../pyproject.toml"
 # The App's operator scripts report to the terminal; the live tests print the session's reply and usage
 # so a failing run can be diagnosed from the test log.
 "app/scripts/**" = ["T201"]
+# The local dispatcher CLI talks to the user on the terminal.
+"src/databricks_anthropic/cli/**" = ["T201"]
 "tests/integration_tests/**" = ["T201"]
 
 [tool.pytest.ini_options]

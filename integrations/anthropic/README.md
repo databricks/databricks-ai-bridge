@@ -4,6 +4,10 @@ Run [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/o
 [Databricks Sandbox](https://docs.databricks.com/aws/en/compute/serverless/sandbox) (Beta), served by a
 **Databricks App**.
 
+**Patterns.** Two are supported. **A: the Databricks App** (teams and production; see [Deploy the dispatcher
+App](#deploy-the-dispatcher-app)). **B: the local dispatcher** (`databricks-anthropic run` on a laptop or VM, as your
+Databricks CLI login; see [Run the dispatcher locally](#run-the-dispatcher-locally)).
+
 Anthropic runs the agent loop. Every tool call (bash, file edits, and optional Databricks MCP tools such as Genie
 One) runs in an isolated Databricks Sandbox, one per session, in your workspace, **as the Databricks user who started
 the session**. A Claude Managed Agents
@@ -115,6 +119,44 @@ bakehouse":
 | Memory stores | Attached memory stores mount at `/mnt/memory/<store>/` inside the sandbox (service mode; off in user mode) |
 | Cleanup | The App sweeps its own sandboxes (prefix **and** tags for its environment); it never touches others |
 | Visibility | `list_sandboxes` returns only the caller's sandboxes: a user's sandboxes are visible to that user, and `/api/status` is how operators see the App's |
+
+## Run the dispatcher locally
+
+The `databricks-anthropic` command serves the same environment queue from your laptop or a VM, with the SDK backend
+(one Databricks Sandbox per session). Sessions from the Console, a script, or Claude Code via the SDK then run as you:
+
+**Sign in once with the Databricks CLI** (OAuth; you don't need to configure an OAuth app):
+1. Copy your workspace URL from the browser address bar while you're in the workspace. Keep the `https://` and leave
+   off anything after the domain.
+2. Run `databricks auth login --host https://<your-workspace-url>`.
+3. Sign in through the browser window the CLI opens, and approve access. If you can act as a service principal, you're
+   also asked whether to sign in as yourself or as that service principal.
+4. Back in the terminal, keep the suggested profile name or type your own (for example `dev`). The CLI saves the
+   workspace URL under that profile and refreshes the one-hour OAuth tokens for you. To sign in again later, or to add
+   another workspace, run step 2 again with that workspace's URL.
+
+Then:
+
+```bash
+databricks-anthropic init --profile dev --environment env_...      # prompts for the environment key (hidden)
+databricks-anthropic doctor        # login, Sandbox API, environment, queue, no other dispatcher running
+databricks-anthropic run           # until Ctrl-C or SIGTERM; --drain exits when the queue is empty
+databricks-anthropic list | cleanup [--dry-run]
+```
+
+- **Identity.** Every session on the environment runs with the identity of `--profile`, which must be a Databricks
+  CLI profile (from `databricks auth login`). The profile is always named explicitly: the CLI never picks `DEFAULT`
+  or `DATABRICKS_CONFIG_PROFILE`. `run` prints whose access the sessions get.
+- **Settings and keys.** `~/.config/databricks-anthropic/` (override with `DATABRICKS_ANTHROPIC_CONFIG_DIR`):
+  `default.toml` holds settings, `default.secrets` (mode 0600) holds the environment key and the key that names
+  sandboxes. Keys are prompted for (hidden), so they stay out of shell history and output. Re-running `init` keeps the
+  sandbox-name key, so resumable sandboxes stay findable.
+- **One dispatcher per environment.** A per-environment lock on this machine refuses a second `run`. `run` also refuses
+  while another worker is polling the environment, unless `--force`. The lock uses `fcntl`, so it is POSIX only.
+- **Backends.** `sdk` is the default. `--backend mcp` is accepted but not available yet.
+- **Extras.** `--mcp genie-one` needs `pip install 'databricks-anthropic[mcp]'`.
+- **Older sandboxes.** Sandboxes from the earlier dev CLI (`cma-` names, no key) are not matched by `list` or `cleanup`.
+  `databricks-anthropic cleanup --legacy-prefix cma- --dry-run` shows what it would remove; drop `--dry-run` to delete.
 
 ## Library
 
