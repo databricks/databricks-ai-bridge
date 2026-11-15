@@ -1772,6 +1772,38 @@ def test_late_session_list_response_cannot_overwrite_live_invocation_state(ui):
     playwright.expect(button.locator(".session-item-time")).to_have_text("Running")
 
 
+def test_selecting_session_keeps_sidebar_rows_scroll_and_focus_while_history_loads(ui):
+    runtime, page, open_page = ui
+    for index in range(30):
+        runtime.complete(runtime.run(f"conversation-{index:02}", run_id=f"run-{index}"))
+    page.add_init_script(
+        "localStorage.setItem('sandbox-chat:session:agent-one', 'conversation-00')"
+    )
+    open_page()
+    button = page.locator(".session-open-button", has_text="conversation-15")
+    button.scroll_into_view_if_needed()
+    original = button.element_handle()
+    scroll_top = page.locator("#session-list").evaluate("element => element.scrollTop")
+    held = []
+    page.route("**/api/runs?*", lambda route: held.append(route))
+    button.click()
+    page.wait_for_function("state.loading")
+    assert original.evaluate("element => element.isConnected")
+    assert original.evaluate("element => document.activeElement === element")
+    playwright.expect(page.locator(".session-open-button")).to_have_count(30)
+    assert (
+        abs(page.locator("#session-list").evaluate("element => element.scrollTop") - scroll_top) < 2
+    )
+    assert held
+    runtime.route(held.pop())
+    page.wait_for_function("!state.loading")
+    page.evaluate("refreshSessionList()")
+    assert original.evaluate("element => element.isConnected && document.activeElement === element")
+    assert (
+        abs(page.locator("#session-list").evaluate("element => element.scrollTop") - scroll_top) < 2
+    )
+
+
 @pytest.mark.parametrize("status", ["failed", "interrupted"])
 def test_auto_resume_never_retries_failed_preparation(ui, status):
     runtime, page, open_page = ui
