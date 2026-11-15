@@ -31,7 +31,6 @@ from typing import Any, cast
 
 from databricks_anthropic.cli import auth, config, doctor, lock
 from databricks_anthropic.cli.config import (
-    BACKENDS,
     DEFAULT_NAME,
     LIFECYCLES,
     MCP_SERVERS,
@@ -65,10 +64,6 @@ Every session on the environment runs with the identity of --profile: that profi
 ALIASES = {"sandbox-dispatcher": "run", "sandbox-list": "list", "sandbox-cleanup": "cleanup"}
 ENVIRONMENT_KEY_VAR = "ANTHROPIC_ENVIRONMENT_KEY"
 API_KEY_VAR = "ANTHROPIC_API_KEY"
-MCP_NOT_AVAILABLE = (
-    "experimental mcp backend not available yet: the mcp backend is planned behind --backend mcp. "
-    'Use the default backend = "sdk" for now.'
-)
 # A worker that just stopped still counts as polling for about 30 s after its last poll.
 POLL_WINDOW_S = 35
 DEFAULT_INACTIVITY_TIMEOUT_S = 600
@@ -215,7 +210,6 @@ def _load(
         settings = config.apply_overrides(
             settings,
             profile=args.profile,
-            backend=getattr(args, "backend", None),
             mcp_servers=getattr(args, "mcp", None),
             lifecycle=getattr(args, "lifecycle", None),
             retention_days=getattr(args, "retention_days", None),
@@ -345,7 +339,6 @@ def cmd_init(args: argparse.Namespace) -> int:
             existing or Settings(),
             profile=args.profile,
             environment_id=args.environment,
-            backend=args.backend,
             mcp_servers=args.mcp,
             lifecycle=args.lifecycle,
             retention_days=args.retention_days,
@@ -399,7 +392,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"Saved {toml_path} and {secrets_path} (0600). Keys are not shown.")
     print(
         f"  profile: {settings.profile or '-'}   environment: {settings.environment_id}   "
-        f"backend: {settings.backend}   mcp: {', '.join(settings.mcp_servers) or '-'}"
+        f"mcp: {', '.join(settings.mcp_servers) or '-'}"
     )
     print("Next: databricks-anthropic doctor")
     return 0
@@ -419,8 +412,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     ctx = _load(args)
-    if ctx.settings.backend == "mcp":
-        sys.exit(MCP_NOT_AVAILABLE)
     env_id = _environment_id(ctx)
     environment_key = _environment_key(ctx)
     if args.sessions_gone and not ctx.secrets.api_key:
@@ -551,14 +542,6 @@ def _mcp_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
     parser.add_argument("--mcp", action="append", choices=list(MCP_SERVERS), help=help_text)
 
 
-def _backend_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--backend",
-        choices=list(BACKENDS),
-        help="sdk (default): one Databricks Sandbox per session. mcp: experimental, not available yet",
-    )
-
-
 def _lifecycle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lifecycle",
@@ -588,7 +571,6 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--environment", metavar="ENV_ID", help="self-hosted environment id (env_...)"
     )
-    _backend_arg(init)
     _mcp_arg(init, "serve a Databricks MCP server's tools from the worker (genie-one)")
     _lifecycle_args(init)
     init.add_argument(
@@ -599,7 +581,6 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser(
         "doctor", parents=[_common()], help="check every prerequisite and explain each fix"
     )
-    _backend_arg(doc)
     _mcp_arg(doc, "also check MCP server access (genie-one)")
     doc.set_defaults(func=cmd_doctor)
 
@@ -609,7 +590,6 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[_common()],
         help="serve sessions on the environment until Ctrl-C or SIGTERM",
     )
-    _backend_arg(run)
     _mcp_arg(run, "serve a Databricks MCP server's tools from the worker (genie-one)")
     run.add_argument("--drain", action="store_true", help="exit once the queue is empty")
     run.add_argument(

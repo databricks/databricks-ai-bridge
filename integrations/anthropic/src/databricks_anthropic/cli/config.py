@@ -39,7 +39,8 @@ DEFAULT_CONFIG_DIR = "~/.config/databricks-anthropic"
 DEFAULT_NAME = "default"
 DEFAULT_SANDBOX_PREFIX = "cmalocal-"
 DEFAULT_RETENTION_DAYS = 7.0
-BACKENDS = ("sdk", "mcp")
+# Settings older versions wrote that are now ignored when read (``backend``: there is only one way to run tools).
+LEGACY_SETTINGS = ("backend",)
 LIFECYCLES = ("ephemeral", "resumable")
 MCP_SERVERS = ("genie-one",)
 
@@ -106,7 +107,6 @@ class Settings:
 
     profile: str | None = None
     environment_id: str | None = None
-    backend: str = "sdk"
     mcp_servers: list[str] = field(default_factory=list)
     lifecycle: str = "ephemeral"
     retention_days: float = DEFAULT_RETENTION_DAYS
@@ -115,8 +115,6 @@ class Settings:
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
 
     def validate(self) -> None:
-        if self.backend not in BACKENDS:
-            raise ConfigError(f"backend must be one of {BACKENDS}, not {self.backend!r}")
         if self.lifecycle not in LIFECYCLES:
             raise ConfigError(f"lifecycle must be one of {LIFECYCLES}, not {self.lifecycle!r}")
         for server in self.mcp_servers:
@@ -134,7 +132,6 @@ class Settings:
         return {
             "profile": self.profile,
             "environment_id": self.environment_id,
-            "backend": self.backend,
             "mcp_servers": list(self.mcp_servers),
             "lifecycle": self.lifecycle,
             "retention_days": float(self.retention_days),
@@ -147,7 +144,6 @@ class Settings:
 _SETTING_TYPES: dict[str, type | tuple[type, ...]] = {
     "profile": str,
     "environment_id": str,
-    "backend": str,
     "mcp_servers": list,
     "lifecycle": str,
     "retention_days": (int, float),
@@ -158,6 +154,7 @@ _SETTING_TYPES: dict[str, type | tuple[type, ...]] = {
 
 
 def settings_from_toml(data: Mapping[str, object]) -> Settings:
+    data = {key: value for key, value in data.items() if key not in LEGACY_SETTINGS}
     unknown = sorted(set(data) - set(_SETTING_TYPES))
     if unknown:
         raise ConfigError(f"unknown setting(s) in config: {', '.join(unknown)}")

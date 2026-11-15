@@ -98,7 +98,6 @@ def test_settings_round_trip_through_toml(tmp_path):
     settings = Settings(
         profile="dev",
         environment_id="env_abc",
-        backend="sdk",
         mcp_servers=["genie-one"],
         lifecycle="resumable",
         retention_days=3.5,
@@ -124,8 +123,6 @@ def test_unknown_or_mistyped_settings_are_rejected(tmp_path):
         config.settings_from_toml({"retention_days": "7"})
     with pytest.raises(ConfigError, match="wrong type"):
         config.settings_from_toml({"retention_days": True})
-    with pytest.raises(ConfigError, match="backend"):
-        config.settings_from_toml({"backend": "docker"})
     with pytest.raises(ConfigError, match="unknown MCP server"):
         config.settings_from_toml({"mcp_servers": ["nope"]})
 
@@ -281,28 +278,33 @@ def test_reinit_keeps_the_hmac_key_and_updates_settings(cfg_dir, monkeypatch, no
 
     monkeypatch.setenv(main.ENVIRONMENT_KEY_VAR, "sk-ant-oat01-rotated")
     main.main(
-        [
-            "init",
-            "--profile",
-            "other",
-            "--environment",
-            "env_2",
-            "--config-dir",
-            str(cfg_dir),
-            "--backend",
-            "mcp",
-        ]
+        ["init", "--profile", "other", "--environment", "env_2", "--config-dir", str(cfg_dir)]
     )
     second = config.load_secrets(cfg_dir / "default.secrets")
     settings = config.load_settings(cfg_dir / "default.toml")
 
     assert second.sandbox_id_key == first.sandbox_id_key  # never regenerated
     assert second.environment_key == "sk-ant-oat01-rotated"
-    assert (settings.profile, settings.environment_id, settings.backend) == (
-        "other",
-        "env_2",
-        "mcp",
-    )
+    assert (settings.profile, settings.environment_id) == ("other", "env_2")
+
+
+def test_a_legacy_backend_setting_is_ignored(tmp_path):
+    """Configs written before the backend option was removed still load (they hold backend = "sdk")."""
+    path = tmp_path / "default.toml"
+    path.write_text('profile = "dev"\nenvironment_id = "env_1"\nbackend = "sdk"\n')
+    settings = config.load_settings(path)
+    assert (settings.profile, settings.environment_id) == ("dev", "env_1")
+    assert not hasattr(settings, "backend")
+    config.save_settings(path, settings)  # rewritten without it
+    assert "backend" not in path.read_text()
+
+
+def test_backend_flag_is_gone(cfg_dir):
+    for command in ("init", "run", "doctor"):
+        with pytest.raises(SystemExit):
+            main.build_parser().parse_args(
+                [command, "--config-dir", str(cfg_dir), "--backend", "sdk"]
+            )
 
 
 def test_reinit_prompt_keeps_saved_key_on_enter(cfg_dir, monkeypatch):
@@ -390,7 +392,6 @@ def test_flags_override_the_file_and_absent_flags_keep_it(cfg_dir, monkeypatch):
     _write_settings(
         cfg_dir,
         profile="file-profile",
-        backend="sdk",
         lifecycle="ephemeral",
         retention_days=7.0,
         environment_id="env_1",
@@ -417,7 +418,6 @@ def test_flags_override_the_file_and_absent_flags_keep_it(cfg_dir, monkeypatch):
     assert ctx.settings.retention_days == 2.0
     assert ctx.settings.mcp_servers == ["genie-one"]
     assert ctx.settings.export_volume == "/Volumes/a/b/c"  # not given: the file's value stays
-    assert ctx.settings.backend == "sdk"
 
 
 def test_flag_precedence_with_no_flags(cfg_dir):
@@ -433,7 +433,7 @@ def test_apply_overrides_skips_none_and_validates():
     )
     assert (merged.profile, merged.retention_days, merged.mcp_servers) == ("p", 3.0, ["genie-one"])
     with pytest.raises(ConfigError):
-        config.apply_overrides(base, backend="docker")
+        config.apply_overrides(base, lifecycle="forever")
 
 
 def test_run_needs_a_config(cfg_dir, no_prompt):

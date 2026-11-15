@@ -1,4 +1,4 @@
-"""``run``: double-serving check, signals, the mcp backend refusal, the lock at start-up, aliases, start-up line."""
+"""``run``: double-serving check, signals, the lock at start-up, aliases, start-up line."""
 
 from __future__ import annotations
 
@@ -252,12 +252,6 @@ def test_run_waits_out_a_just_stopped_worker(run_env):
     run_env["stats"] = FakeStats(1, 0)
     assert main.main(run_argv(run_env)) == 0
     assert run_env["pauses"] == [main.POLL_WINDOW_S]
-
-
-def test_run_refuses_the_mcp_backend_with_a_clear_message(run_env):
-    with pytest.raises(SystemExit, match="experimental mcp backend not available yet"):
-        main.main(run_argv(run_env, "--backend", "mcp"))
-    assert run_env["launcher_args"] is None  # nothing was launched
 
 
 def test_run_without_a_profile_never_builds_a_databricks_client(run_env, monkeypatch, tmp_path):

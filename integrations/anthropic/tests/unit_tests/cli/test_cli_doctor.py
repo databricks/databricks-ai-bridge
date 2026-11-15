@@ -153,14 +153,6 @@ def test_a_running_dispatcher_on_this_machine_is_a_fix(setup, capsys):
         holder.release()
 
 
-def test_mcp_backend_is_reported_as_not_available(setup, capsys):
-    config.save_settings(
-        setup["dir"] / "default.toml", Settings(profile="dev", environment_id=ENV, backend="mcp")
-    )
-    assert doctor_main(setup) == 1
-    assert "experimental mcp backend not available yet" in capsys.readouterr().out
-
-
 def test_self_hosted_check_runs_only_with_an_api_key(setup, monkeypatch, capsys):
     seen = {}
 

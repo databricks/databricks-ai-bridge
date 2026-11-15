@@ -122,8 +122,8 @@ bakehouse":
 
 ## Run the dispatcher locally
 
-The `databricks-anthropic` command serves the same environment queue from your laptop or a VM, with the SDK backend
-(one Databricks Sandbox per session). Sessions from the Console, a script, or Claude Code via the SDK then run as you:
+The `databricks-anthropic` command serves the same environment queue from your laptop or a VM, with one Databricks Sandbox
+per session (the same launcher and worker as the App). Sessions from the Console, a script, or Claude Code via the SDK then run as you:
 
 **Sign in once with the Databricks CLI** (OAuth; you don't need to configure an OAuth app):
 1. Copy your workspace URL from the browser address bar while you're in the workspace. Keep the `https://` and leave
@@ -153,7 +153,6 @@ databricks-anthropic list | cleanup [--dry-run]
   sandbox-name key, so resumable sandboxes stay findable.
 - **One dispatcher per environment.** A per-environment lock on this machine refuses a second `run`. `run` also refuses
   while another worker is polling the environment, unless `--force`. The lock uses `fcntl`, so it is POSIX only.
-- **Backends.** `sdk` is the default. `--backend mcp` is accepted but not available yet.
 - **Extras.** `--mcp genie-one` needs `pip install 'databricks-anthropic[mcp]'`.
 - **Older sandboxes.** Sandboxes from the earlier dev CLI (`cma-` names, no key) are not matched by `list` or `cleanup`.
   `databricks-anthropic cleanup --legacy-prefix cma- --dry-run` shows what it would remove; drop `--dry-run` to delete.

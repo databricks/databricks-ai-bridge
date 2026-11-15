@@ -96,14 +96,6 @@ def run_doctor(
     else:
         rep.ok("Secrets file is private (0600)", str(secrets_path))
 
-    if settings.backend == "mcp":
-        rep.fix(
-            "Backend",
-            'mcp: experimental mcp backend not available yet; set backend = "sdk" (the default)',
-        )
-    else:
-        rep.ok("Backend", "sdk (one Databricks Sandbox per session)")
-
     # The environment and the local lock need no Databricks login, so they are checked first.
     env_id = settings.environment_id
     have_env = bool(env_id and secrets.environment_key)
