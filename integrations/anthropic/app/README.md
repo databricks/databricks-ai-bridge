@@ -50,7 +50,7 @@ new link. Only the session's owner can redeem it.
 - **Sign-in codes** are random, stored only as SHA-256 hashes, valid for 15 minutes and single-use (redeeming inserts
   the hash into `connect_uses`; the store never updates or deletes anything).
 - **Refusals.** `/connect` never takes over a session bound to another user (404), and refuses sessions on another
-  environment, agents not in `user_agents`, and sessions with memory stores or vaults.
+  environment, agents not in `user_agents`, and sessions with Anthropic memory stores or vaults.
 - **Requests.** `POST /api/connect` needs `X-CMA-Request: 1` and an `Origin` matching the App host, and rejects
   unknown fields. The `/connect` page has a strict CSP and writes text only with `textContent`.
 

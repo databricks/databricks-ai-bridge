@@ -73,10 +73,75 @@ def test_tag_reaches_requests_of_a_client_built_before_the_product_was_set(sent,
     assert sent[-1]["User-Agent"].split().count(TOKEN) == 1
 
 
-def test_apply_sets_upstream_env_for_cli_subprocesses(monkeypatch):
-    for key in _useragent.UPSTREAM_ENV:
-        monkeypatch.delenv(key, raising=False)
-    _useragent.apply()
+def test_importing_or_apply_never_changes_os_environ(monkeypatch):
+    import importlib
     import os
 
-    assert {k: os.environ[k] for k in _useragent.UPSTREAM_ENV} == _useragent.UPSTREAM_ENV
+    for key in _useragent.UPSTREAM_ENV:
+        monkeypatch.delenv(key, raising=False)
+    before = dict(os.environ)
+    _useragent.apply()
+    importlib.reload(importlib.import_module("databricks_anthropic"))
+    assert dict(os.environ) == before
+    assert useragent.product() == (_useragent.PRODUCT_NAME, _useragent.PRODUCT_VERSION)
+
+
+def test_subprocess_env_carries_the_upstream_variables_without_touching_os_environ(monkeypatch):
+    import os
+
+    for key in _useragent.UPSTREAM_ENV:
+        monkeypatch.delenv(key, raising=False)
+    env = _useragent.subprocess_env()
+    assert {k: env[k] for k in _useragent.UPSTREAM_ENV} == _useragent.UPSTREAM_ENV
+    assert not any(k in os.environ for k in _useragent.UPSTREAM_ENV)
+
+
+def _load_worker():
+    import importlib.util
+
+    spec = importlib.util.find_spec("databricks_anthropic.sandbox.worker")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_worker_memory_calls_carry_the_connector(sent, monkeypatch):
+    """The in-sandbox memory tools call /api/2.0/agents/* through the worker's client: the product is the connector."""
+    import asyncio
+
+    monkeypatch.setenv("DATABRICKS_HOST", "https://example.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "t")
+    worker = _load_worker()
+    store = worker._MemoryStore(
+        worker._workspace_client(), "cma-memory-abc", "databricks-user:1", "1"
+    )
+    with pytest.raises(Exception):  # noqa: B017 - Captured, possibly wrapped by the SDK
+        asyncio.run(store.search("q", 1))
+    assert sent and sent[-1]["User-Agent"].split()[0] == TOKEN
+
+
+def test_memory_calls_on_a_launcher_tagged_client_carry_the_connector(sent):
+    """The App's memory start-up check and the CLI's memory commands use clients the launcher (or login) tagged."""
+    from databricks_anthropic.sandbox.launcher import DatabricksSandboxLauncher
+    from databricks_anthropic.sandbox.memory import MEMORY_API
+
+    w = client()  # WorkspaceClient(host=...): product unknown until tagged
+    DatabricksSandboxLauncher(workspace_client=w, environment_id="env_1", environment_key="sk")
+    with pytest.raises(Exception):  # noqa: B017
+        w.api_client.do("GET", MEMORY_API, query={"page_size": 1})
+    assert TOKEN in sent[-1]["User-Agent"].split()
+
+
+def test_the_cli_client_sends_the_connector(sent, tmp_path, monkeypatch):
+    """The CLI (run --memory, memory show/delete) builds clients with auth.workspace_client: product = connector."""
+    from databricks_anthropic.cli import auth
+    from databricks_anthropic.sandbox.memory import MEMORY_API
+
+    cfg = tmp_path / "test.cfg"
+    cfg.write_text("[uatest]\nhost = https://example.cloud.databricks.com\ntoken = t\n")
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(cfg))
+    w = auth.workspace_client("uatest")
+    with pytest.raises(Exception):  # noqa: B017
+        w.api_client.do("GET", MEMORY_API, query={"page_size": 1})
+    assert sent[-1]["User-Agent"].split()[0] == TOKEN

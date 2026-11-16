@@ -313,3 +313,14 @@ def test_anthropic_internals_the_worker_imports_exist():
 
     pytest.importorskip("mcp")
     from anthropic.lib.tools.mcp import async_mcp_tool  # noqa: F401
+
+
+def test_dev_copies_of_the_product_match_the_package():
+    """dev/ scripts run without the package installed, so they repeat the product; keep them equal."""
+    root = Path(__file__).resolve().parents[4]
+    for rel in ("dev/agentmemory_examples/_rest.py", "dev/sandbox_tests/common.py"):
+        path = root / rel
+        if not path.exists():  # the upstream copy of the package has no dev/ folder
+            continue
+        text = path.read_text()
+        assert _useragent.PRODUCT_NAME in text and f'"{_useragent.PRODUCT_VERSION}"' in text, rel
