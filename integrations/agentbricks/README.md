@@ -923,22 +923,18 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH | --environment NAME] [--instances N] [--no-wait]
+  deploy       [<name>] [--source PATH] [--sandbox] [--instances N] [--no-wait]
                [--allowed-origin ORIGIN ... | --clear-allowed-origins]
   deployments
     wait       [<name>] [--timeout SECONDS] [--source PATH]
     list | get | logs | start | stop | delete
-  environment
-    get | prepare NAME
-    list        (--app APP | --url URL)
-    invoke      NAME --session-id ID --json JSON (--app APP | --url URL)
-                [--invocation-id ID] [--retry] [--no-wait] [--timeout SECONDS]
+    ssh        APP --session-id ID [--command COMMAND]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
     loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
                 [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
                 [--report-dir PATH] [--save-responses FILE]
-  invoke       APP --session-id ID --json JSON [--environment NAME] [--stream]
+  invoke       APP --session-id ID --json JSON [--stream]
 ```
 
 ## Sandbox deployments
@@ -1035,22 +1031,20 @@ invocation ID; transport retries preserve the same ID. Stale-worker recovery rec
 failure without automatically replaying arbitrary agent code. See the [runtime notes](src/databricks_agentkit/sandbox/README.md),
 [compatibility and review guide](docs/sandbox-prototype-changes.md).
 
-For debugging, use the internal environment name returned by deploy:
+For debugging, address the deployed agent and session:
 
 ```sh
-agentbricks -p my-workspace environment ssh <revision-environment> \
-  --app agent-bricks-support --session-id demo
+agentbricks -p my-workspace deployments ssh support --session-id demo
 ```
 
 The developer needs OAuth and `CAN_MANAGE` on the App. The session must already have
 an installed agent. This App-mediated terminal resumes stopped compute without creating
 a sandbox or invocation. `--command` supports noninteractive inspection.
 
-The `environment` group supports inspection, invocation and debugging of published revisions.
-Use `deploy --sandbox` to publish new source; `environment create` has been removed.
-`environment prepare` and `deploy --environment` can still operate on historical manifests.
-The sandbox mode rejects `--environment`, CORS options, `--allow-user-scope-update` and
-`--no-wait` rather than silently ignoring them.
+Source revision identifiers remain internal metadata. Use `deploy --sandbox` to publish
+source, `invoke APP` to run it, and `deployments ssh APP` to debug an existing session.
+Sandbox mode rejects CORS options, `--allow-user-scope-update` and `--no-wait` rather
+than silently ignoring them.
 
 ## Bring an existing agent
 

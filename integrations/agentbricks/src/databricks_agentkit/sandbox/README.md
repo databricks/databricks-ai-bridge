@@ -332,7 +332,7 @@ reads the mapping and current sandbox status without acquiring execution ownersh
 starting compute, or installing code. It uses the same agent/session key as invocation
 and stop. These routes retain the prototype's single-tenant namespace boundary.
 
-`agentbricks environment ssh ENV --app APP --session-id SESSION` opens a developer
+`agentbricks deployments ssh APP --session-id SESSION` opens a developer
 terminal through an authenticated WebSocket to the App, then to the exact session
 sandbox. Hosted Apps use gRPC/TLS on port 443 for PTY/input/output because gateway
 SSH on port 2222 is not reachable from Apps. The debug transport defaults to the

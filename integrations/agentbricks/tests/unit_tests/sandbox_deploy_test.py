@@ -334,7 +334,6 @@ def test_cli_rejects_conflicting_options_before_any_workspace_access(monkeypatch
 def test_removed_runtime_config_is_rejected_before_workspace_access(monkeypatch):
     client = MagicMock(side_effect=AssertionError("must not access workspace"))
     monkeypatch.setattr("databricks_agentkit._api_client._workspace_client", client)
-    monkeypatch.setattr("databricks_agentbricks.cli.environment._workspace_client", client)
     result = CliRunner().invoke(
         agentbricks, ["deploy", "demo", "--sandbox", "--runtime-config", "unused.json"]
     )

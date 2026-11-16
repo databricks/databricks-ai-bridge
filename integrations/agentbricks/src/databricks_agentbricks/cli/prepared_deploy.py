@@ -164,7 +164,7 @@ def deploy_prepared(
     if not lazy and not principal:
         raise AgentCliError(
             "Environment has no recorded sandbox execution identity.",
-            hint=f"Run agentbricks environment prepare {environment} to refresh its metadata.",
+            hint="Republish source with agentbricks deploy APP --sandbox --source PROJECT.",
         )
     if not lazy and (app is None or principal != app.service_principal_client_id):
         target_identity = app.service_principal_client_id if app else "a new App service principal"
@@ -172,8 +172,8 @@ def deploy_prepared(
             f"Prepared sandbox belongs to {principal}; deployment would run as {target_identity}.",
             hint="Lakebox currently restricts sandbox lifecycle and execution to its creator. "
             "Prepare under the target App's execution identity before deploying. "
-            "For a user-prepared environment, use environment invoke directly or the local "
-            "playground UI. No App settings or agent installation were changed.",
+            "Republish source with agentbricks deploy APP --sandbox --source PROJECT. "
+            "No App settings or agent installation were changed.",
         )
     registry = None
     if managed:
