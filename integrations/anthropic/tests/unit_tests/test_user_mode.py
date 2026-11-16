@@ -493,13 +493,15 @@ class ScriptedSessions:
 
 def routing(store, sessions, *, tickets=None, launches=None, app_url=HOST, fail=None):
     launched = launches if launches is not None else []
+    principals: list[str] = []
     work_api = MagicMock()
 
-    def launcher_for(client):
+    def launcher_for(client, principal_id):
         def launch(work):
             if fail:
                 raise fail
             launched.append((work.data.id, client))
+            principals.append(principal_id)
             return SimpleNamespace(sandbox_name=f"sandboxes/cmausr-{work.data.id}")
 
         return SimpleNamespace(launch=launch)

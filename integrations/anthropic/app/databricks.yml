@@ -38,6 +38,12 @@ variables:
   lakebase_endpoint:
     description: That branch's read-write endpoint (.../endpoints/<endpoint>); the App mints its Postgres password for it
     default: ""
+  user_memory:
+    description: >-
+      Recommended: "1" gives each user-mode user their own Databricks managed memory store, served in their sandbox
+      as memory_* tools. Off ("0") by default because it needs the Agent Memory Sessions preview in the workspace
+      and the memory tools declared on the agent (memory_custom_tools())
+    default: "0"
   scope_manager:
     description: The principal allowed to manage the secret scope (MANAGE); the App only gets READ on its keys
     default: ${workspace.current_user.userName}
@@ -133,6 +139,8 @@ x-user-mode: &user_mode_app
         value: ${var.lakebase_endpoint}
       - name: CMA_MAX_SESSIONS_PER_USER
         value: "20"
+      - name: CMA_USER_MEMORY
+        value: ${var.user_memory}
   resources:
     - name: user-environment-key
       secret:

@@ -17,12 +17,15 @@ from databricks_anthropic.sandbox.launcher import (
     SandboxMcpServer,
     sandbox_id_for_session,
 )
+from databricks_anthropic.sandbox.memory import MemoryConfig, memory_custom_tools
 
 __all__ = [
     "CleanupAction",
     "DatabricksSandboxDispatcher",
     "DatabricksSandboxLauncher",
     "LaunchResult",
+    "MemoryConfig",
     "SandboxMcpServer",
+    "memory_custom_tools",
     "sandbox_id_for_session",
 ]

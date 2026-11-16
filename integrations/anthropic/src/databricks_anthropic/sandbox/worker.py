@@ -38,6 +38,11 @@ Environment (set by the launcher under ``env -i`` with an allowlist; no secrets)
                             sandbox's built-in credential (the sandbox creator's identity)
   CMA_MCP_TIMEOUT_SECONDS   per-call MCP read timeout
   CMA_GENIE_WAIT_TIMEOUT    seconds genie_ask_and_wait polls before giving up (default 300)
+  CMA_MEMORY_STORE          optional Databricks managed memory store (/api/2.0/agents/memory-stores) for this
+  CMA_MEMORY_ACTOR          sandbox's identity, its actor_id, and that identity's Databricks user id. The worker
+  CMA_MEMORY_OWNER          serves memory_search / memory_list / memory_save / memory_delete with the sandbox
+                            credential: it creates the store if missing (so the identity owns it) and refuses one
+                            owned by anyone else. The store and actor are fixed here, never by the model
 
 A server entry with ``"wait_tool": true`` (Genie One) also gets ``genie_ask_and_wait``: it
 calls ``genie_ask`` and polls ``genie_poll_response`` *inside the sandbox* until Genie
@@ -52,6 +57,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import signal
 import threading
 from datetime import timedelta
@@ -328,6 +334,264 @@ def _genie_wait_tool(session: Any) -> Any:
     return genie_ask_and_wait
 
 
+MEMORY_API = "/api/2.0/agents/memory-stores"
+MEMORY_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}$")
+MEMORY_MAX_CONTENT = 16_000
+MEMORY_MAX_RESULTS = 20
+
+
+class MemoryStoreNotOwned(RuntimeError):
+    """The configured memory store exists but belongs to another identity."""
+
+
+def _memory_error(e: Exception) -> str:
+    code = getattr(e, "error_code", None) or type(e).__name__
+    return json.dumps({"status": "error", "error": _clip(f"{code}: {e}", 1000)})
+
+
+def _memory_path(path: Any) -> str | None:
+    """A safe memory path, or None (absolute, no '..', a limited character set)."""
+    if not isinstance(path, str) or not MEMORY_PATH_RE.match(path) or ".." in path.split("/"):
+        return None
+    return path
+
+
+class _MemoryStore:
+    """One identity's Databricks managed memory store, called with the sandbox credential."""
+
+    def __init__(self, client: Any, store_id: str, actor_id: str, owner_user_id: str) -> None:
+        self._client, self.store_id, self.actor_id, self.owner = (
+            client,
+            store_id,
+            actor_id,
+            owner_user_id,
+        )
+        self.base = f"{MEMORY_API}/{store_id}"
+
+    async def _do(self, method: str, path: str, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.api_client.do, method, path, **kwargs)
+
+    async def ensure(self) -> None:
+        """Use the store only if this identity owns it; create it (owned by this identity) if it doesn't exist."""
+        from databricks.sdk.errors import AlreadyExists, NotFound
+
+        try:
+            store = await self._do("GET", self.base)
+        except NotFound:
+            try:
+                store = await self._do(
+                    "POST",
+                    MEMORY_API,
+                    query={"managed_memory_store_id": self.store_id},
+                    body={
+                        "display_name": self.store_id,
+                        "description": "Claude Managed Agents memory",
+                    },
+                )
+                log.info("memory store %s created", self.store_id)
+            except AlreadyExists:  # created concurrently by another of this identity's sandboxes
+                store = await self._do("GET", self.base)
+        owner = (store or {}).get("owner_user_id") or (store or {}).get("creator_user_id")
+        if str(owner) != self.owner:
+            raise MemoryStoreNotOwned(
+                f"memory store {self.store_id} is not owned by this sandbox's identity"
+            )
+
+    async def search(self, query: str, limit: int) -> list[dict[str, Any]]:
+        body = {"actor_id": self.actor_id, "query": query, "limit": limit}
+        found = await self._do("POST", f"{self.base}/entries:search", body=body)
+        hits = [
+            h["managed_memory_entry"]
+            for h in found.get("results") or []
+            if h.get("managed_memory_entry")
+        ]
+        return hits or list(found.get("managed_memory_entries") or [])
+
+    async def entries(
+        self, path_prefix: str | None = None, path: str | None = None
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        query: dict[str, Any] = {"actor_id": self.actor_id, "page_size": 100}
+        if path_prefix:
+            query["path_prefix"] = path_prefix
+        if path:
+            query["path"] = path
+        while True:
+            page = await self._do("GET", f"{self.base}/entries", query=query)
+            entries += page.get("managed_memory_entries") or []
+            token = page.get("next_page_token")
+            if not token or len(entries) >= 1000:
+                return entries
+            query["page_token"] = token
+
+    async def _entry_at(self, path: str) -> dict[str, Any] | None:
+        """The cross-session entry at exactly ``path`` (entries saved with a session_id are not ours to edit)."""
+        return next((e for e in await self.entries(path=path) if not e.get("session_id")), None)
+
+    async def save(self, path: str, content: str, description: str) -> str:
+        from databricks.sdk.errors import AlreadyExists
+
+        body = {
+            "actor_id": self.actor_id,
+            "path": path,
+            "content": content,
+            "description": description,
+        }
+        try:
+            await self._do("POST", f"{self.base}/entries", body=body)
+            return "created"
+        except AlreadyExists:
+            entry = await self._entry_at(path)
+            if entry is None:
+                raise
+            entry_id = str(entry["name"]).rsplit("/", 1)[-1]
+            await self._do(
+                "PATCH",
+                f"{self.base}/entries/{entry_id}",
+                query={"update_mask": "content,description"},
+                body={"content": content, "description": description},
+            )
+            return "updated"
+
+    async def delete(self, path: str) -> bool:
+        entry = await self._entry_at(path)
+        if entry is None:
+            return False
+        await self._do("DELETE", f"{self.base}/entries/{str(entry['name']).rsplit('/', 1)[-1]}")
+        return True
+
+
+def _memory_config() -> tuple[str, str, str] | None:
+    """(store id, actor id, owner user id) from the environment, or None when memory is off."""
+    store, actor, owner = (
+        os.environ.get(k, "") for k in ("CMA_MEMORY_STORE", "CMA_MEMORY_ACTOR", "CMA_MEMORY_OWNER")
+    )
+    if not store:
+        return None
+    if not actor or not owner:
+        raise RuntimeError("CMA_MEMORY_STORE is set without CMA_MEMORY_ACTOR and CMA_MEMORY_OWNER")
+    return store, actor, owner
+
+
+async def _open_memory_tools(client: Any | None = None) -> list[Any]:
+    """The memory tools, when CMA_MEMORY_STORE is set. Refuses to start on a store owned by someone else.
+
+    Other failures (the Beta is off, the credential lacks the scope) leave the tools in place answering with the
+    error, so the agent sees why memory is unavailable.
+    """
+    config = _memory_config()
+    if config is None:
+        return []
+    from anthropic import beta_async_tool
+
+    store = _MemoryStore(client or _workspace_client(), *config)
+    unavailable: str | None = None
+    try:
+        await store.ensure()
+    except MemoryStoreNotOwned:
+        raise
+    except Exception as e:  # noqa: BLE001 - reported through the tools
+        unavailable = _memory_error(e)
+        log.warning("memory store %s unavailable: %s", store.store_id, type(e).__name__)
+
+    def _entry(e: dict[str, Any], *, content: bool = True) -> dict[str, Any]:
+        out = {
+            "path": e.get("path"),
+            "description": e.get("description"),
+            "updated": e.get("update_time"),
+        }
+        if content:
+            out["content"] = _clip(e.get("content"), 4000)
+        return out
+
+    @beta_async_tool
+    async def memory_search(query: str, limit: int = 5) -> str:
+        """Search your long-term memory about this user (kept across sessions) by meaning and keywords.
+
+        Args:
+            query: What to look for, in natural language.
+            limit: Maximum results (1-20, default 5).
+        """
+        if unavailable:
+            return unavailable
+        try:
+            hits = await store.search(query, max(1, min(int(limit), MEMORY_MAX_RESULTS)))
+        except Exception as e:  # noqa: BLE001 - a tool error, not a crash
+            return _memory_error(e)
+        return json.dumps({"status": "ok", "results": [_entry(h) for h in hits]})
+
+    @beta_async_tool
+    async def memory_list(path_prefix: str = "/") -> str:
+        """List the memories saved for this user under a path prefix (paths and descriptions only).
+
+        Args:
+            path_prefix: Only paths starting with this (default /).
+        """
+        if unavailable:
+            return unavailable
+        if (
+            not isinstance(path_prefix, str)
+            or not path_prefix.startswith("/")
+            or ".." in path_prefix
+        ):
+            return json.dumps(
+                {"status": "error", "error": "path_prefix must start with / and not contain .."}
+            )
+        try:
+            entries = await store.entries(path_prefix=None if path_prefix == "/" else path_prefix)
+        except Exception as e:  # noqa: BLE001
+            return _memory_error(e)
+        return json.dumps({"status": "ok", "memories": [_entry(e, content=False) for e in entries]})
+
+    @beta_async_tool
+    async def memory_save(path: str, content: str, description: str) -> str:
+        """Save or replace a memory about this user, kept across sessions.
+
+        Args:
+            path: A file-like path for the memory, such as /preferences/response-style.md
+            content: The memory itself.
+            description: One line on what it is (used for search).
+        """
+        if unavailable:
+            return unavailable
+        if _memory_path(path) is None:
+            return json.dumps(
+                {"status": "error", "error": "path must look like /folder/name.md (no ..)"}
+            )
+        if not isinstance(content, str) or not content or len(content) > MEMORY_MAX_CONTENT:
+            return json.dumps(
+                {"status": "error", "error": f"content must be 1-{MEMORY_MAX_CONTENT} characters"}
+            )
+        try:
+            outcome = await store.save(path, content, _clip(str(description or ""), 500))
+        except Exception as e:  # noqa: BLE001
+            return _memory_error(e)
+        log.info("memory_save %s", outcome)
+        return json.dumps({"status": outcome, "path": path})
+
+    @beta_async_tool
+    async def memory_delete(path: str) -> str:
+        """Delete the memory saved at a path.
+
+        Args:
+            path: A file-like path for the memory, such as /preferences/response-style.md
+        """
+        if unavailable:
+            return unavailable
+        if _memory_path(path) is None:
+            return json.dumps(
+                {"status": "error", "error": "path must look like /folder/name.md (no ..)"}
+            )
+        try:
+            deleted = await store.delete(path)
+        except Exception as e:  # noqa: BLE001
+            return _memory_error(e)
+        return json.dumps({"status": "deleted" if deleted else "not_found", "path": path})
+
+    log.info("memory: serving store %s", store.store_id)
+    return [memory_search, memory_list, memory_save, memory_delete]
+
+
 async def _open_mcp_tools(
     stack: contextlib.AsyncExitStack, servers: list[dict[str, str]]
 ) -> list[Any]:
@@ -451,13 +715,13 @@ async def main() -> None:
             client = await stack.enter_async_context(
                 AsyncAnthropic(auth_token=sessions_token, base_url=base_url)
             )
-            mcp_tools = await _open_mcp_tools(stack, servers)
+            custom_tools = [*await _open_mcp_tools(stack, servers), *await _open_memory_tools()]
             tools = None
-            if mcp_tools:
+            if custom_tools:
                 from anthropic.lib.tools.agent_toolset import beta_agent_toolset_20260401
 
                 def tools(ctx):
-                    return [*beta_agent_toolset_20260401(ctx), *mcp_tools]
+                    return [*beta_agent_toolset_20260401(ctx), *custom_tools]
 
             worker = EnvironmentWorker(
                 client,

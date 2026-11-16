@@ -107,6 +107,30 @@ bakehouse":
 | raw tools (`genie_one_server(w, wait_tool=False)`) | 17 (1 ask + 16 polls) | ~190K | ~2.2K |
 | `genie_ask_and_wait` (default) | 1 (7 polls inside the sandbox) | ~6–12K | ~110 |
 
+## Long-term memory (Databricks managed memory)
+
+The worker can serve four memory tools backed by [Databricks managed agent
+memory](https://docs.databricks.com/aws/en/agents/agent-memory/managed-memory) (Beta "Agent Memory Sessions",
+`/api/2.0/agents/memory-stores`): `memory_search`, `memory_list`, `memory_save` and `memory_delete`.
+
+- **One store per Databricks identity.** The store id is `cma-memory-` plus an HMAC of the identity's immutable user id.
+  In Databricks memory the store is the only access boundary (`actor_id` organizes entries but doesn't restrict them), so
+  stores are never shared.
+- **Owned by that identity.** The worker creates the store with the sandbox's own credential and refuses a store with
+  that id owned by anyone else.
+- **Fixed by trusted code.** The launcher sets the store and the `actor_id` (`databricks-user:<id>`); the tools accept
+  only paths, content, descriptions and queries.
+- **Turning it on.** The local dispatcher uses `databricks-anthropic run --memory` (recommended). In the library, pass
+  `memory=MemoryConfig.for_user(key, user_id)` to `DatabricksSandboxLauncher`. In the App's user mode, memory waits for
+  Databricks Apps to accept the `agent-kit` scope that the memory API requires (see the App README).
+- **Declaring the tools.** Add them to the agent:
+
+```python
+from databricks_anthropic.sandbox import memory_custom_tools
+
+agent = client.beta.agents.create(name=..., model=..., tools=[{"type": "agent_toolset_20260401"}, *memory_custom_tools()])
+```
+
 ## Behavior worth knowing
 
 | Topic | Behavior |
@@ -116,7 +140,7 @@ bakehouse":
 | Runtime cap | A sandbox runs at most 24 hours per start |
 | Sandbox names | Prefix + 24 hex characters of an HMAC of the session id (the App's `sandbox-id-hmac-key`), so names can't be predicted; an existing sandbox is used only if its tags match the session and environment |
 | Duplicate delivery | A re-delivered work item whose worker is still running is left alone (`LaunchResult.reused`) |
-| Memory stores | Attached memory stores mount at `/mnt/memory/<store>/` inside the sandbox (service mode; off in user mode) |
+| Anthropic memory stores | Attached Anthropic memory stores mount at `/mnt/memory/<store>/` inside the sandbox (service mode and the local dispatcher; refused in user mode). For per-user memory, use Databricks managed memory (above) |
 | Cleanup | The App sweeps its own sandboxes (prefix **and** tags for its environment); it never touches others |
 | Visibility | `list_sandboxes` returns only the caller's sandboxes: a user's sandboxes are visible to that user, and `/api/status` is how operators see the App's |
 
@@ -141,6 +165,8 @@ Then:
 databricks-anthropic init --profile dev --environment env_...      # prompts for the environment key (hidden)
 databricks-anthropic doctor        # login, Sandbox API, environment, queue, no other dispatcher running
 databricks-anthropic run           # until Ctrl-C or SIGTERM; --drain exits when the queue is empty
+databricks-anthropic run --memory  # recommended: your own Databricks memory store (memory_* tools)
+databricks-anthropic memory show | memory delete --yes
 databricks-anthropic list | cleanup [--dry-run]
 ```
 

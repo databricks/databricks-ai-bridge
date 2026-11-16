@@ -155,6 +155,7 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
 | `user_environment_id` | empty | User-mode targets: the user environment; must differ from `environment_id` |
 | `user_agents` | empty | User-mode targets: comma-separated agent ids users may run |
 | `lakebase_branch`, `lakebase_database`, `lakebase_endpoint` | empty (dev: the dev project) | User-mode targets: the Lakebase branch, database and its read-write endpoint |
+| `user_memory` | `0` | User-mode targets: `1` gives each user their own Databricks managed memory store, served as `memory_*` tools. **Waiting on the platform:** the memory API requires the `agent-kit` scope, which Databricks Apps doesn't accept in `user_api_scopes` yet, so leave it off for now. With `1`, the App checks the memory API at start-up and reports `user_memory` in `/api/status` |
 | `scope_manager` | the deployer | The only principal with MANAGE on the secret scope (the App gets READ on its keys only) |
 
 ### App settings (`config.env` in `databricks.yml`)
@@ -176,6 +177,7 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
 | `ANTHROPIC_USER_ENVIRONMENT_KEY` | secret resource `env-u-key` | Its environment key; stays in the App |
 | `CMA_ANTHROPIC_API_KEY` | secret resource `api-key` | Reads sessions (for `/connect`). Not `ANTHROPIC_API_KEY`, which the SDK would attach to every call |
 | `CMA_USER_AGENTS` | `${var.user_agents}` | Agent ids users may run |
+| `CMA_USER_MEMORY` | `${var.user_memory}` | `1`: per-user Databricks memory (see `user_memory`) |
 | `CMA_MAX_SESSIONS_PER_USER` | `20` | Sessions a user may bind (lifetime) |
 | `CMA_APP_URL` | unset | Base URL for sign-in links; by default the App reads its own URL |
 | `PGHOST`, `PGDATABASE`, `PGUSER`, ... | injected by the `lakebase` resource | The state store's connection (no password is stored) |
@@ -187,7 +189,12 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
   and the user replies after signing in.
 - **Forwarded links.** Whoever opens a link supplies the identity. The page warns users to confirm only sessions they
   started; it can't tell who started the session in the Console.
-- **Off in user mode:** memory stores (refused) and the resumable lifecycle (user sandboxes are ephemeral).
+- **Off in user mode:** Anthropic memory stores (refused) and the resumable lifecycle (user sandboxes are ephemeral).
+  Per-user Databricks memory is built (`user_memory`) but needs Databricks Apps to accept the `agent-kit` scope; until
+  then a user's sandbox gets 403 from the memory API. Removing a user's memory then means deleting their
+  `cma-memory-…` store.
+- **A failed deploy and the secret scope.** The bundle rewrites the scope's ACL before it updates the App; if the App
+  update fails, `deploy.sh` grants the App's READ on the scope again so the App keeps its secrets.
 - **Cleanup.** The service sweep only sees `cmaapp-` sandboxes. A user sandbox is removed by its worker when the session
   goes idle; if a worker crashes, the stopped sandbox remains, owned by the user, until they delete it in Sandbox.
 - **Caps.** `CMA_MAX_SESSIONS_PER_USER` counts a user's bindings over their lifetime (bindings are never deleted in this

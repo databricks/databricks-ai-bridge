@@ -22,6 +22,7 @@ from databricks.sdk.errors import AlreadyExists, NotFound
 
 from databricks_anthropic import _useragent
 from databricks_anthropic.sandbox import _ops
+from databricks_anthropic.sandbox.memory import MemoryConfig
 
 if TYPE_CHECKING:
     from anthropic.types.beta.environments import BetaSelfHostedWork
@@ -205,6 +206,9 @@ class DatabricksSandboxLauncher:
     export_volume_path: str | None = None
     export_dir: str = "outputs"
     mcp_servers: list[SandboxMcpServer] = field(default_factory=list)
+    # Optional per-identity Databricks managed memory, served by the worker as memory_* tools. Set it only for the
+    # identity of workspace_client: the worker refuses a store owned by anyone else.
+    memory: MemoryConfig | None = None
     index_url: str | None = None
     extra_packages: tuple[str, ...] = ()
     sandbox_id_prefix: str = "cma-"
@@ -358,6 +362,8 @@ class DatabricksSandboxLauncher:
             env["CMA_EXPORT_DIR"] = os.path.join(self.workdir, self.export_dir)
         if self.mcp_servers:
             env["CMA_MCP_SERVERS"] = json.dumps([s.to_env() for s in self.mcp_servers])
+        if self.memory is not None:
+            env.update(self.memory.to_env())
         return env
 
     # ------------------------------------------------------------------ lifecycle

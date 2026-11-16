@@ -55,11 +55,13 @@ def create_app(make_service=from_environment, make_user_mode=user_mode_from_envi
                 # StoreUnavailable messages are fixed strings (missing variable names, error types): safe.
                 reason = str(e) if type(e).__name__ == "StoreUnavailable" else type(e).__name__
                 log.warning("user-mode store not ready at start-up: %s", reason)
+            await asyncio.to_thread(app.state.user.check_memory)
             app.state.user.start()
             log.info(
-                "user mode: watching environment=%s; sign-in links %s",
+                "user mode: watching environment=%s; sign-in links %s; memory %s",
                 app.state.user.config.environment_id,
                 "on" if app.state.user.app_url else "off (no App URL)",
+                app.state.user.memory_state,
             )
         service.start()
         log.info(
@@ -99,13 +101,20 @@ def create_app(make_service=from_environment, make_user_mode=user_mode_from_envi
         healthy = request.app.state.service.healthy
         return JSONResponse({"healthy": healthy}, status_code=200 if healthy else 503)
 
+    def _status(request: Request) -> dict:
+        s = request.app.state.service.full_status()
+        user = getattr(request.app.state, "user", None)
+        if user is not None:
+            s["user_memory"] = user.memory_state
+        return s
+
     @app.get("/api/status")
     async def status(request: Request):
-        return await asyncio.to_thread(request.app.state.service.full_status)
+        return await asyncio.to_thread(_status, request)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
-        s = await asyncio.to_thread(request.app.state.service.full_status)
+        s = await asyncio.to_thread(_status, request)
         d = s.pop("dispatcher") or {}
         rows = "".join(
             f"<tr><th>{html.escape(str(k))}</th><td>{html.escape(str(v))}</td></tr>"

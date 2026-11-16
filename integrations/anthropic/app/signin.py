@@ -136,7 +136,10 @@ def refusal(session: Any, *, environment_id: str, agents: tuple[str, ...]) -> st
         getattr(r, "type", None) == "memory_store"
         for r in getattr(session, "resources", None) or []
     ):
-        return "sessions with memory stores are not supported in Databricks user mode"
+        return (
+            "Anthropic memory stores are not supported in Databricks user mode "
+            "(memory uses each user's own Databricks memory store)"
+        )
     if getattr(session, "vault_ids", None):
         return "sessions with vaults are not supported in Databricks user mode"
     return None
@@ -171,7 +174,7 @@ class RoutingLauncher:
         self,
         *,
         template: DatabricksSandboxLauncher,
-        launcher_for: Callable[[WorkspaceClient], DatabricksSandboxLauncher],
+        launcher_for: Callable[[WorkspaceClient, str], DatabricksSandboxLauncher],
         tickets: Tickets,
         store: Store,
         sessions_api: Any,
@@ -220,7 +223,7 @@ class RoutingLauncher:
             and binding.principal_id == ticket.principal_id
         ):
             try:
-                result = self._launcher_for(ticket.client).launch(work)
+                result = self._launcher_for(ticket.client, binding.principal_id).launch(work)
             except Exception as e:
                 self._audit(binding.principal_id, session_id, "launch-failed", type(e).__name__)
                 raise

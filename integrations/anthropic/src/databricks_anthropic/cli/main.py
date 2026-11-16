@@ -2,8 +2,9 @@
 
     databricks-anthropic init --profile dev --environment env_... [--mcp genie-one] [--with-api-key]
     databricks-anthropic doctor
-    databricks-anthropic run [--drain] [--force]
+    databricks-anthropic run [--drain] [--force] [--memory]
     databricks-anthropic list
+    databricks-anthropic memory show | memory delete --yes
     databricks-anthropic cleanup [--dry-run] [--sessions-gone] [--legacy-prefix cma-]
 
 Aliases: ``sandbox-dispatcher`` (run), ``sandbox-list`` (list), ``sandbox-cleanup`` (cleanup).
@@ -44,6 +45,7 @@ from databricks_anthropic.sandbox.launcher import (
     DatabricksSandboxLauncher,
     Lifecycle,
 )
+from databricks_anthropic.sandbox.memory import MEMORY_API, MemoryConfig
 
 log = logging.getLogger("databricks_anthropic.cli")
 
@@ -52,8 +54,9 @@ Serve Claude Managed Agents sessions from this machine, as your Databricks ident
 
   databricks-anthropic init --profile dev --environment env_... [--mcp genie-one] [--with-api-key]
   databricks-anthropic doctor
-  databricks-anthropic run [--drain] [--force]
+  databricks-anthropic run [--drain] [--force] [--memory]
   databricks-anthropic list
+  databricks-anthropic memory show | memory delete --yes
   databricks-anthropic cleanup [--dry-run] [--sessions-gone] [--legacy-prefix cma-]
 
 Aliases: sandbox-dispatcher (run), sandbox-list (list), sandbox-cleanup (cleanup).
@@ -276,6 +279,7 @@ def _launcher(
     environment_key: str,
     mcp_servers: list[Any],
     legacy_prefix: str | None = None,
+    memory: MemoryConfig | None = None,
 ) -> DatabricksSandboxLauncher:
     s = ctx.settings
     try:
@@ -290,6 +294,7 @@ def _launcher(
             image_uri=getattr(args, "image_uri", None),
             index_url=getattr(args, "index_url", None),
             mcp_servers=mcp_servers,
+            memory=memory,
             lifecycle=cast(Lifecycle, s.lifecycle),
             retention_days=s.retention_days,
             export_volume_path=s.export_volume,
@@ -299,6 +304,33 @@ def _launcher(
         )
     except ValueError as e:
         sys.exit(str(e))
+
+
+def _memory_config(ctx: Context, w: Any) -> MemoryConfig:
+    """This profile's own memory store: keyed by the saved HMAC key and the profile's immutable user id."""
+    if not ctx.secrets.sandbox_id_key:
+        sys.exit("memory needs the saved sandbox id key: run databricks-anthropic init")
+    user_id = str(w.current_user.me().id or "")
+    if not user_id:
+        sys.exit("memory: the profile's identity has no user id")
+    return MemoryConfig.for_user(ctx.secrets.sandbox_id_key, user_id)
+
+
+def _memory_api_available(w: Any) -> None:
+    """Fail early (with the fix) when the workspace has no agent memory."""
+    from databricks.sdk.errors import DatabricksError
+
+    try:
+        w.api_client.do("GET", MEMORY_API, query={"page_size": 1})
+    except DatabricksError as e:
+        hint = (
+            "a workspace admin turns on the 'Agent Memory Sessions' preview on the workspace's Previews page"
+            if "not enabled" in str(e).lower()
+            else "check that this profile can use agent memory"
+        )
+        sys.exit(
+            f"--memory: the agent memory API is unavailable ({e.error_code or type(e).__name__}); {hint}"
+        )
 
 
 def _sessions_api(ctx: Context) -> Any:
@@ -440,12 +472,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         except ConcurrentWorkerError as e:
             sys.exit(str(e))
         user = w.current_user.me().user_name
+        memory = None
+        if args.memory:
+            _memory_api_available(w)
+            memory = _memory_config(ctx, w)
         print(
             f"serving environment {env_id} as {user}: every session on this environment runs with this "
             "identity's Databricks access",
             flush=True,
         )
-        launcher = _launcher(ctx, w, args, environment_key=environment_key, mcp_servers=servers)
+        if memory is not None:
+            print(
+                f"memory: this identity's Databricks memory store {memory.store_id} (memory_* tools)",
+                flush=True,
+            )
+        launcher = _launcher(
+            ctx, w, args, environment_key=environment_key, mcp_servers=servers, memory=memory
+        )
         dispatcher = DatabricksSandboxDispatcher(
             launcher,
             max_concurrent_launches=args.max_concurrent_launches,
@@ -506,6 +549,41 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     for action in plan:
         verb = "would delete" if args.dry_run and action.action == "delete" else action.action
         print(f"{verb:12} {action.sandbox_name}  ({action.reason})")
+    return 0
+
+
+def cmd_memory(args: argparse.Namespace) -> int:
+    """Show or delete this profile's own memory store (the one `run --memory` uses)."""
+    from databricks.sdk.errors import NotFound
+
+    ctx = _load(args)
+    w = _login(ctx, args)
+    memory = _memory_config(ctx, w)
+    path = f"{MEMORY_API}/{memory.store_id}"
+    try:
+        store = w.api_client.do("GET", path)
+    except NotFound:
+        print(
+            f"memory store {memory.store_id}: not created yet (the first session with --memory creates it)"
+        )
+        return 0
+    owner = str(store.get("owner_user_id") or store.get("creator_user_id") or "")
+    if owner != memory.owner_user_id:
+        sys.exit(f"memory store {memory.store_id} is owned by someone else; not touching it")
+    if args.memory_command == "show":
+        entries = w.api_client.do(
+            "GET", f"{path}/entries", query={"actor_id": memory.actor_id, "page_size": 100}
+        )
+        listed = entries.get("managed_memory_entries") or []
+        more = " or more" if entries.get("next_page_token") else ""
+        print(f"memory store {memory.store_id}: {len(listed)}{more} memories")
+        for entry in listed:
+            print(f"  {entry.get('path')}\t{entry.get('description') or ''}")
+        return 0
+    if not args.yes:
+        sys.exit(f"memory delete removes store {memory.store_id} and every memory in it; add --yes")
+    w.api_client.do("DELETE", path)
+    print(f"deleted memory store {memory.store_id}")
     return 0
 
 
@@ -624,6 +702,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="also delete sandboxes of deleted or archived sessions (needs the saved API key)",
     )
     run.add_argument("--index-url", help="package index for uv inside the sandbox")
+    run.add_argument(
+        "--memory",
+        action="store_true",
+        help="serve memory_* tools on this identity's own Databricks memory store (agent memory Beta)",
+    )
     run.set_defaults(func=cmd_run)
 
     lst = sub.add_parser(
@@ -662,6 +745,17 @@ def build_parser() -> argparse.ArgumentParser:
         "use --dry-run first",
     )
     cleanup.set_defaults(func=cmd_cleanup)
+
+    mem = sub.add_parser("memory", help="show or delete this identity's Databricks memory store")
+    mem_sub = mem.add_subparsers(dest="memory_command", required=True, metavar="action")
+    mem_sub.add_parser(
+        "show", parents=[_common()], help="the store id and its memories"
+    ).set_defaults(func=cmd_memory)
+    delete = mem_sub.add_parser(
+        "delete", parents=[_common()], help="delete the store and every memory in it"
+    )
+    delete.add_argument("--yes", action="store_true", help="confirm")
+    delete.set_defaults(func=cmd_memory)
     return parser
 
 

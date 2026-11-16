@@ -53,6 +53,7 @@ from user_store import Binding, LakebaseStore, Store, StoreUnavailable
 from databricks_anthropic import DatabricksSandboxDispatcher, DatabricksSandboxLauncher
 from databricks_anthropic.sandbox.launcher import DEFAULT_ANTHROPIC_BASE_URL
 from databricks_anthropic.sandbox.mcp import genie_one_server
+from databricks_anthropic.sandbox.memory import MEMORY_API, MemoryConfig
 
 log = logging.getLogger("cma_dispatcher_app.user")
 
@@ -78,6 +79,8 @@ class UserConfig:
     anthropic_api_key: str = field(repr=False)
     agents: tuple[str, ...]
     max_sessions_per_user: int
+    # CMA_USER_MEMORY=1: each user's sandbox serves memory_* tools on that user's own Databricks memory store.
+    memory: bool = False
 
     @classmethod
     def from_environment(cls, env: Mapping[str, str], *, service_environment_id: str) -> UserConfig:
@@ -106,6 +109,7 @@ class UserConfig:
             anthropic_api_key=required["CMA_ANTHROPIC_API_KEY"],
             agents=agents,
             max_sessions_per_user=int(env.get("CMA_MAX_SESSIONS_PER_USER") or 20),
+            memory=env.get("CMA_USER_MEMORY", "").strip() == "1",
         )
 
 
@@ -159,12 +163,23 @@ def _user_client(host: str, token: str) -> WorkspaceClient:
 
 
 def user_launcher(
-    service: DatabricksSandboxLauncher, config: UserConfig, client: WorkspaceClient
+    service: DatabricksSandboxLauncher,
+    config: UserConfig,
+    client: WorkspaceClient,
+    principal_id: str | None = None,
 ) -> DatabricksSandboxLauncher:
     """The service launcher's settings, retargeted at env U and the caller's identity.
 
     ``dataclasses.replace`` re-runs the launcher's validation. The sandbox id key and export settings carry over.
+    With memory on, ``principal_id`` (the bound user's immutable id) picks that user's own memory store.
     """
+    memory = None
+    if config.memory and principal_id:
+        if not service.sandbox_id_key:
+            raise ConfigError(
+                "CMA_USER_MEMORY=1 needs CMA_SANDBOX_ID_KEY (it keys the memory store ids)"
+            )
+        memory = MemoryConfig.for_user(service.sandbox_id_key, principal_id)
     return dataclasses.replace(
         service,
         workspace_client=client,
@@ -172,6 +187,7 @@ def user_launcher(
         environment_key=config.environment_key,
         sandbox_id_prefix=USER_SANDBOX_PREFIX,
         mcp_servers=[genie_one_server(client)] if service.mcp_servers else [],
+        memory=memory,
         lifecycle="ephemeral",
     )
 
@@ -188,6 +204,8 @@ class UserMode:
     tickets: Tickets = field(default_factory=Tickets)
     app_url: str | None = None
     watcher: DispatcherService | None = None
+    # "off" (the default), "on", or "unavailable (<error code>)" when user_memory=1 but the API isn't usable.
+    memory_state: str = "off"
     _agent_names: dict[str, str] = field(default_factory=dict)
 
     def agent_name(self, agent_id: str) -> str:
@@ -201,8 +219,40 @@ class UserMode:
             self._agent_names[agent_id] = name or agent_id
         return self._agent_names[agent_id]
 
-    def launcher_for(self, client: WorkspaceClient) -> DatabricksSandboxLauncher:
-        return user_launcher(self.service_launcher, self.config, client)
+    def launcher_for(
+        self, client: WorkspaceClient, principal_id: str | None = None
+    ) -> DatabricksSandboxLauncher:
+        return user_launcher(self.service_launcher, self.config, client, principal_id)
+
+    def check_memory(self) -> str:
+        """With memory on, check once that agent memory is usable here; if not, serve user mode without it.
+
+        Uses the App's own identity (a list call reads no user's data). A workspace without the Agent Memory
+        Sessions Beta then logs one warning instead of giving every user a failing memory tool.
+        """
+        if not self.config.memory:
+            self.memory_state = "off"
+            return self.memory_state
+        from databricks.sdk.errors import DatabricksError
+
+        try:
+            self.service_launcher.workspace_client.api_client.do(
+                "GET", MEMORY_API, query={"page_size": 1}
+            )
+            self.memory_state = "on"
+        except DatabricksError as e:
+            code = e.error_code or type(e).__name__
+            self.memory_state = f"unavailable ({code})"
+            self.config = dataclasses.replace(self.config, memory=False)
+            hint = (
+                "a workspace admin turns on the Agent Memory Sessions preview"
+                if "not enabled" in str(e).lower()
+                else "check the App's access to /api/2.0/agents/memory-stores"
+            )
+            log.warning(
+                "user memory is on but unavailable (%s): serving without memory; %s", code, hint
+            )
+        return self.memory_state
 
     def routing_launcher(self) -> RoutingLauncher:
         return RoutingLauncher(
