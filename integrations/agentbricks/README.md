@@ -1641,8 +1641,7 @@ session preparation. Capacity defaults and hidden operator overrides are in the
 On the lean-worker branch the SDK is a separate `databricks-agentkit-runtime` wheel,
 built from `src/pyproject.toml`. The CLI keeps its package name and depends on it;
 ordinary installs retain the CLI's management dependencies. See the
-[local development instructions](CONTRIBUTING.md) and
-[worker demo build](docs/lean-worker-prototype.md) for the unpublished paired install.
+[local development instructions](CONTRIBUTING.md) for the unpublished paired install.
 
 The deployment workflow tracks phases and readiness internally; these observations are not
 logged as separate telemetry fields. Network errors are retried within the existing readiness budget; if the final probe remains unreachable,
