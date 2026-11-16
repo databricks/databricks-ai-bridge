@@ -31,6 +31,7 @@ from databricks_agentkit.sandbox.bundle import bundle_files
 from databricks_agentkit.sandbox.catalog import WorkspaceCatalog
 from databricks_agentkit.sandbox.environment import PUBLISHED_FORMAT, saved_bundle
 from databricks_agentkit.sandbox.environments import EnvironmentExists, PublicationStore
+from databricks_agentkit.sandbox.limits import RuntimeLimits
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class SandboxDeployRequest:
     workspace_path: str | None = None
     instances: int | None = None
     index_url: str = "https://pypi.org/simple/"
+    limits: RuntimeLimits = RuntimeLimits()
 
 
 class SandboxDeployService:
@@ -58,6 +60,8 @@ class SandboxDeployService:
             raise AgentCliError("Sandbox idle timeout must be 60–86400 seconds.")
         if not 0 <= request.sandbox_warm_pool_size <= 10:
             raise AgentCliError("Sandbox warm pool size must be 0–10.")
+        if request.sandbox_warm_pool_size >= request.limits.max_sandboxes:
+            raise AgentCliError("Warm spares must leave at least one sandbox slot for sessions.")
         git_source = None
         if request.git_revision is not None:
             if not request.git_revision.strip():
@@ -110,6 +114,7 @@ class SandboxDeployService:
         manifest = {
             "format": PUBLISHED_FORMAT,
             "storage_version": 3,
+            "runtime_environment": "sandbox",
             "catalog_path": f"{root}/catalog",
             "name": publication,
             "deployment": name,
@@ -205,6 +210,7 @@ class SandboxDeployService:
             instances=request.instances,
             sandbox_idle_timeout=request.sandbox_idle_timeout,
             sandbox_warm_pool_size=request.sandbox_warm_pool_size,
+            limits=request.limits,
             index_url=request.index_url,
         )
 

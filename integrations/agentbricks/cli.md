@@ -1757,6 +1757,23 @@ _Options_
 | `--sandbox` | flag | false | no | Upload source and deploy its orchestrator; install on session preparation or first invocation. |
 | `--sandbox-idle-timeout <SECONDS>` | integer, 60–86400 | 900 | no | Sandbox idle timeout in seconds; requires `--sandbox`. |
 | `--sandbox-warm-pool-size <N>` | integer, 0–10 | 0 (disabled) | no | Maximum unassigned prepared sandboxes; requires `--sandbox`. |
+
+Sandbox operator overrides are accepted but hidden from `deploy --help`. They require `--sandbox`
+and accept integers 1–10000. Defaults apply deployment-wide across App replicas:
+
+| Hidden option | Default | Bound |
+| --- | --- | --- |
+| `--sandbox-max-sandboxes` | 64 | Running/starting session sandboxes plus unassigned spares; stopped sandboxes do not consume capacity. Ambiguous allocations retain their reservation. |
+| `--sandbox-max-concurrent-invocations` | 16 | Concurrent executing invocations, including recovery observers. |
+| `--sandbox-max-concurrent-preparations` | 2 | Concurrent source installations and explicit handler preparation, including pool fills. |
+| `--sandbox-max-pending-invocations` | 128 | Accepted unfinished invocations, both queued and active. New submissions at the limit receive HTTP 429; duplicate reconnects remain usable. |
+
+Warm-pool size is the visible spare target and remains subordinate to total sandbox capacity.
+The limits are persisted in App configuration as `SANDBOX_MAX_*` values. They bound this
+prototype deployment, rather than platform-wide workspace usage. Placement is recorded as
+`AGENTBRICKS_RUNTIME_ENVIRONMENT=sandbox` for sandbox deploys and `shared_compute` for ordinary
+App execution. The source manifest additionally stores `runtime_environment: sandbox`.
+
 | `--git-revision <REV>` | string | working tree | no | Local Git commit, tag or branch; requires `--sandbox`. |
 | `--entrypoint <CALLABLE>` | string | template adapter | no | Installed module:function; requires `--sandbox`. |
 | `--source <SOURCE>` | path | `.` | no | Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, which generates uv.lock if missing). Defaults to the current directory. |

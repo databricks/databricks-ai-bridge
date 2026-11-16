@@ -137,7 +137,7 @@ def test_duplicate_submission_and_session_fifo(job):
 
 def test_recovery_does_not_replay_arbitrary_agent_code(job):
     manager, control, orchestrator, request, _ = job
-    with pytest.raises(RuntimeError, match="Automatic replay is disabled"):
+    with pytest.raises(RuntimeError, match="automatic replay is disabled"):
         control.call(manager.execute(request, InvocationAttemptContext("run", 2)))
     orchestrator.invoke.assert_not_called()
 

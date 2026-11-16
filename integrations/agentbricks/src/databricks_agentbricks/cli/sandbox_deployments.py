@@ -61,14 +61,13 @@ def invoke_deployment(obj, app, session_id, invocation_id, json_value, retry, st
     run = request_run(
         launcher,
         "POST",
-        "/api/runs",
+        f"/api/invocations?agent_id={agent_id}&view=workbench",
         invocation_id,
         body={
-            "agent_id": agent_id,
             "session_id": session_id,
-            "invocation_id": invocation_id,
+            "id": invocation_id,
+            "background": True,
             "input": value,
-            "retry": retry,
         },
         routing_key=session_id,
     )
@@ -109,7 +108,7 @@ def invoke_deployment(obj, app, session_id, invocation_id, json_value, retry, st
             )
         time.sleep(min(0.5, max(0, deadline - time.monotonic())))
         run = request_run(
-            launcher, "GET", f"/api/runs/{run['id']}", invocation_id, routing_key=session_id
+            launcher, "GET", f"/api/invocations/{run['id']}?view=workbench", invocation_id, routing_key=session_id
         )
     if stream:
         click.echo(err=True)

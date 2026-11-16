@@ -214,6 +214,10 @@ def _ignore_hangup() -> None:
     default=0,
     help="Maximum unassigned prepared sandboxes for --sandbox (default: 0, disabled).",
 )
+@click.option("--sandbox-max-sandboxes", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-concurrent-invocations", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-concurrent-preparations", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-pending-invocations", type=click.IntRange(1, 10000), hidden=True)
 @click.option(
     "--entrypoint",
     help="Installed module:function for --sandbox; defaults to the template adapter.",
@@ -276,6 +280,10 @@ def deploy(
     sandbox,
     sandbox_idle_timeout,
     sandbox_warm_pool_size,
+    sandbox_max_sandboxes,
+    sandbox_max_concurrent_invocations,
+    sandbox_max_concurrent_preparations,
+    sandbox_max_pending_invocations,
     git_revision,
     entrypoint,
     source,
@@ -353,7 +361,18 @@ def deploy(
             SandboxDeployService,
         )
         from databricks_agentkit._api_client import _workspace_client
+        from databricks_agentkit.sandbox.limits import RuntimeLimits
 
+        defaults = RuntimeLimits()
+        limits = RuntimeLimits(
+            max_sandboxes=sandbox_max_sandboxes or defaults.max_sandboxes,
+            max_concurrent_invocations=sandbox_max_concurrent_invocations
+            or defaults.max_concurrent_invocations,
+            max_concurrent_preparations=sandbox_max_concurrent_preparations
+            or defaults.max_concurrent_preparations,
+            max_pending_invocations=sandbox_max_pending_invocations
+            or defaults.max_pending_invocations,
+        )
         started = time.monotonic()
         result = SandboxDeployService(
             _workspace_client(obj.profile), partial(deploy_prepared, obj), reporter=ClickReporter()
@@ -365,6 +384,7 @@ def deploy(
                 if sandbox_idle_timeout is not None
                 else 900,
                 sandbox_warm_pool_size=sandbox_warm_pool_size,
+                limits=limits,
                 git_revision=git_revision,
                 entrypoint=entrypoint,
                 workspace_path=workspace_path,
@@ -377,13 +397,24 @@ def deploy(
         )
         return
     if (
-        any(value is not None for value in (git_revision, entrypoint, sandbox_idle_timeout))
+        any(
+            value is not None
+            for value in (
+                git_revision,
+                entrypoint,
+                sandbox_idle_timeout,
+                sandbox_max_sandboxes,
+                sandbox_max_concurrent_invocations,
+                sandbox_max_concurrent_preparations,
+                sandbox_max_pending_invocations,
+            )
+        )
         or click.get_current_context().get_parameter_source("sandbox_warm_pool_size")
         != click.core.ParameterSource.DEFAULT
     ):
         raise click.UsageError(
             "--git-revision, --entrypoint, --sandbox-idle-timeout and "
-            "--sandbox-warm-pool-size require --sandbox."
+            "--sandbox-warm-pool-size and sandbox capacity overrides require --sandbox."
         )
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")

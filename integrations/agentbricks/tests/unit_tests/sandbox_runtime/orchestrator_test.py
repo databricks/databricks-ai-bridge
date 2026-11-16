@@ -57,7 +57,11 @@ def setup(tmp_path):
             return ""
         if command.startswith("python3 -c"):
             return json.dumps(
-                {"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}
+                {
+                    "python": "/venv/bin/python",
+                    "timings_ms": {"dependency_install": 42},
+                    "source_hash": "a" * 64,
+                }
             )
         if "sandbox_agent.worker:run" in command:
             return json.dumps({"reply": "hello"})
@@ -90,7 +94,13 @@ def test_skips_transfer_and_install_when_environment_is_ready(setup):
     registry.record.save(build_bundle(orchestrator.source).digest, "sandbox-one", "ready")
     remote.run.side_effect = [
         "/home/sandbox",
-        json.dumps({"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}),
+        json.dumps(
+            {
+                "python": "/venv/bin/python",
+                "timings_ms": {"dependency_install": 42},
+                "source_hash": "a" * 64,
+            }
+        ),
         json.dumps({"reply": "hello"}),
     ]
     result = orchestrator.invoke("session", "call-two", {})
@@ -357,7 +367,13 @@ def test_pool_assignment_keeps_physical_worker_path_and_skips_install(setup):
     registry.record.row["bootstrap_metrics"] = {"worker_state_key": "b" * 64}
     remote.run.side_effect = [
         "/home/sandbox",
-        json.dumps({"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}),
+        json.dumps(
+            {
+                "python": "/venv/bin/python",
+                "timings_ms": {"dependency_install": 42},
+                "source_hash": "a" * 64,
+            }
+        ),
         json.dumps({"reply": "hello"}),
     ]
     result = orchestrator.invoke("assigned-session", "first-turn", {})

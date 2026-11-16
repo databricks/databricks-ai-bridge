@@ -124,6 +124,7 @@ def test_app_startup_does_not_access_or_claim_a_sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("SANDBOX_NAMESPACE", "test")
     monkeypatch.setenv("AGENTBRICKS_ENVIRONMENT_FILE", str(binding))
     registry, lakebox, control, runs = [MagicMock() for _ in range(4)]
+    registry.mapping_page.return_value = []
     control.agent.return_value = {
         "bundle_data": bundle.data,
         "source_hash": bundle.digest,
@@ -147,7 +148,7 @@ def test_app_startup_does_not_access_or_claim_a_sandbox(tmp_path, monkeypatch):
     lakebox.create.assert_not_called()
     lakebox.get.assert_not_called()
     lakebox.connect.assert_not_called()
-    registry.session.assert_not_called()
+    assert all(call.args == ("sandbox-reconciler",) for call in registry.session.call_args_list)
     runs.start.assert_called_once()
     # Avoid leaking the real lifespan state into API tests that bypass startup.
     module.app.state.preparations = None

@@ -105,3 +105,24 @@ Open Sandbox, wait for **2 ready**, then choose New Chat.
 
 Measurements and optimization tradeoffs are maintained in the
 [investigation doc](https://docs.google.com/document/d/13X3RCi46JPWUuB74MOdqCbcaJ5wuVu3fjC2e1Y_aKFw/edit?tab=t.0#bookmark=id.wgjb4zzi3iwo).
+
+## Capacity and recovery
+
+The visible pool size is the target for unused prepared spares. It replenishes after assignment,
+subject to a deployment-wide cap of 64 running/starting sandboxes, including session compute.
+The other defaults are 16 concurrent invocations, 2 installation/preparation operations, and 128
+accepted unfinished invocations. Hidden deploy overrides are listed in `cli.md`. Locks coordinate
+App replicas; unresolved platform creates keep their reservations. Stopped mappings do not normally
+consume capacity. External platform quotas may be lower.
+
+The service reconciler observes owned sandbox mappings every 10 seconds without starting idle
+compute. After loss of an App executor, recovery can follow the same remote attempt and retrieve
+its journaled result. It never replays arbitrary agent code. A lost sandbox or unconfirmed worker
+outcome remains a failed invocation requiring inspection. This is narrower than MAR's complete
+sandbox-owned durable queue runner. New HTTP clients use `/api/invocations` and its standard
+status/SSE endpoints; the built-in workbench uses its chat projection on those same resources.
+
+The sandbox installer currently selects Python 3.12 because that is the tested stock image.
+The prior distribution supports Python >=3.10 and the templates declare >=3.11; ordinary App
+startup does not universally pin 3.12. Broader sandbox support needs image/interpreter selection,
+lock compatibility validation, and a tested version matrix.

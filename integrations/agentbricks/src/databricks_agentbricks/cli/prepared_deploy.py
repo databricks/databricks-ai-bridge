@@ -22,6 +22,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.prepared_environment import read_manifest, services
 from databricks_agentbricks.services.environment_features import provision_features
 from databricks_agentkit._api_client import _AgentBricksApiClient, _workspace_client
+from databricks_agentkit.runtime.environment import RUNTIME_ENVIRONMENT_ENV, SANDBOX
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -36,10 +37,18 @@ from databricks_agentkit.sandbox.environment import (
     saved_bundle,
 )
 from databricks_agentkit.sandbox.features import source_features
+from databricks_agentkit.sandbox.limits import RuntimeLimits
 
 
 def stage_runtime(
-    target, manifest, principal, *, index_url, sandbox_idle_timeout=900, sandbox_warm_pool_size=0
+    target,
+    manifest,
+    principal,
+    *,
+    index_url,
+    sandbox_idle_timeout=900,
+    sandbox_warm_pool_size=0,
+    limits=None,
 ):
     """Bundle the installed editable SDK; never read the local agent project."""
     package = Path(__file__).resolve().parents[3]
@@ -84,6 +93,8 @@ def stage_runtime(
     (target / "requirements.txt").write_text(f"./{wheel.name}[sandbox]\n")
     (target / "environment.json").write_text(json.dumps(manifest, indent=2))
     environment = {
+        RUNTIME_ENVIRONMENT_ENV: SANDBOX,
+        **(limits or RuntimeLimits()).env(),
         "SANDBOX_NAMESPACE": manifest["namespace"],
         "SANDBOX_SCHEMA": manifest["namespace"].replace("-", "_"),
         "SANDBOX_CATALOG_PATH": manifest.get("catalog_path")
@@ -134,13 +145,14 @@ def deploy_prepared(
     instances=None,
     sandbox_idle_timeout=900,
     sandbox_warm_pool_size=0,
+    limits=None,
     index_url="https://pypi.org/simple/",
 ):
     from databricks_agentbricks.services.deployment.names import DeploymentName, _prefixed_name
 
     name = DeploymentName(_prefixed_name(name))
     workspace = _workspace_client(obj.profile)
-    manifest = read_manifest(workspace, environment)
+    manifest = {**read_manifest(workspace, environment), "runtime_environment": SANDBOX}
     lazy = on_demand(manifest)
     managed = "runtime_store" in manifest
     if managed and (
@@ -309,6 +321,7 @@ def deploy_prepared(
             index_url=index_url,
             sandbox_idle_timeout=sandbox_idle_timeout,
             sandbox_warm_pool_size=sandbox_warm_pool_size,
+            limits=limits,
         )
         workspace.workspace.mkdirs(remote)
         for file in target.iterdir():
@@ -338,6 +351,7 @@ def deploy_prepared(
             if reply.status_code == 200:
                 result = {
                     "deployment": name,
+                    "runtime_environment": SANDBOX,
                     "url": app.url,
                     "environment": manifest["name"],
                     "manifest_path": manifest["manifest_path"],

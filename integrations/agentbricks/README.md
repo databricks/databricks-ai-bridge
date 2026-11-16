@@ -1680,3 +1680,10 @@ sync/streaming/background transport selector is manual.
 Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Sandbox deployment placement is recorded in deployed App configuration as
+`AGENTBRICKS_RUNTIME_ENVIRONMENT=sandbox`; ordinary App execution records `shared_compute`.
+Sandbox invocations use the existing `/api/invocations` request/status contract, with separate
+session preparation. See [the runtime notes](src/databricks_agentkit/sandbox/README.md) for
+reconciliation, direct text streaming, and remaining MAR differences. Capacity defaults and
+hidden operator overrides are in [the deploy reference](cli.md).

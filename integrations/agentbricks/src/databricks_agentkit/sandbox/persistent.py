@@ -75,6 +75,8 @@ with (state_dir / "worker.lock").open("a") as lease:
             while count < max_invocations:
                 connection, _ = server.accept()
                 retire = False
+                attempt_started = False
+                request = {}
                 with connection:
                     connection.settimeout(5)
                     try:
@@ -96,6 +98,9 @@ with (state_dir / "worker.lock").open("a") as lease:
                         # cannot execute a session concurrently after a timeout.
                         with (state_dir / "execution.lock").open("a") as execution:
                             fcntl.flock(execution, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            if request["op"] == "invoke":
+                                begin_attempt(request["request"], request.get("stream_path"), identity)
+                                attempt_started = True
                             reused = count > 0 or _preparation is not None
                             if request["op"] == "invoke":
                                 count += 1
@@ -109,19 +114,24 @@ with (state_dir / "worker.lock").open("a") as lease:
                                 retire = cleanup["retire"]
                             finally:
                                 watchdog.cancel()
-                            send(connection, {
+                            response = {
                                 "ok": True, "result": result,
                                 "worker": {"mode": "persistent", "id": worker_id,
                                     "pid": os.getpid(), "reused": reused,
                                     "invocation_count": count, "identity": identity,
                                     "retiring": retire or count >= max_invocations},
-                            })
+                            }
+                            if attempt_started:
+                                finish_attempt(request["request"], request.get("stream_path"), response, identity)
+                            send(connection, response)
                     except BaseException as error:
                         traceback.print_exc()
                         retire = True
                         try:
-                            send(connection, {"ok": False,
-                                "error": (type(error).__name__ + ": " + str(error))[:4000]})
+                            response = {"ok": False, "error": (type(error).__name__ + ": " + str(error))[:4000]}
+                            if attempt_started:
+                                finish_attempt(request["request"], request.get("stream_path"), response, identity)
+                            send(connection, response)
                         except OSError:
                             pass
                 # An exception or lost reply can leave handler state uncertain.

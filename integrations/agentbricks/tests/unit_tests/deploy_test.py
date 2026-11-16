@@ -735,6 +735,7 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
     assert env == {
+        "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
         "MLFLOW_TRACKING_URI": "databricks",
         "MLFLOW_EXPERIMENT_ID": "exp-42",
         "AGENT_MEMORY_STORE": "memory-id",
@@ -977,7 +978,7 @@ def test_real_cli_unbind_prunes_trace_manifest_and_app_resources(
         entry["name"]: entry["value"]
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
-    assert env == {"KEEP": "yes"}
+    assert env == {"KEEP": "yes", "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute"}
     assert runner.resources == [{"name": "user-owned", "secret": {}}]
     trace_update = next(
         list(event[1])

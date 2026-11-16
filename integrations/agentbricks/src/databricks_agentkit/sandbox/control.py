@@ -121,7 +121,50 @@ class ControlStore:
             ).hexdigest()
         )
 
-    def create_run(self, agent_id, session_id, invocation_id, value, *, retry=False):
+    def create_run(
+        self, agent_id, session_id, invocation_id, value, *, retry=False, public_id=False
+    ):
+        from contextlib import nullcontext
+
+        from databricks_agentkit.sandbox.limits import CapacityExceeded
+
+        capacity = getattr(self, "capacity", None)
+        # All replicas serialize admission, but an existing id can reconnect at
+        # the limit. RuntimeStore.accept still checks request identity atomically.
+        with capacity.slot("admission", 1) if capacity else nullcontext():
+            if capacity:
+                run_id = (
+                    invocation_id
+                    if public_id
+                    else self._run_id(agent_id, session_id, invocation_id)
+                )
+                existing = self.call(self.runtime_store.get(run_id))
+                count = self.call(
+                    self.runtime_store.count_pending_invocations(
+                        request_filter={"namespace": self.namespace}
+                    )
+                )
+                if existing is None and count >= capacity.limits.max_pending_invocations:
+                    raise CapacityExceeded(
+                        "Invocation queue is full; wait and retry the same invocation id"
+                    )
+            return self._create_run(
+                agent_id, session_id, invocation_id, value, retry=retry, public_id=public_id
+            )
+
+    def _run_id(self, agent_id, session_id, invocation_id):
+        return (
+            "sandbox:"
+            + hashlib.sha256(
+                json.dumps(
+                    [self.namespace, agent_id, session_id, invocation_id], ensure_ascii=True
+                ).encode()
+            ).hexdigest()
+        )
+
+    def _create_run(
+        self, agent_id, session_id, invocation_id, value, *, retry=False, public_id=False
+    ):
         run_id = (
             "sandbox:"
             + hashlib.sha256(
@@ -130,6 +173,8 @@ class ControlStore:
                 ).encode()
             ).hexdigest()
         )
+        if public_id:
+            run_id = invocation_id
         request = {
             "namespace": self.namespace,
             "agent_id": agent_id,

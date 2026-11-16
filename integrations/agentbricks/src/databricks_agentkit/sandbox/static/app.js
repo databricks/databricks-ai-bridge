@@ -767,7 +767,7 @@ async function refreshSessionList() {
   catch { /* Keep the last known list during a transient network failure. */ }
   finally { ctx.refreshingSessions = false; }
 }
-async function history(ctx) { return api(contextUrl(ctx, "/api/runs"), undefined, ctx); }
+async function history(ctx) { return api(contextUrl(ctx, "/api/invocations"), undefined, ctx); }
 async function beginPreparation(ctx) {
   if (!current(ctx) || !supportsPreparation() || preparing()) return;
   ctx.manuallyStopped = false;
@@ -939,7 +939,7 @@ function watchRun(row, ctx, reconnects = 0) {
   if (!current(ctx)) return;
   closeWatch(); setBusy(true); mergeRun(row);
   if (!ACTIVE.has(row.status)) { void terminal(row, ctx); return; }
-  const source = new EventSource(`/api/runs/${encodeURIComponent(row.id)}/events`);
+  const source = new EventSource(`/api/invocations/${encodeURIComponent(row.id)}/events?view=workbench`);
   state.source = source;
   source.addEventListener("run", event => {
     if (!current(ctx) || state.source !== source) return;
@@ -964,7 +964,7 @@ function watchRun(row, ctx, reconnects = 0) {
 async function pollRun(runId, ctx, failures = 0, reconnects = 0) {
   if (!current(ctx)) return;
   try {
-    const row = await api(`/api/runs/${encodeURIComponent(runId)}`, undefined, ctx);
+    const row = await api(`/api/invocations/${encodeURIComponent(runId)}?view=workbench`, undefined, ctx);
     if (!current(ctx)) return;
     mergeRun(row);
     if (!ACTIVE.has(row.status)) { await terminal(row, ctx); return; }
@@ -983,14 +983,10 @@ async function submitPending(ctx) {
   if (!pending || !current(ctx) || stopping(ctx)) return;
   notice(); setBusy(true); renderLifecycle();
   try {
-    const bound = state.config.default_environment;
-    const path = bound ? `/api/environments/${encodeURIComponent(bound)}/runs` : "/api/runs";
-    // Transport reconnects use retry=false. A failed-run retry creates a new invocation ID.
-    const retryFailed = Boolean(pending.retry);
-    if (retryFailed) persistPending(ctx, { ...pending, retry: false });
+    const path = `/api/invocations?agent_id=${encodeURIComponent(ctx.agentId)}&view=workbench`;
+    // An identical invocation ID reattaches; a failed-turn retry uses a fresh ID.
     const row = await api(path, {
-      ...(bound ? {} : { agent_id: ctx.agentId }), session_id: ctx.sessionId,
-      invocation_id: pending.invocation_id, input: pending.input, retry: retryFailed,
+      session_id: ctx.sessionId, id: pending.invocation_id, input: pending.input, background: true,
     });
     clearPending(ctx);
     if (!current(ctx)) return;

@@ -10,14 +10,22 @@ from databricks_agentkit.sandbox.control import RUNTIME_POLL_SECONDS, scoped_ses
 
 
 class RunManager:
-    def __init__(self, control, orchestrator):
+    def __init__(self, control, orchestrator, *, capacity=None, reconciler=None):
         self.control, self.orchestrator = control, orchestrator
         self.runtime = Runtime.from_store(
             self.execute,
             runtime_store=control.runtime_store,
             poll_seconds=RUNTIME_POLL_SECONDS,
         )
-        self.capacity = asyncio.Semaphore(2)
+        self.admission = capacity
+        self.capacity = asyncio.Semaphore(
+            capacity.limits.max_concurrent_invocations if capacity else 16
+        )
+        if reconciler is None:
+            from databricks_agentkit.sandbox.reconciliation import SandboxReconciler
+
+            reconciler = SandboxReconciler(control, orchestrator)
+        self.reconciler = reconciler
 
     def start(self):
         self.control.call(self.runtime.start())
@@ -30,14 +38,20 @@ class RunManager:
         self.control.call(self.runtime.get_invocation(run_id))
 
     async def execute(self, request, context):
-        if context.is_recovery:
-            raise RuntimeError(
-                "The previous App worker stopped heartbeating. The sandbox operation may still "
-                "be running; inspect the session before submitting a new invocation. "
-                "Automatic replay is disabled for arbitrary agent code."
-            )
         async with self.capacity:
-            return await asyncio.to_thread(self._invoke, request, context)
+            return await asyncio.to_thread(self._execute, request, context)
+
+    def _execute(self, request, context):
+        from contextlib import nullcontext
+
+        with (
+            self.admission.slot("invocation", self.admission.limits.max_concurrent_invocations)
+            if self.admission
+            else nullcontext()
+        ):
+            if context.is_recovery:
+                return self.reconciler.recover(request, context)
+            return self._invoke(request, context)
 
     def _invoke(self, request, context):
         agent = self.control.agent(request["agent_id"], with_bundle=True)
