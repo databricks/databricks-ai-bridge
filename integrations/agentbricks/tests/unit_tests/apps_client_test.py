@@ -260,6 +260,55 @@ def test_deploy_retries_while_the_app_is_busy_then_succeeds():
     assert all(kwargs.get("tee") is True for _, kwargs in runner.calls)
 
 
+@pytest.mark.parametrize("output_kind", ["pem", "long_line", "ordinary_multiline"])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_busy_retry_and_hint_survive_diagnostic_retention(output_kind, persistent, capsys):
+    import sys
+
+    from databricks_agentbricks.clients.databricks_cli import _run_tee
+
+    output = {
+        "pem": "-----BEGIN PRIVATE KEY-----\n"
+        + "synthetic-key-body\n" * 400
+        + "-----END PRIVATE KEY-----\n"
+        + _BUSY,
+        "long_line": "x" * 10000 + _BUSY,
+        "ordinary_multiline": "Another operation is in progress\n" + "Build progress\n" * 400,
+    }[output_kind]
+    results = []
+    sleeps = []
+
+    def runner(*args, **kwargs):
+        assert kwargs["tee"]
+        busy = persistent or not results
+        code = f"print({output if busy else ''!r}); raise SystemExit({17 if busy else 0})"
+        result = _run_tee([sys.executable, "-c", code], cwd=None, env=None)
+        results.append(result)
+        return result
+
+    client = AppsClient("prof", runner=runner, sleep=sleeps.append)
+    if persistent:
+        with pytest.raises(AgentCliError) as raised:
+            client.deploy("my-app", "/Workspace/x")
+        assert "agentbricks deployments wait my-app" in (raised.value.hint or "")
+        assert raised.value.failure_detail == "[REDACTED]"
+        assert raised.value.subprocess_exit_code == 17
+        assert len(results) == 7
+        assert sleeps == [5, 10, 15, 20, 30, 30]
+    else:
+        client.deploy("my-app", "/Workspace/x")
+        assert len(results) == 2
+        assert sleeps == [5]
+        assert results[-1].returncode == 0
+        assert not results[-1].app_busy
+    failures = results if persistent else results[:-1]
+    assert all(result.stdout == "[REDACTED]" for result in failures)
+    assert all(result.app_busy and result.returncode == 17 for result in failures)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (output + "\n") * len(failures) + ("" if persistent else "\n")
+
+
 def test_busy_match_is_case_insensitive():
     runner = _BusyRunner(busy=1, error="ANOTHER OPERATION IS IN PROGRESS")
     client, notices, _ = _busy_client(runner)
@@ -291,6 +340,7 @@ def test_other_deploy_errors_are_not_retried():
     with pytest.raises(AgentCliError) as raised:
         client.deploy("agent-bricks-myapp", "/Workspace/x")
 
+    assert raised.value.failure_detail == "Error: app crashed on startup"
     assert raised.value.hint is None  # the relayed output was already shown live
     assert notices == [] and sleeps == []
     assert len(runner.changes(["apps", "deploy"])) == 1
@@ -485,3 +535,18 @@ def test_create_blocks_by_default_for_other_callers():
     AppsClient("prof", runner=_runner(calls)).create("agent-bricks-myapp", None)
 
     assert calls[0][0] == ["apps", "create", "agent-bricks-myapp"]
+
+
+@pytest.mark.parametrize("detail", ["private failure", "Another operation is in progress"])
+def test_deploy_retains_the_final_child_exit_code(detail):
+    import subprocess
+
+    client = AppsClient(
+        None,
+        runner=lambda *a, **kw: subprocess.CompletedProcess([], 17, detail, ""),
+        sleep=lambda _: None,
+    )
+    with pytest.raises(AgentCliError) as raised:
+        client.deploy("agent-bricks-demo", "/Workspace/demo")
+    assert raised.value.failure_detail == detail
+    assert raised.value.subprocess_exit_code == 17

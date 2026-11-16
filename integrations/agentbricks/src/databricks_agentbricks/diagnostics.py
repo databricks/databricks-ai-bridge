@@ -29,6 +29,13 @@ class FailureStage(str, Enum):
     READY = "READY"
 
 
+class Readiness(str, Enum):
+    ANSWERED = "ANSWERED"
+    BOOTING = "BOOTING"
+    UNVERIFIABLE = "UNVERIFIABLE"
+    UNREACHABLE = "UNREACHABLE"
+
+
 @dataclass
 class CommandDiagnostics:
     failure_stage: FailureStage | None = None
@@ -36,6 +43,8 @@ class CommandDiagnostics:
     time_to_listen_ms: int | None = None
     prepare_environment: bool | None = None
     subprocess_exit_code: int | None = None
+    readiness: Readiness | None = None
+    probe_http_status: int | None = None
     _run_started: float | None = None
 
     def starting_local_agent(self) -> None:

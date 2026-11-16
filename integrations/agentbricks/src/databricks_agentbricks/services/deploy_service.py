@@ -37,6 +37,11 @@ from databricks_agentbricks.clients.app_probe import AppProbe, ProbeResult
 from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
 from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureStage,
+    Readiness,
+)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
@@ -299,17 +304,20 @@ class _RolledOut:
 class _PhaseTimer:
     """Wall-clock time per deploy phase, summed when a phase name repeats, for debug timings."""
 
-    def __init__(self) -> None:
+    def __init__(self, diagnostics: CommandDiagnostics) -> None:
+        self._diagnostics = diagnostics
         self._start = time.monotonic()
         self._phases: dict[str, float] = {}
 
     @contextmanager
-    def __call__(self, phase: str) -> Iterator[None]:
+    def __call__(self, phase: FailureStage) -> Iterator[None]:
         start = time.monotonic()
+        name = phase.value.lower()
         try:
-            yield
+            with self._diagnostics.phase(phase):
+                yield
         finally:
-            self._phases[phase] = self._phases.get(phase, 0.0) + time.monotonic() - start
+            self._phases[name] = self._phases.get(name, 0.0) + time.monotonic() - start
 
     def phases(self) -> list[tuple[str, float]]:
         return list(self._phases.items())
@@ -329,7 +337,7 @@ def _partial_app_note(name: str) -> str:
 def _unverified_note(detail: Optional[str]) -> str:
     """The note for an App that deployed but whose server this profile couldn't check."""
     reason = f": {detail.rstrip('.')}" if detail else ""
-    return f"Couldn't check the agent answers{reason}. It may return 502 for a few seconds."
+    return f"Couldn't check the agent answers{reason}. The deployment completed, but readiness is unverified."
 
 
 def _not_answering(name: str, last: ProbeResult) -> AgentCliError:
@@ -363,6 +371,7 @@ class DeployService:
         model_binding_provisioner: ModelBindingProvisioner,
         reporter: Reporter,
         state_tracker: Optional[DeployStateTracker] = None,
+        diagnostics: CommandDiagnostics | None = None,
         app_probe: Optional[AppProbe] = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
@@ -378,6 +387,7 @@ class DeployService:
         self._tool_access_provisioner = tool_access_provisioner
         self._model_binding_provisioner = model_binding_provisioner
         self._reporter = reporter
+        self._diagnostics = diagnostics or CommandDiagnostics()
         self._state_tracker = state_tracker
         self._app_probe = app_probe
         self._clock = clock
@@ -592,8 +602,8 @@ class DeployService:
             if not outcome.url:
                 unverified_detail = "the App has no URL"
             else:
-                probe = self._app_probe.probe(outcome.url)
-                if probe.outcome == "booting":
+                probe = self._probe(outcome.url)
+                if probe.outcome in ("booting", "unreachable"):
                     outcome = dataclasses.replace(
                         outcome, status=deploy_state.RUNNING, phase=deploy_state.READY_PHASE
                     )
@@ -663,9 +673,9 @@ class DeployService:
         provisioners own individual resource operations and return typed results for later phases.
         """
         self._rollout_outcome = None
-        timer = _PhaseTimer()
+        timer = _PhaseTimer(self._diagnostics)
         source_dir = pathlib.Path(request.source)
-        with timer("preflight"):
+        with timer(FailureStage.PREFLIGHT):
             prepared = self.prepare(request)
         tracker = self._state_tracker
         if tracker is not None:
@@ -690,14 +700,13 @@ class DeployService:
         timer: _PhaseTimer,
     ) -> DeployResult:
         """Everything after :meth:`prepare`: resources, the App, the rollout, and the grants."""
-        with timer("preflight"):
+        with timer(FailureStage.PREFLIGHT):
             memory_store_name, session_store_name, experiment_name = (
                 self._project_resolver.resource_bindings(source_dir)
             )
+            client = self._api_client_provider.get()
         name = prepared.name
         instance_count = request.instance_count
-        # The shared provider stays lazy through every local project/auth validation above.
-        client = self._api_client_provider.get()
         if self._state_tracker is not None:
             self._state_tracker.set_workspace(WorkspaceIdentity.from_client(client))
         ctx = ResourceContext(
@@ -711,7 +720,7 @@ class DeployService:
         )
         # Check bound stores before the early App create below. A workspace that opted out of the
         # store preview would otherwise fail at reconcile and keep an App with no deployment.
-        with timer("preflight"):
+        with timer(FailureStage.PREFLIGHT):
             self._memory_store_provisioner.preflight(ctx)
             self._session_store_provisioner.preflight(ctx)
         # Out of scope for the early compute start: a request-user App is created or updated
@@ -720,7 +729,7 @@ class DeployService:
         early_compute = prepared.auth_plan.scope_update is None
         created_app = False
         if early_compute:
-            with timer("app_start"):
+            with timer(FailureStage.APP_START):
                 # Reuse preflight's read only when it settled the question; an App known to exist
                 # but without a state read is read here, so it is never mistaken for a missing one.
                 app_state = (
@@ -759,11 +768,12 @@ class DeployService:
         )
         tool_plan, env = rollout.tool_plan, rollout.env
         if tool_plan is not None:
-            self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
+            with timer(FailureStage.ROLLOUT):
+                self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
 
         # 6. Grants remain best-effort. Resolve the App identity once and pass it with each
         #    reconciled store identifier; store clients need no knowledge of Apps.
-        with timer("grants"):
+        with timer(FailureStage.GRANTS):
             store_service_principal = (
                 self._apps_client.get_service_principal(name)
                 if memory.store_name
@@ -780,7 +790,7 @@ class DeployService:
             trace_grant = self._tracing_provisioner.grant(ctx, tracing)
             url = self._apps_client.get_app_url(name)
         # 7. Finish only once the App's server answers, so the first call after deploy works.
-        with timer("ready"):
+        with timer(FailureStage.READY):
             ready = self._wait_until_answering(name, url)
         for phase, seconds in timer.phases():
             self._reporter.timing(phase, seconds)
@@ -822,6 +832,13 @@ class DeployService:
             ready=ready,
         )
 
+    def _probe(self, url: str) -> ProbeResult:
+        assert self._app_probe is not None
+        result = self._app_probe.probe(url)
+        self._diagnostics.readiness = Readiness(result.outcome.upper())
+        self._diagnostics.probe_http_status = result.http_status
+        return result
+
     def _wait_until_answering(self, name: DeploymentName, url: Optional[str]) -> Optional[bool]:
         """Poll the rolled-out App until its server answers; None when it can't be checked.
 
@@ -832,19 +849,22 @@ class DeployService:
             return None
         try:
             if url is None:
+                self._diagnostics.readiness = Readiness.UNVERIFIABLE
                 raise _Unverifiable("the App has no URL")
-            result = self._app_probe.probe(url)
+            result = self._probe(url)
             if result.outcome == "unverifiable":
                 raise _Unverifiable(result.detail)
             started = self._clock()
             with self._reporter.progress(
                 f"{deploy_state.READY_PHASE}…", done_message="Agent answered"
             ):
-                while result.outcome == "booting":
+                while result.outcome in ("booting", "unreachable"):
                     if self._clock() - started >= _READY_TIMEOUT_S:
+                        if result.outcome == "unreachable":
+                            raise _Unverifiable(result.detail)
                         raise _not_answering(name, result)
                     self._sleep(_READY_POLL_S)
-                    result = self._app_probe.probe(url)
+                    result = self._probe(url)
                 if result.outcome == "unverifiable":
                     raise _Unverifiable(result.detail)
         except _Unverifiable as exc:
@@ -872,12 +892,12 @@ class DeployService:
         name = ctx.project.name
         # 1. Reconcile resources in the order shown to the developer. Each return value is owned by
         #    this deployment run and passed explicitly to later phases.
-        with timer("reconcile"):
+        with timer(FailureStage.RECONCILE):
             memory = self._memory_store_provisioner.reconcile(ctx)
             session = self._session_store_provisioner.reconcile(ctx)
             bindings = self._model_binding_provisioner.reconcile(ctx)
             tracing = self._tracing_provisioner.reconcile(ctx)
-        with timer("runtime_store"):
+        with timer(FailureStage.RUNTIME_STORE):
             runtime = self._runtime_store_provisioner.reconcile(ctx)
 
         # app.yaml has a stable, user-visible env order that differs from reconcile order.
@@ -904,7 +924,7 @@ class DeployService:
 
         # 2. Patch app.yaml with the initial env. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
-        with timer("app_yaml"):
+        with timer(FailureStage.APP_YAML):
             if env or env_removals or prepared.agent_project is not None:
                 AppManifest.upsert_env_file(
                     source_dir,
@@ -917,7 +937,7 @@ class DeployService:
         if not early_compute:
             # 3. A request-user App: ensure it exists and its compute is active. Create only when
             #    new; the compute wait runs every deploy.
-            with timer("app_ready"):
+            with timer(FailureStage.APP_READY):
                 deployment_exists = prepared.deployment_exists
                 if deployment_exists is None:
                     deployment_exists = self._apps_client.exists(name)
@@ -930,13 +950,13 @@ class DeployService:
 
         # 4. The Runtime Store may need the App's service principal. Its late manifest contribution
         #    is written here, after App creation and after the earlier env keys.
-        with timer("runtime_store"):
+        with timer(FailureStage.RUNTIME_STORE):
             runtime_late = self._runtime_store_provisioner.after_app_created(ctx, runtime)
             if not early_compute:
                 self._runtime_store_provisioner.attach_to_app(ctx, runtime)
         env.update(runtime_late.env)
         if runtime_late.env or runtime_late.env_removals:
-            with timer("app_yaml"):
+            with timer(FailureStage.APP_YAML):
                 AppManifest.upsert_env_file(
                     source_dir, runtime_late.env, list(runtime_late.env_removals)
                 )
@@ -944,16 +964,16 @@ class DeployService:
         # 5. Resolve the upload destination explicitly. With the compute booting, app.yaml is now
         #    final, so the upload runs before the join; a request-user App uploads after its tools.
         if early_compute:
-            with timer("sync"):
+            with timer(FailureStage.SYNC):
                 workspace_path = self._app_provisioner.resolve_workspace_path(
                     ctx, request.workspace_path
                 )
                 self._app_provisioner.sync_source(ctx, workspace_path)
             # The join: everything below updates the App or rolls out, which needs ACTIVE compute.
-            with timer("compute_wait"):
+            with timer(FailureStage.COMPUTE_WAIT):
                 self._app_provisioner.wait_for_compute(ctx)
 
-        with timer("app_update"):
+        with timer(FailureStage.APP_UPDATE):
             if early_compute:
                 self._runtime_store_provisioner.attach_to_app(ctx, runtime)
             # Direct tool grants must exist before the new source can use them. Delay removals and
@@ -966,12 +986,12 @@ class DeployService:
                 )
 
         if not early_compute:
-            with timer("sync"):
+            with timer(FailureStage.SYNC):
                 workspace_path = self._app_provisioner.resolve_workspace_path(
                     ctx, request.workspace_path
                 )
                 self._app_provisioner.sync_source(ctx, workspace_path)
-        with timer("rollout"):
+        with timer(FailureStage.ROLLOUT):
             self._app_provisioner.roll_out(ctx, workspace_path)
         return _RolledOut(
             ctx=ctx,
