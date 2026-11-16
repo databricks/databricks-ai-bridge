@@ -469,3 +469,32 @@ def test_cli_rejects_invalid_warm_pool_options_before_workspace_access(monkeypat
     result = CliRunner().invoke(agentbricks, ["deploy", "demo", *options])
     assert result.exit_code == 2, result.output
     client.assert_not_called()
+
+
+def test_publication_records_sandbox_placement(deployment):
+    d = deployment
+    d.service.deploy(d.request)
+    manifest = json.loads(d.storage[d.deployer.call_args.args[1]])
+    assert manifest["runtime_environment"] == "sandbox"
+
+
+def test_capacity_controls_are_hidden_from_help():
+    result = CliRunner().invoke(agentbricks, ["deploy", "--help"])
+    assert result.exit_code == 0
+    assert "--sandbox-warm-pool-size" in result.output
+    assert "--sandbox-max-" not in result.output
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--sandbox-max-sandboxes",
+        "--sandbox-max-concurrent-invocations",
+        "--sandbox-max-concurrent-preparations",
+        "--sandbox-max-pending-invocations",
+    ],
+)
+def test_capacity_overrides_require_sandbox(option):
+    result = CliRunner().invoke(agentbricks, ["deploy", "demo", option, "3"])
+    assert result.exit_code != 0
+    assert "--sandbox" in result.output

@@ -128,11 +128,10 @@ def test_invalid_entrypoint_is_rejected_before_source_download(client):
 def test_invocation_is_enqueued_and_returns_status_without_waiting_for_sandbox(client):
     app.state.control.create_run.return_value = {"id": "run-one", "status": "queued"}
     response = client.post(
-        "/api/runs",
+        "/api/invocations?agent_id=agent-one&view=workbench",
         json={
-            "agent_id": "agent-one",
             "session_id": "session-one",
-            "invocation_id": "call-one",
+            "id": "00000000-0000-0000-0000-000000000001",
             "input": {"message": "hello"},
         },
     )
@@ -145,7 +144,8 @@ def test_invocation_is_enqueued_and_returns_status_without_waiting_for_sandbox(c
 def test_completed_invocation_is_not_enqueued_again(client):
     app.state.control.create_run.return_value = {"id": "run-one", "status": "succeeded"}
     response = client.post(
-        "/api/runs", json={"agent_id": "a", "session_id": "s", "invocation_id": "i"}
+        "/api/invocations?agent_id=agent-one&view=workbench",
+        json={"session_id": "s", "id": "00000000-0000-0000-0000-000000000001"},
     )
     assert response.status_code == 202
     app.state.runs.submit.assert_not_called()
@@ -153,8 +153,9 @@ def test_completed_invocation_is_not_enqueued_again(client):
 
 def test_missing_run_returns_404(client):
     app.state.control.run.side_effect = KeyError("Invocation not found")
-    assert client.get("/api/runs/missing").status_code == 404
-    assert client.get("/api/runs/missing/events").status_code == 404
+    app.state.control._state.side_effect = KeyError("Invocation not found")
+    assert client.get("/api/invocations/missing").status_code == 404
+    assert client.get("/api/invocations/missing/events").status_code == 404
 
 
 def test_sse_replays_snapshots_and_final_result_without_launching_work(client):
@@ -169,7 +170,7 @@ def test_sse_replays_snapshots_and_final_result_without_launching_work(client):
     app.state.control.run.return_value = partial
     app.state.control.watch.side_effect = lambda run_id: iter([partial, partial, final])
     for _ in range(2):
-        response = client.get("/api/runs/run/events")
+        response = client.get("/api/invocations/run/events?view=workbench")
         assert response.headers["content-type"].startswith("text/event-stream")
         assert response.headers["x-accel-buffering"] == "no"
         rows = [
@@ -199,7 +200,7 @@ def test_cancelled_sse_subscriber_closes_its_database_iterator(client):
     app.state.control.watch.side_effect = watch
 
     async def consume():
-        response = run_events("run")
+        response = run_events("run", view="workbench")
         await anext(response.body_iterator)
         with CancelScope() as scope:
             scope.cancel()
@@ -224,16 +225,19 @@ def test_legacy_reasoning_display_is_consistent_across_history_poll_sse_and_repl
     app.state.control.run.return_value = final
     app.state.control.history.return_value = [final]
     app.state.control.create_run.return_value = final
-    app.state.environments.invoke.return_value = final
     app.state.control.watch.side_effect = lambda _: iter([partial, final])
-    assert client.get("/api/runs/run").json()["display_text"] == "Hello!"
-    assert client.get("/api/runs?agent_id=a&session_id=s").json()[0]["display_text"] == "Hello!"
-    payload = {"agent_id": "a", "session_id": "s", "invocation_id": "i"}
-    assert client.post("/api/runs", json=payload).json()["display_text"] == "Hello!"
+    assert client.get("/api/invocations/run?view=workbench").json()["display_text"] == "Hello!"
     assert (
-        client.post("/api/environments/demo/runs", json=payload).json()["display_text"] == "Hello!"
+        client.get("/api/invocations?agent_id=a&session_id=s").json()[0]["display_text"] == "Hello!"
     )
-    response = client.get("/api/runs/run/events")
+    payload = {"session_id": "s", "id": "00000000-0000-0000-0000-000000000001"}
+    assert (
+        client.post("/api/invocations?agent_id=agent-one&view=workbench", json=payload).json()[
+            "display_text"
+        ]
+        == "Hello!"
+    )
+    response = client.get("/api/invocations/run/events?view=workbench")
     rows = [
         json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")
     ]
@@ -430,22 +434,10 @@ def test_environment_creation_checks_source_access_before_saving_location(client
     )
 
 
-def test_environment_run_uses_stable_environment_identity_and_dispatcher(client):
-    app.state.environments.invoke.return_value = {"id": "run", "status": "queued"}
-    response = client.post(
-        "/api/environments/demo/runs",
-        json={
-            "session_id": "s",
-            "invocation_id": "i",
-            "input": {"message": "hi"},
-            "retry": True,
-        },
-    )
-    assert response.status_code == 202
-    app.state.environments.invoke.assert_called_once_with(
-        "demo", "s", "i", {"message": "hi"}, retry=True
-    )
-    app.state.runs.submit.assert_called_once_with("run")
+def test_legacy_invocation_routes_are_removed(client):
+    for path in ("/api/runs", "/api/environments/demo/runs", "/invoke"):
+        assert client.post(path, json={}).status_code == 404
+    app.state.orchestrator.invoke.assert_not_called()
 
 
 def test_duplicate_environment_returns_conflict(client):
@@ -577,7 +569,10 @@ def test_invoke_while_preparing_returns_conflict(client):
     from databricks_agentkit.sandbox.store import SessionBusy
 
     app.state.preparations.assert_invocable.side_effect = SessionBusy("Wait for preparation")
-    response = client.post("/api/runs", json={"agent_id": "revision", "session_id": "new"})
+    response = client.post(
+        "/api/invocations?agent_id=revision&view=workbench",
+        json={"id": "00000000-0000-0000-0000-000000000001", "session_id": "new"},
+    )
     assert response.status_code == 409
     app.state.control.create_run.assert_not_called()
 
@@ -617,8 +612,8 @@ def test_session_list_combines_compute_state_with_run_status_and_activity_time(c
 
 def test_preparation_events_deliver_terminal_snapshot_without_starting_work(client):
     rows = [
-        {"agent_id": "a", "session_id": "s", "status": "preparing"},
-        {"agent_id": "a", "session_id": "s", "status": "ready", "result": {"sandbox_id": "sb"}},
+        {"session_id": "s", "status": "preparing"},
+        {"session_id": "s", "status": "ready", "result": {"sandbox_id": "sb"}},
     ]
     app.state.preparations.watch.return_value = (row for row in rows)
     response = client.get("/api/agents/a/sessions/s/events")
@@ -637,3 +632,77 @@ def test_preparation_subscription_validates_agent_before_streaming(client):
     response = client.get("/api/agents/missing/sessions/s/events")
     assert response.status_code == 404
     app.state.preparations.watch.assert_not_called()
+
+
+def test_canonical_background_invocation_uses_existing_request_and_status_contract(client):
+    from databricks_agentkit.runtime.types import Invocation, InvocationStatus
+
+    invocation_id = "00000000-0000-0000-0000-000000000001"
+    app.state.control.create_run.return_value = {"id": invocation_id, "status": "queued"}
+    app.state.control._state.return_value = Invocation(
+        invocation_id, InvocationStatus.QUEUED, 0, {}, None
+    )
+    response = client.post(
+        "/api/invocations?agent_id=revision",
+        json={
+            "id": invocation_id,
+            "session_id": "s",
+            "input": [{"role": "user", "content": "hi"}],
+            "background": True,
+            "stream": True,
+        },
+    )
+    assert response.status_code == 202
+    assert response.json() == {
+        "id": invocation_id,
+        "status": "queued",
+        "status_url": f"/api/invocations/{invocation_id}",
+        "events_url": f"/api/invocations/{invocation_id}/events",
+    }
+    app.state.control.create_run.assert_called_once_with(
+        "revision", "s", invocation_id, [{"role": "user", "content": "hi"}], public_id=True
+    )
+    app.state.control._state.return_value = Invocation(
+        invocation_id, InvocationStatus.COMPLETED, 1, {}, {"reply": "hi"}
+    )
+    assert client.get(f"/api/invocations/{invocation_id}").json() == {
+        "id": invocation_id,
+        "status": "completed",
+        "output": {"reply": "hi"},
+    }
+
+
+def test_canonical_sse_preserves_durable_cursors_and_ephemeral_previews(client):
+    from types import SimpleNamespace
+
+    app.state.control.watch.return_value = iter(
+        [
+            {"id": "run", "status": "running", "stream": {"sequence": 1, "text": "hello"}},
+            {"id": "run", "status": "succeeded"},
+        ]
+    )
+    records = [
+        SimpleNamespace(sequence_number=4, event={"type": "sandbox.stage", "stage": "Running"}),
+        SimpleNamespace(sequence_number=5, event={"type": "run.completed"}),
+    ]
+    app.state.control.runtime_store.events.side_effect = [records[:1], records[1:]]
+    app.state.control.call.side_effect = lambda value: value
+    response = client.get("/api/invocations/run/events?after=3")
+    assert "id: 4\nevent: sandbox.stage" in response.text
+    assert "id: 5\nevent: run.completed" in response.text
+    assert "event: sandbox.preview\n" in response.text
+    assert app.state.control.runtime_store.events.call_args_list[0].kwargs == {"after_sequence": 3}
+    app.state.orchestrator.invoke.assert_not_called()
+
+
+def test_capacity_rejection_is_retryable_without_starting_work(client):
+    from databricks_agentkit.sandbox.limits import CapacityExceeded
+
+    app.state.control.create_run.side_effect = CapacityExceeded("Invocation queue is full")
+    response = client.post(
+        "/api/invocations?agent_id=a",
+        json={"id": "00000000-0000-0000-0000-000000000001", "background": True},
+    )
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "1"
+    app.state.runs.submit.assert_not_called()

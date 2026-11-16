@@ -2,7 +2,7 @@
 
 import hashlib
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -57,6 +57,18 @@ class SessionSandboxClient:
         self.registry, self.lakebox, self.namespace = registry, lakebox, namespace
         self._principal = None
         self.warm_pool = None
+        self.capacity = None
+
+    @contextmanager
+    def _reserve_compute(self, session, source_hash, sandbox_id, status, revision):
+        # Persist the reservation before releasing the deployment lock. The
+        # platform create/start and readiness wait run outside this lock.
+        guard = self.capacity.slot("allocation", 1) if self.capacity else nullcontext()
+        with guard:
+            if self.capacity:
+                self.capacity.check_sandboxes(self.lakebox, existing_id=sandbox_id)
+            self._save(session, source_hash, sandbox_id, status, revision)
+        yield
 
     def execution_principal(self):
         if self._principal is None:
@@ -153,18 +165,32 @@ class SessionSandboxClient:
                             raise RevisionConflict(
                                 "An earlier create had an ambiguous outcome; inspect the named sandbox before retrying"
                             )
-                        self._save(session, source_hash, None, "creating", source_revision)
-                        sandbox = self.lakebox.create(label)
+                        with self._reserve_compute(
+                            session, source_hash, None, "creating", source_revision
+                        ):
+                            sandbox = self.lakebox.create(label)
                         created = True
                     sandbox_id = sandbox["sandboxId"]
                     self._save(session, source_hash, sandbox_id, "bootstrapping", source_revision)
             self.lakebox.set_idle_timeout(sandbox_id)
+            resuming = sandbox.get("status", "").lower() != "running"
             with timed(metrics, "sandbox_resume"):
                 if sandbox.get("status", "").lower() != "running":
                     report("Resuming sandbox")
-                    sandbox = self.lakebox.start(sandbox_id)
+                    with self._reserve_compute(
+                        session, source_hash, sandbox_id, "resuming", source_revision
+                    ):
+                        sandbox = self.lakebox.start(sandbox_id)
                     if sandbox is None:
                         raise RuntimeError("Sandbox disappeared while starting")
+                if self.capacity and resuming:
+                    self._save(
+                        session,
+                        source_hash,
+                        sandbox_id,
+                        (row or {}).get("status") or "bootstrapping",
+                        source_revision,
+                    )
                 deadline = time.monotonic() + 240
                 while sandbox.get("status", "").lower() != "running":
                     if time.monotonic() >= deadline:

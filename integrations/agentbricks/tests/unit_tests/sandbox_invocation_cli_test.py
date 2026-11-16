@@ -52,11 +52,11 @@ def setup_cli(tmp_path, monkeypatch):
                     200,
                     {"default_agent_id": "agent-one", "default_environment": "revision-one"},
                 ),
-                ("POST", "/api/runs"): (
+                ("POST", "/api/invocations?agent_id=agent-one&view=workbench"): (
                     202,
                     {"id": "run", "status": "queued", "stage": "Queued"},
                 ),
-                ("GET", "/api/runs/run"): (
+                ("GET", "/api/invocations/run?view=workbench"): (
                     200,
                     {"id": "run", "status": "succeeded", "result": {"reply": "ok"}},
                 ),
@@ -89,15 +89,14 @@ def test_invoke_polls_background_run_and_sends_retry_identity(setup_cli):
     )
     assert result.exit_code == 0, result.output
     assert requests[1].body == {
-        "agent_id": "agent-one",
         "session_id": "s",
-        "invocation_id": "i",
+        "id": "i",
         "input": {"message": "hi"},
-        "retry": True,
+        "background": True,
     }
     assert requests[1].headers["X-Routing-Key"] == "s"
     setup_cli[1].apps.get.assert_called_once_with("agent-bricks-demo")
-    assert requests[-1].url.endswith("/api/runs/run")
+    assert requests[-1].url.endswith("/api/invocations/run?view=workbench")
     assert json.loads(result.output)["result"]["reply"] == "ok"
 
 
@@ -112,7 +111,7 @@ def test_missing_deployment_binding_does_not_submit_invocation(setup_cli):
 
 def test_failed_job_is_a_nonzero_cli_error_with_new_invocation_guidance(setup_cli):
     _, _, _, replies = setup_cli
-    replies["GET", "/api/runs/run"] = (
+    replies["GET", "/api/invocations/run?view=workbench"] = (
         200,
         {"id": "run", "status": "failed", "error": "uv install failed"},
     )
@@ -209,7 +208,7 @@ def test_lost_submission_response_reports_generated_id_for_safe_recovery(setup_c
     result = run("invoke", "demo", "--session-id", "s", "--json", "{}")
     assert result.exit_code != 0
     assert "--invocation-id generated-call-id" in result.output
-    assert requests[1].body["invocation_id"] == "generated-call-id"
+    assert requests[1].body["id"] == "generated-call-id"
 
 
 @pytest.mark.parametrize("subcommand", ["create", "prepare", "invoke", "get", "list", "ssh"])

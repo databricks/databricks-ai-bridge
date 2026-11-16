@@ -72,8 +72,8 @@ is `databricks_agentkit_runtime`. Agent revision, client session/invocation IDs 
 use the existing request JSON. Progress, lifecycle timing and the attempt-file descriptor
 use existing event JSON: `sandbox.stage`, `sandbox.lifecycle` and `sandbox.stream.ready`.
 Historical `sandbox.text.delta` events remain readable; new tokens stay on sandbox disk.
-Runtime IDs hash deployment/revision/client IDs; the Runtime Store session ID scopes FIFO
-to that deployment and revision. Recovery uses the existing `recovery_affinity` column.
+New API submissions use the caller's invocation UUID as the Runtime Store ID. The Runtime Store
+session ID scopes FIFO to the deployment and revision; historical hashed IDs remain readable. Recovery uses the existing `recovery_affinity` column.
 
 Sandbox mapping, source revision/hash, execution principal and preparation timings stay
 in the unchanged `sessions` table under the deployment's `SANDBOX_SCHEMA`. Source archives
@@ -86,10 +86,32 @@ remain usable. No automatic migration or destructive cleanup runs.
 
 Failed invocations remain terminal. Retrying a failed message submits a new invocation ID;
 a transport reconnect resubmits the same ID and input without repeating execution.
-The shared executor detects stale workers and claims a fenced recovery attempt, but the
-sandbox callback fails it with an explicit diagnostic instead of replaying arbitrary agent
-code. The previous remote operation may still be running; inspect it before retrying.
-Automatic sandbox/harness recovery remains future work.
+The shared executor detects a stale **App executor heartbeat** and claims a fenced recovery
+attempt. The service reconciler separately observes session sandbox state, without waking idle
+compute. Recovery follows the previous attempt file and reads its result journal if the same
+sandbox survives. The resident worker journals a result before replying, so losing an App reply
+need not lose a completed result. Missing, stopped, reassigned, or dead workers with no confirmed
+result fail without replaying arbitrary code or tools. Delayed, unstarted dispatch is revoked under
+the same file lock used by the worker. Restarting a stopped session for a **new** invocation follows
+the normal get-or-create path. Legacy attempts without a journal cannot be recovered automatically.
+
+This follows MAR's division between service-owned sandbox reconciliation and sandbox-owned agent
+execution. The prototype still claims durable invocations in the App; MAR's full sandbox runner
+pulls and claims them. It does not yet implement that placement or generic tool-safe replay.
+
+The canonical HTTP endpoint is `POST /api/invocations`, using the existing server's UUID `id`,
+`session_id`, `input`, `background`, and `stream` fields. GET status and SSE events use
+`/api/invocations/{id}` and `/api/invocations/{id}/events?after=CURSOR`. A deployment selects its
+default agent; the reusable workbench can pass `agent_id` in the query. The workbench uses an
+internal `view=workbench` projection for chat snapshots. Canonical SSE retains durable event IDs;
+`sandbox.preview` contains ephemeral text snapshots read directly through `ExecuteCommand(tail -F)`.
+The old `/api/runs` and environment invocation routes are removed. This matches AgentBricks'
+existing protocol and MAR's invocation concept, without claiming MAR's full wire contract.
+
+`AGENTBRICKS_RUNTIME_ENVIRONMENT` in deployed `app.yaml` records `sandbox` or `shared_compute`.
+The source manifest also records `runtime_environment: sandbox`; `/api/config` exposes it. Existing
+ordinary deployments without a marker are shared compute. Placement is deployment metadata;
+Runtime Store tables do not need new columns for it.
 
 Both managed-server templates (`agentbricks init --framework openai` and
 `--framework langgraph`) include `runtime.sandbox_entry:invoke`. These shims call

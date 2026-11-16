@@ -137,3 +137,9 @@ rather than imposing a generated template's payload.
 
 The wheelhouse experiment is not used by `deploy --sandbox`. Its legacy environment
 CLI commands are removed. Use source publication through `deploy --sandbox`.
+
+The warm-spare target is the public tuning control. Deployment-wide defaults also bound total
+running/starting sandboxes (64), executing invocations (16), installations/preparations (2), and
+accepted unfinished invocations (128). Hidden operator overrides are documented in the CLI
+reference; ordinary deployments retain their existing path unless `--sandbox` is selected.
+The sandbox API uses `/api/invocations` with the existing managed-server request fields.

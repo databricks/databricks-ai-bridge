@@ -52,6 +52,7 @@ class Runtime:
         self.preparations = {}
         self.preparation_posts = []
         self.posts = []
+        self.invocation_agents = []
         self.sandbox_reads = []
         self.stops = []
         self.status = {}
@@ -168,7 +169,7 @@ class Runtime:
                 for row in self.runs
                 if row["agent_id"] == path.split("/")[3]
             ]
-        elif path == "/api/runs" and body is None:
+        elif path == "/api/invocations" and body is None:
             if self.history_error:
                 data, status = {"detail": "History unavailable"}, 503
             else:
@@ -178,14 +179,15 @@ class Runtime:
                     if row["session_id"] == query["session_id"][0]
                     and row["agent_id"] == query["agent_id"][0]
                 ]
-        elif path in {"/api/runs", "/api/environments/support/runs"} and body:
+        elif path == "/api/invocations" and body:
             self.posts.append(copy.deepcopy(body))
+            self.invocation_agents.append(query["agent_id"][0])
             data = next(
                 (
                     row
                     for row in self.runs
                     if row["session_id"] == body["session_id"]
-                    and row["invocation_id"] == body["invocation_id"]
+                    and row["invocation_id"] == body["id"]
                 ),
                 None,
             )
@@ -196,9 +198,7 @@ class Runtime:
                     status="queued",
                     stage="Queued",
                 )
-                data.update(invocation_id=body["invocation_id"], input=body["input"])
-            elif body.get("retry") and data["status"] in {"failed", "interrupted"}:
-                data.update(status="queued", stage="Queued", error=None)
+                data.update(invocation_id=body["id"], input=body["input"])
             if self.ambiguous:
                 self.ambiguous = False
                 route.abort("failed")
@@ -213,7 +213,7 @@ class Runtime:
                     body="".join(f"event: run\ndata: {json.dumps(row)}\n\n" for row in self.events),
                 )
             return
-        elif path.startswith("/api/runs/"):
+        elif path.startswith("/api/invocations/"):
             data = next(row for row in self.runs if row["id"] == path.split("/")[3])
         elif path == "/sessions/stop":
             self.stops.append(body)
@@ -335,7 +335,7 @@ def test_model_choice_survives_uncertain_submission_reload_and_original_retry(ui
     page.wait_for_function("state.runs.length === 2 && state.runs[1].status === 'queued'")
     assert runtime.posts[1]["input"] == runtime.posts[0]["input"]
     assert runtime.posts[1]["input"]["model"] == "system.ai.gpt-5-mini"
-    assert runtime.posts[1]["invocation_id"] != runtime.posts[0]["invocation_id"]
+    assert runtime.posts[1]["id"] != runtime.posts[0]["id"]
 
 
 def test_model_discovery_failure_keeps_chat_available_and_can_reload_models(ui):
@@ -973,8 +973,8 @@ def test_failed_run_retry_creates_new_identity_and_retains_failed_history(ui):
     playwright.expect(page.locator("#retry-run")).to_have_text("Retry this invocation")
     page.locator("#retry-run").click()
     page.wait_for_function("state.runs.length === 2 && state.runs[1].status === 'queued'")
-    assert runtime.posts[0]["invocation_id"] != runtime.posts[1]["invocation_id"]
-    assert runtime.posts[1]["retry"] is False
+    assert runtime.posts[0]["id"] != runtime.posts[1]["id"]
+    assert runtime.posts[1]["background"] is True
     assert runtime.posts[0]["input"] == runtime.posts[1]["input"]
     runtime.complete(runtime.runs[-1], "Final reply")
     playwright.expect(
@@ -991,11 +991,11 @@ def test_uncertain_post_reconnect_and_reload_do_not_create_new_invocation(ui):
     open_page()
     send(page, "Potential side effect")
     playwright.expect(page.locator("#retry-run")).to_have_text("Reconnect this invocation")
-    invocation = runtime.posts[0]["invocation_id"]
+    invocation = runtime.posts[0]["id"]
     page.locator("#retry-run").click()
     page.wait_for_function("state.runs.length === 1 && state.busy")
-    assert [post["invocation_id"] for post in runtime.posts] == [invocation, invocation]
-    assert not any(post["retry"] for post in runtime.posts)
+    assert [post["id"] for post in runtime.posts] == [invocation, invocation]
+    assert all("retry" not in post for post in runtime.posts)
     assert len(runtime.runs) == 1
     page.reload()
     playwright.expect(page.locator("#chat-log .message.user")).to_have_count(1)
@@ -1201,7 +1201,7 @@ def test_generic_revision_selection_and_legacy_scope(ui):
     )
     send(page)
     page.wait_for_function("state.runs.length === 1")
-    assert runtime.posts[0]["agent_id"] == "new-agent"
+    assert runtime.invocation_agents == ["new-agent"]
 
 
 def test_normalized_workspace_links_and_unsafe_host(ui):
@@ -1233,8 +1233,8 @@ def test_uncertain_failed_retry_reconnect_cannot_requeue_again(ui):
     page.locator("#retry-run").click()
     playwright.expect(page.locator("#retry-run")).to_have_text("Retry this invocation")
     assert len(runtime.runs) == 2
-    assert [post["retry"] for post in runtime.posts] == [False, False]
-    assert len({post["invocation_id"] for post in runtime.posts}) == 1
+    assert all("retry" not in post for post in runtime.posts)
+    assert len({post["id"] for post in runtime.posts}) == 1
 
 
 def test_stop_timeout_is_unconfirmed_and_reconnect_only_reads(ui):
@@ -1785,7 +1785,7 @@ def test_selecting_session_keeps_sidebar_rows_scroll_and_focus_while_history_loa
     original = button.element_handle()
     scroll_top = page.locator("#session-list").evaluate("element => element.scrollTop")
     held = []
-    page.route("**/api/runs?*", lambda route: held.append(route))
+    page.route("**/api/invocations?*", lambda route: held.append(route))
     button.click()
     page.wait_for_function("state.loading")
     assert original.evaluate("element => element.isConnected")

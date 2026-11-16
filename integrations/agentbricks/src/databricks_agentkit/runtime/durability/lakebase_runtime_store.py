@@ -533,6 +533,26 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             )
         return self._to_invocation(row) if row is not None else None
 
+    async def count_pending_invocations(self, *, request_filter: JsonObject | None = None) -> int:
+        """Count all unfinished records without a bounded history query."""
+        predicates = ["status IN ('QUEUED', 'ACTIVE')"]
+        parameters = {}
+        for index, (key, value) in enumerate((request_filter or {}).items()):
+            predicates.append(f"request -> :key{index} = CAST(:value{index} AS JSONB)")
+            parameters[f"key{index}"] = key
+            parameters[f"value{index}"] = _serialize_json_value(value)
+        async with self._engine.connect() as connection:
+            return int(
+                (
+                    await connection.execute(
+                        text(
+                            f"SELECT COUNT(*) FROM {self._table} WHERE {' AND '.join(predicates)}"
+                        ),
+                        parameters,
+                    )
+                ).scalar_one()
+            )
+
     async def list_invocations(
         self,
         *,

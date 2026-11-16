@@ -404,3 +404,27 @@ def test_prepared_attachment_checks_disk_and_live_worker_without_initializing(
         assert result["worker"]["invocation_count"] == 0
     if invalid != "used":
         assert not (tmp_path / "session/count").exists()
+
+
+def test_lost_controller_reply_leaves_result_journal_without_reexecution(worker):
+    process, stream = worker(invocation="lost-reply", action="sleep", wait=False)
+    started = Path(str(stream) + ".started.json")
+    deadline = time.monotonic() + 10
+    while not started.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    process.kill()
+    process.wait(timeout=5)
+    process.stdout.close()
+    process.stderr.close()
+    result_path = Path(str(stream) + ".result.json")
+    while not result_path.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    response = json.loads(result_path.read_text())["response"]
+    assert response["ok"] is True
+    assert response["result"]["disk"] == 1
+    duplicate = worker(invocation="lost-reply")
+    assert duplicate[0] != 0
+    assert json.loads(result_path.read_text())["response"] == response
+    assert (stream.parent.parent / "count").read_text() == "1"

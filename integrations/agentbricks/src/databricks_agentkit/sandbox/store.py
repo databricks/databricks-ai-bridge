@@ -134,6 +134,31 @@ class Registry:
                 (self.namespace,),
             ).fetchall()
 
+    def mapping_page(self, *, after="", limit=100):
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM sessions WHERE namespace=%s AND session_key>%s "
+                "ORDER BY session_key LIMIT %s",
+                (self.namespace, after, limit),
+            ).fetchall()
+
+    def observe(self, row, status):
+        from psycopg.types.json import Jsonb
+
+        with self.connect() as db:
+            db.execute(
+                "UPDATE sessions SET bootstrap_metrics=COALESCE(bootstrap_metrics, '{}'::jsonb) || %s "
+                "WHERE namespace=%s AND session_key=%s AND sandbox_id=%s "
+                "AND bootstrap_metrics->>'observed_status' IS DISTINCT FROM %s",
+                (
+                    Jsonb({"observed_status": status}),
+                    self.namespace,
+                    row["session_key"],
+                    row["sandbox_id"],
+                    status,
+                ),
+            )
+
     def execution_principals(self):
         with self.connect() as db:
             return [
