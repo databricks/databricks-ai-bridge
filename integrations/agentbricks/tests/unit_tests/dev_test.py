@@ -12,11 +12,144 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import dev as dev_mod
+from databricks_agentbricks.cli import telemetry
+from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
+from databricks_agentbricks.clients.output_tail import OutputTail
+from databricks_agentbricks.diagnostics import FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
+
+
+@pytest.mark.parametrize("listened", [False, True])
+@pytest.mark.parametrize("existing_venv", [False, True])
+@pytest.mark.parametrize("output_stream", ["stderr", "stdout"])
+def test_dev_failure_text_omits_internal_startup_and_environment_facts(
+    tmp_path, monkeypatch, listened, existing_venv, output_stream
+):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    if existing_venv:
+        (tmp_path / ".venv").mkdir()
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
+    )
+
+    def failed_child(*args, on_ready, **kwargs):
+        if listened:
+            on_ready()
+        streams = {"stdout": "", "stderr": " \n\t"}
+        streams[output_stream] = "ModuleNotFoundError: missing_module\ntoken=synthetic-secret"
+        return subprocess.CompletedProcess(["databricks"], 17, **streams)
+
+    monkeypatch.setattr(dev_mod, "_databricks", failed_child)
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    log, facts = records[0]
+    assert "diagnostics" not in log
+    assert facts.app_listened is listened
+    assert facts.prepare_environment is not existing_venv
+    assert facts.subprocess_exit_code == 17
+    assert facts.failure_stage == FailureStage.RUN_LOCAL
+    assert "ModuleNotFoundError: missing_module" in log["failure_message"]
+    assert "synthetic-secret" not in str(records)
+    assert (facts.time_to_listen_ms is not None) is listened
+    assert str(tmp_path) not in str(records)
+
+
+@pytest.mark.parametrize("busy_port", [False, True])
+def test_dev_preflight_failure_has_configuration_category(tmp_path, monkeypatch, busy_port):
+    if busy_port:
+        (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+        monkeypatch.setattr(dev_mod, "port_in_use", lambda port: True)
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
+    )
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    log, facts = records[0]
+    assert "diagnostics" not in log
+    assert facts.app_listened is False
+    assert facts.failure_stage == FailureStage.PROJECT
+    assert log["error_category"] == "ERROR_CATEGORY_CONFIGURATION"
+    assert log["failure_message"]
+    assert "failure_reason" not in log
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"-----BEGIN PRIVATE KEY-----\n"
+        + b"synthetic-key-body\n" * 400
+        + b"-----END PRIVATE KEY-----\n",
+        b"credentials = {\n" + b" \n" * 2000 + b'"value": "synthetic-key-body"\n}\n',
+        b"password:\n" + b"\n" * 4000 + b"  synthetic-key-body\nstartup failed\n",
+        b"--password\n" + b"\n" * 4000 + b"  synthetic-key-body\nstartup failed\n",
+        b"progress\n" * 1000 + b"Missing dependency\n",
+        b"-----BEGIN PRIVATE KEY-----\nsynthetic-key-body\n-----END PRIVATE KEY-----\n",
+        b"--password\nsynthetic-key-body\n",
+    ],
+)
+def test_dev_telemetry_omits_overflow_and_scrubs_complete_output(tmp_path, monkeypatch, output):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    tail = OutputTail()
+    for offset in range(0, len(output), 31):
+        tail.append(output[offset : offset + 31])
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(telemetry._build_log(ctx, **kw).to_dict()),
+    )
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *a, **kw: subprocess.CompletedProcess(["databricks"], 1, stderr=tail.text()),
+    )
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    assert "synthetic-key-body" not in str(records)
+    assert "Missing dependency" not in records[0]["failure_message"]
+    assert "[REDACTED]" in records[0]["failure_message"]
+
+
+def test_dev_keeps_listening_milestone_when_interrupted(tmp_path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    records = []
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kw: records.append(
+            (telemetry._build_log(ctx, **kw).to_dict(), ctx.find_root().obj.diagnostics)
+        ),
+    )
+
+    def interrupted_child(*args, on_ready, **kwargs):
+        on_ready()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dev_mod, "_databricks", interrupted_child)
+    result = CliRunner().invoke(agentbricks, ["dev", "--source", str(tmp_path)])
+    assert result.exit_code == 1
+    assert len(records) == 1
+    log, facts = records[0]
+    assert log["error_category"] == "ERROR_CATEGORY_INTERRUPTED"
+    assert facts.app_listened is True
+    assert "diagnostics" not in log
+    assert "failure_message" not in log
 
 
 def _write_agent_manifest(

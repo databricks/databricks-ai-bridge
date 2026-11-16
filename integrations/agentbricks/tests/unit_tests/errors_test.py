@@ -12,9 +12,10 @@ from databricks_agentbricks.errors import AgentCliError, wrap_api_error
 
 @pytest.fixture(autouse=True)
 def _reset_output_mode():
-    # Keep the process-global output mode from leaking between tests.
+    # Keep the process-global output modes from leaking between tests, including the line-level one.
     yield
     errors.set_output_mode("text")
+    errors.set_usage_output_mode(None)
 
 
 def test_error_renders_json_object_in_json_mode(capsys):

@@ -37,6 +37,23 @@ def set_output_mode(mode: str) -> None:
     _OUTPUT_MODE = mode
 
 
+# The last `-o/--output` value on the raw command line, if any. Usage errors and unknown-command
+# errors can fire before any callback runs, so their rendering consults this line-level hint first
+# and falls back to the parsed `_OUTPUT_MODE`.
+_USAGE_OUTPUT_MODE: Optional[str] = None
+
+
+def set_usage_output_mode(mode: Optional[str]) -> None:
+    """Record the raw command line's `-o/--output` value, if any, for error rendering."""
+    global _USAGE_OUTPUT_MODE
+    _USAGE_OUTPUT_MODE = mode
+
+
+def error_output_mode() -> str:
+    """The mode errors render in: the line's `-o/--output` if given, else the parsed mode."""
+    return _USAGE_OUTPUT_MODE or _OUTPUT_MODE
+
+
 _PREVIEW_HINT = (
     "These 2.0 agents APIs are in preview and gated per workspace. This handler is "
     "not enabled on the target workspace yet — try a different --profile or contact "
@@ -58,14 +75,24 @@ class AgentCliError(click.ClickException):
     """A user-facing CLI error rendered without a Python traceback."""
 
     def __init__(
-        self, message: str, *, error_code: Optional[str] = None, hint: Optional[str] = None
+        self,
+        message: str,
+        *,
+        error_code: Optional[str] = None,
+        hint: Optional[str] = None,
+        error_category: str | None = None,
+        subprocess_exit_code: int | None = None,
+        failure_detail: str | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
+        self.error_category = error_category
+        self.subprocess_exit_code = subprocess_exit_code
+        self.failure_detail = failure_detail
 
     def show(self, file=None) -> None:
-        if _OUTPUT_MODE == "json":
+        if error_output_mode() == "json":
             payload: dict = {"message": self.message}
             if self.error_code:
                 payload["code"] = self.error_code

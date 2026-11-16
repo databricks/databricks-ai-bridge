@@ -1,10 +1,10 @@
 """Decide whether AgentBricksReviewer may auto-approve a PR.
 
-The decision combines the review's findings/coverage score and independent
-change-risk classification with deterministic path, component, and size checks.
+Approval uses the review's findings/coverage score and deterministic path and
+size checks. Change-risk classification is reported independently as advisory.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N]
-       [--max-lines N] [--max-risk {low,medium}]
+       [--max-lines N]
 Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
 """
 
@@ -29,7 +29,6 @@ RISK_RATIONALE = re.compile(r"^\*\*Risk rationale:\*\*[ \t]*(?P<text>[^\r\n]*)$"
 RISK_LEVELS = ("low", "medium", "high")
 RISK_NAMES = {"medium": "MODERATE"}
 RISK_VALUES = {"LOW": "low", "MODERATE": "medium", "HIGH": "high", "UNRATED": "unrated"}
-AUTO_APPROVE_RISK_LEVELS = ("low", "medium")
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -149,7 +148,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
     elif len(files) > 10:
         floor("medium", "the change exceeds 10 paths")
     if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
-        floor("high", "binary changes need human review")
+        floor("high", "binary changes have high risk")
     return {
         "level": level, "label": f"risk:{level}", "model_level": model_level,
         "reasons": list(dict.fromkeys(reasons)),
@@ -157,9 +156,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
 
 
 def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
-           paths: list[str] | None = None, max_risk: str = "medium") -> dict:
-    if max_risk not in AUTO_APPROVE_RISK_LEVELS:
-        raise ValueError(f"max_risk must be one of: {', '.join(AUTO_APPROVE_RISK_LEVELS)}")
+           paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
     summary = REVIEW_SCORE.search(review)
@@ -192,12 +189,9 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 500,
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
     risk = assess_change_risk(review, files, lines, diff)
-    if risk["level"] == "unrated" or RISK_LEVELS.index(risk["level"]) > RISK_LEVELS.index(max_risk):
-        allowed = RISK_NAMES.get(max_risk, max_risk.upper())
-        reasons.append(f"change risk is {risk['level']}; automatic approval allows up to {allowed} risk")
 
     return {"review_passed": not review_reasons, "review_reasons": review_reasons,
-            "approve": not reasons, "reasons": reasons, "risk": risk, "max_risk": max_risk}
+            "approve": not reasons, "reasons": reasons, "risk": risk}
 
 
 FINDING_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Non-blocking notes", "Uncertain findings")
@@ -230,10 +224,14 @@ def _group_reasons(reasons: list[str]) -> tuple[dict[str, list[str]], list[str]]
     return groups, other
 
 
+def _risk_raised(risk: dict) -> bool:
+    return risk["model_level"] != risk["level"]
+
+
 def unblock_steps(decision: dict) -> list[str]:
     """What the author can do about each reason auto-approval was refused."""
     groups, other = _group_reasons(decision["reasons"])
-    in_risk, _ = _group_reasons(decision["risk"]["reasons"])
+    in_risk, _ = _group_reasons(decision["risk"]["reasons"]) if _risk_raised(decision["risk"]) else ({}, [])
     steps: list[str] = []
     open_sections = [match[1].lower() for r in other if (match := re.match(r'"(.+)" is not empty', r))]
     low_score = next((match for r in other if (match := re.match(r"review score \d+/100 is below (\d+)", r))), None)
@@ -250,16 +248,71 @@ def unblock_steps(decision: dict) -> list[str]:
     for kind, paths in groups.items():
         listed = "see **Risk**" if kind in in_risk else _code_list(paths)
         steps.append(f"{kind} can't be auto-approved; move them to a separate PR ({listed}).")
-    if any(r.startswith("change risk is ") for r in other):
-        level = decision["risk"]["level"]
-        maximum = RISK_NAMES.get(decision["max_risk"], decision["max_risk"].upper())
-        steps.append(f"Lower the change risk to {maximum} or below "
-                     f"(it's {RISK_NAMES.get(level, level.upper())}; see **Risk**).")
     return steps
 
 
-def overview(review: str, decision: dict) -> str:
-    """The top of the PR comment: score and risk, findings, risk items, and how to unblock approval."""
+def short_locations(locations: list[str]) -> dict[str, str]:
+    """Each `path:line` shortened to the fewest trailing path parts that tell the files apart."""
+    paths = {location.rsplit(":", 1)[0] for location in locations if ":" in location}
+
+    def suffix(path: str, depth: int) -> str:
+        return "/".join(path.split("/")[-depth:])
+
+    short = {}
+    for path in paths:
+        depth = 1
+        while depth < path.count("/") + 1 and any(
+            other != path and suffix(other, depth) == suffix(path, depth) for other in paths
+        ):
+            depth += 1
+        short[path] = suffix(path, depth)
+    return {location: short[location.rsplit(":", 1)[0]] + ":" + location.rsplit(":", 1)[1]
+            for location in locations if ":" in location}
+
+
+def _finding_lines(finding: dict, short: dict[str, str]) -> list[str]:
+    """One finding as a headline, with its details only when it isn't shown inline.
+
+    The location links to the inline comment when there is one, else to the lines
+    at the reviewed commit, so the full path stays one click away.
+    """
+    location = finding.get("location") or ""
+    where = ""
+    if location:
+        label = f"`{short.get(location, location)}`"
+        link = finding.get("url") if finding.get("inline") else finding.get("file_url")
+        where = f" · [{label}]({link})" if link else f" · {label}"
+    head = f"- **{finding.get('severity') or 'Finding'}**{where} — {finding.get('title') or 'see the full review'}"
+    if finding.get("inline"):
+        return [head]
+    lines = [head]
+    if finding.get("problem"):
+        lines.append(f"  {finding['problem']}")
+    if finding.get("fix"):
+        lines.append(f"  **Fix:** {finding['fix']}")
+    if finding.get("evidence"):
+        lines.append(f"  <sub>{finding['evidence']}</sub>")
+    return lines
+
+
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(])")
+
+
+def approach_parts(review: str) -> tuple[str, str]:
+    """The Approach section's first sentence, and the rest of it."""
+    approach = (section_body(review, "Approach") or "").strip()
+    # A following "**Review rules:** …" line isn't a heading, so stop at it explicitly.
+    approach = re.split(r"^\*\*[^*\n]+:\*\*", approach, maxsplit=1, flags=re.MULTILINE)[0].strip()
+    first = SENTENCE_END.split(approach, 1)[0]
+    return first.strip(), approach[len(first) :].strip()
+
+
+def overview(review: str, decision: dict, findings: list[dict] | None = None) -> str:
+    """The top of the PR comment: score and risk, findings, risk, and how to unblock approval.
+
+    With findings from the inline step, each finding is one headline, linked to its
+    inline comment when it has one; without them, finding sections are shown as written.
+    """
     risk = decision["risk"]
     risk_name = RISK_NAMES.get(risk["level"], risk["level"].upper())
     score = REVIEW_SCORE.search(review)
@@ -267,27 +320,34 @@ def overview(review: str, decision: dict) -> str:
             if score else "**Review score:** unavailable")
     lines = [f"{head} · **Change risk:** {risk_name} · `{risk['label']}`", "", "### Summary", ""]
 
-    findings = [(title, body) for title in FINDING_SECTIONS
-                if (body := section_body(review, title)) and body.rstrip(".").strip().lower() != "none"]
-    if findings:
-        for title, body in findings:
-            lines += [f"**{title}**", body, ""]
+    if findings is not None:
+        short = short_locations([f.get("location") or "" for f in findings])
+        for title in FINDING_SECTIONS:
+            in_section = [f for f in findings if f.get("section") == title]
+            if in_section:
+                lines += [f"**{title}**"] + [line for f in in_section for line in _finding_lines(f, short)] + [""]
+        if not findings:
+            lines += ["No findings.", ""]
     else:
-        lines += ["No findings.", ""]
-    approach = section_body(review, "Approach")
+        sections = [(title, body) for title in FINDING_SECTIONS
+                    if (body := section_body(review, title)) and not section_is_empty(body)]
+        for title, body in sections:
+            lines += [f"**{title}**", body, ""]
+        if not sections:
+            lines += ["No findings.", ""]
+    approach, more = approach_parts(review)
     if approach:
-        lines += ["**Approach:** " + approach.split("\n\n", 1)[0].strip(), ""]
+        lines += ["**Approach:** " + approach + (" More in **Details**." if more else ""), ""]
 
     lines += ["### Risk", ""]
     rationale = re.search(r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review, re.MULTILINE | re.DOTALL)
     lines.append(rationale[1].strip() if rationale else "The reviewer gave no risk rationale.")
-    groups, other = _group_reasons(risk["reasons"])
-    items = [f"{kind}: {_code_list(paths)}" for kind, paths in groups.items()] + other
-    if items:
-        if risk["model_level"] != risk["level"]:
-            model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
-            lines += ["", f"CI raised the reviewer's {model_name} to {risk_name}:"]
-        lines += [""] + ["- " + item for item in items]
+    # CI's risk factors matter to the reader only when they changed the reviewer's level.
+    if _risk_raised(risk):
+        groups, other = _group_reasons(risk["reasons"])
+        items = [f"{kind}: {_code_list(paths)}" for kind, paths in groups.items()] + other
+        model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
+        lines += ["", f"CI raised the reviewer's {model_name} to {risk_name}:", ""] + ["- " + item for item in items]
 
     lines += ["", "### AI approval", ""]
     label = "Review checks passed (`ai-approved`)" if decision["review_passed"] else "Review checks not passed"
@@ -300,15 +360,34 @@ def overview(review: str, decision: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+DIFF_SHARE_NOTE = re.compile(r"^Shares use additions \+ deletions.*?(?:\n\n|\Z)", re.MULTILINE | re.DOTALL)
+
+
+def details(review: str) -> str:
+    """What the overview leaves out: the rest of the approach, rules checked, diff size, changes, tests, and scope."""
+    parts = []
+    first, more = approach_parts(review)
+    if more:
+        parts.append(f"**Approach:** {first} {more}")
+    rules = re.search(r"^\*\*Review rules:\*\*.*$", review, re.MULTILINE)
+    if rules:
+        parts.append(rules[0])
+    summary = re.search(r"^## Summary\s*$", review, re.MULTILINE)
+    if summary:
+        parts.append(DIFF_SHARE_NOTE.sub("", review[summary.end() :]).strip())
+    return "\n\n".join(parts) + "\n" if parts else ""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--review", required=True, type=Path)
     parser.add_argument("--diff", required=True, type=Path)
     parser.add_argument("--min-score", type=int, default=95)
     parser.add_argument("--max-lines", type=int, default=500)
-    parser.add_argument("--max-risk", choices=AUTO_APPROVE_RISK_LEVELS, default="medium")
     parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
     parser.add_argument("--overview", type=Path, help="Write the top of the PR comment: summary, risk, and approval")
+    parser.add_argument("--findings", type=Path, help="Findings JSON from agentbricks_inline_comments.py, if it ran")
+    parser.add_argument("--details", type=Path, help="Write the collapsed details: rules checked, diff size, tests")
     args = parser.parse_args(argv)
     review = args.review.read_text(encoding="utf-8")
     result = decide(
@@ -317,10 +396,17 @@ def main(argv: list[str] | None = None) -> int:
         min_score=args.min_score,
         max_lines=args.max_lines,
         paths=json.loads(args.paths.read_text()) if args.paths else None,
-        max_risk=args.max_risk,
     )
+    findings = None
+    if args.findings and args.findings.is_file():
+        try:
+            findings = json.loads(args.findings.read_text(encoding="utf-8"))
+        except ValueError as error:
+            print(f"::warning::Ignoring unreadable findings file: {error}", file=sys.stderr)
     if args.overview:
-        args.overview.write_text(overview(review, result))
+        args.overview.write_text(overview(review, result, findings))
+    if args.details:
+        args.details.write_text(details(review))
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0

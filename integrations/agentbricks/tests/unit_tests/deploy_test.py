@@ -49,6 +49,8 @@ from databricks_agentbricks.services.deployment.config import (
 )
 from databricks_agentbricks.services.deployment.names import DeploymentName
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 class _FakeApiClient:
     host = "https://workspace.example"
@@ -83,7 +85,6 @@ def _result(*, deployment: str = "agent-bricks-demo") -> DeployResult:
         memory_grant_attempted=False,
         session_grant_attempted=False,
         tool_access=None,
-        created_app_yaml=False,
         pip_index_url=None,
         instance_count=None,
         uses_runtime_api=True,
@@ -247,13 +248,13 @@ def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
     )
 
 
-def test_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
-    scaffolded = AppManifest.upsert_env_file(tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"})
+def test_manifest_env_refuses_to_create_a_missing_app_yaml(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").unlink()
 
-    assert scaffolded is True
-    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
-    assert {"name": "AGENT_MEMORY_STORE", "value": "memory-stores/x"} in doc["env"]
-    assert "command" in doc
+    with pytest.raises(AgentCliError, match="No app.yaml in"):
+        AppManifest.upsert_env_file(tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"})
+
+    assert not (tmp_path / "app.yaml").exists()
 
 
 def test_manifest_env_updates_existing_and_preserves_command(tmp_path: pathlib.Path):
@@ -266,11 +267,8 @@ def test_manifest_env_updates_existing_and_preserves_command(tmp_path: pathlib.P
         )
     )
 
-    scaffolded = AppManifest.upsert_env_file(
-        tmp_path, {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"}
-    )
+    AppManifest.upsert_env_file(tmp_path, {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"})
 
-    assert scaffolded is False
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert doc["command"] == ["uvicorn", "app:app"]
     assert {entry["name"]: entry["value"] for entry in doc["env"]} == {
@@ -303,11 +301,6 @@ def test_manifest_env_drops_value_from_invalid_entries_and_removals(tmp_path: pa
 
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
-
-
-def test_manifest_removal_only_does_not_scaffold_missing_file(tmp_path: pathlib.Path):
-    assert AppManifest.upsert_env_file(tmp_path, {}, removals=["MLFLOW_EXPERIMENT_ID"]) is False
-    assert not (tmp_path / "app.yaml").exists()
 
 
 def test_managed_runtime_store_is_the_internal_default():
@@ -859,29 +852,13 @@ def test_real_cli_deploy_custom_server_persists_name_and_skips_runtime_store(
         event[0] in {"memory.create", "session.create", "runtime.create", "trace.ensure"}
         for event in events
     )
-    if expected_index is None:
-        assert not (tmp_path / "app.yaml").exists()
-    else:
-        env = {
-            entry["name"]: entry["value"]
-            for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
-        }
-        assert env["PIP_INDEX_URL"] == expected_index
-        assert env["UV_INDEX_URL"] == expected_index
-        assert env["UV_DEFAULT_INDEX"] == expected_index
-    assert all(
-        not key.startswith("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_")
-        for key in (
-            {
-                entry["name"]: entry["value"]
-                for entry in AppManifest.parse_lenient(
-                    (tmp_path / "app.yaml").read_text()
-                ).raw_env()
-            }
-            if (tmp_path / "app.yaml").exists()
-            else {}
-        )
-    )
+    env = {
+        entry["name"]: entry["value"]
+        for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
+    }
+    for key in ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"):
+        assert env.get(key) == expected_index
+    assert not any(key.startswith("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_") for key in env)
 
 
 def test_real_cli_deploy_without_agent_manifest_still_rolls_out_source(
