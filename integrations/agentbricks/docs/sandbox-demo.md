@@ -102,11 +102,10 @@ After editing agent source, repeat `deploy --sandbox`. After changing AgentKit
 or its adapters, build a new wheel into `vendor/`, update the dependency/lock with
 `uv add`, and redeploy. The project wheel is a development artifact, not an image.
 Use a new chat for the new revision; older sessions remain pinned to their source.
-Use the actual App/environment/session identifiers returned by the UI/deploy for:
+Use the actual App/session identifiers returned by the UI/deploy for:
 
 ```sh
-agentbricks -p DEFAULT environment ssh ENVIRONMENT \
-  --app agent-bricks-sb-demo --session-id SESSION
+agentbricks -p DEFAULT deployments ssh sb-demo --session-id SESSION
 ```
 
 The developer needs `CAN_MANAGE` on the App. This is a terminal bridge to an

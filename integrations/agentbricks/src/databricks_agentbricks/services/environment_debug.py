@@ -60,7 +60,7 @@ def connect(launcher, environment, session_id, *, command=None):
         from websockets.sync.client import connect as websocket_connect
     except ImportError as exc:
         raise AgentCliError(
-            "Install databricks-agentbricks[sandbox] to use environment ssh."
+            "Install databricks-agentbricks[sandbox] to use deployments ssh."
         ) from exc
 
     url = websocket_url(launcher, environment)

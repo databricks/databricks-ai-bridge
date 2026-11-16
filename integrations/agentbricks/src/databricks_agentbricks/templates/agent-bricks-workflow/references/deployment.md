@@ -83,8 +83,8 @@ before the first message. Direct API/CLI invocation retains lazy preparation;
 later turns in that session reuse it. Use `--sandbox` on redeploy and retain the same
 App and Workspace root to keep earlier revisions and session mappings available.
 Deploy prints the agent URL and next steps; use global `--output json` for machine-readable results.
-The environment name in JSON deploy output is internal revision metadata, useful for debug
-commands below. The environment group provides inspection, invocation and debugging; environment create is removed.
+Source revision identifiers in deploy JSON are internal metadata. Use `agentbricks invoke APP`
+for invocation and `agentbricks deployments ssh APP` for debugging; neither needs a revision name.
 Use `--sandbox-idle-timeout SECONDS` to configure Lakebox idle shutdown (default 900,
 range 60–86400). Existing sandboxes adopt the policy on their next prepare/invoke after
 redeploy; the resident worker has no separate idle timer.
@@ -115,8 +115,8 @@ retains that disk; deleting or replacing it loses SQLite history. Deployment rec
 declared session and tracing resources and the App's grants. A provisioning failure
 must be resolved or reported; do not silently substitute another managed store.
 
-For an environment deployed with the sandbox prototype, use
-`agentbricks environment ssh ENV --app APP --session-id SESSION` to open its existing
+For an agent deployed with the sandbox prototype, use
+`agentbricks deployments ssh APP --session-id SESSION` to open its existing
 session sandbox. The installed CLI must include the `sandbox` extra. The developer needs
 workspace OAuth and `CAN_MANAGE` on that App; chat access alone is insufficient.
 Finish session preparation or send the first message before connecting. The shell resumes stopped compute
@@ -135,6 +135,5 @@ rather than imposing a generated template's payload.
 
 ### Historical sandbox execution-artifact experiment
 
-The wheelhouse experiment is not used by `deploy --sandbox`. Existing artifact manifests can
-still be retried with `environment prepare` and served with `deploy --environment`; the creation
-command has been removed. Refer to the runtime notes for historical behavior and limitations.
+The wheelhouse experiment is not used by `deploy --sandbox`. Its legacy environment
+CLI commands are removed. Use source publication through `deploy --sandbox`.

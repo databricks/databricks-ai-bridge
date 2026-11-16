@@ -37,7 +37,6 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
-from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     deploy_result_payload,
@@ -220,11 +219,6 @@ def _ignore_hangup() -> None:
     help="Installed module:function for --sandbox; defaults to the template adapter.",
 )
 @click.option(
-    "--environment",
-    "prepared_environment",
-    help="Published environment name or manifest path; deploy its orchestrator, install on first invocation.",
-)
-@click.option(
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
@@ -284,7 +278,6 @@ def deploy(
     sandbox_warm_pool_size,
     git_revision,
     entrypoint,
-    prepared_environment,
     source,
     pip_index_url,
     workspace_path,
@@ -342,10 +335,6 @@ def deploy(
     requires an editable installation with the sandbox extra and does not support --no-wait.
     """
     if sandbox:
-        if prepared_environment:
-            raise click.UsageError(
-                "Use --sandbox with source, or --environment with an existing publication."
-            )
         if (
             allowed_origin
             or clear_allowed_origins
@@ -396,32 +385,6 @@ def deploy(
             "--git-revision, --entrypoint, --sandbox-idle-timeout and "
             "--sandbox-warm-pool-size require --sandbox."
         )
-    if prepared_environment:
-        if not name:
-            raise AgentCliError("Provide a deployment name with --environment.")
-        if source != "." or allow_user_scope_update:
-            raise AgentCliError(
-                "--environment cannot be combined with --source or --allow-user-scope-update."
-            )
-        if allowed_origin or clear_allowed_origins or no_wait or background_child:
-            raise click.UsageError(
-                "--environment does not support --allowed-origin, --clear-allowed-origins, or --no-wait."
-            )
-        from databricks_agentbricks.cli.prepared_deploy import deploy_prepared
-
-        started = time.monotonic()
-        result = deploy_prepared(
-            obj,
-            name,
-            prepared_environment,
-            workspace_path=workspace_path,
-            instances=instance_count,
-            index_url=pip_index_url,
-        )
-        present_sandbox_deploy_result(
-            result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
-        )
-        return
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(

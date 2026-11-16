@@ -69,8 +69,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`deploy`](#agentbricks-deploy) | Deploy an agent to Databricks Apps |
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
 | [`endpoint`](#agentbricks-endpoint) | Invoke or load test HTTP endpoints |
-| [`environment`](#agentbricks-environment) | Upload and run projects in sandboxes |
-| [`invoke`](#agentbricks-invoke) | Invoke an App deployment's environment |
+| [`invoke`](#agentbricks-invoke) | Invoke a sandbox deployment |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
 | [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
@@ -1719,13 +1718,12 @@ are preserved without automatic migration. Use `--sandbox` on each redeploy. App
 is not agent readiness. Session Store/tracing declarations and App grants are reconciled;
 Memory Store provisioning and request-user forwarding are not supported by this path.
 
-`--environment` remains an advanced compatibility option for an existing publication;
-it is mutually exclusive with `--sandbox`. The two modes reject CORS options,
-`--allow-user-scope-update` and `--no-wait`. `--environment` also requires NAME and rejects
-`--source`. Legacy prepared manifests retain owner/installation checks. Sandbox deployments
-cannot reuse compute owned by a different principal.
+Sandbox mode rejects CORS options, `--allow-user-scope-update` and `--no-wait`.
+Sandbox deployments cannot reuse compute owned by a different principal.
+Source revision identifiers remain internal metadata; there is no public environment command
+or `--environment` deploy option.
 
-The following default App deployment behavior applies when neither option is selected.
+The following default App deployment behavior applies without `--sandbox`.
 
 Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing.
 
@@ -1762,7 +1760,6 @@ _Options_
 | `--git-revision <REV>` | string | working tree | no | Local Git commit, tag or branch; requires `--sandbox`. |
 | `--entrypoint <CALLABLE>` | string | template adapter | no | Installed module:function; requires `--sandbox`. |
 | `--source <SOURCE>` | path | `.` | no | Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, which generates uv.lock if missing). Defaults to the current directory. |
-| `--environment <ENVIRONMENT>` | string | - | no | Published environment name or manifest path; deploy its orchestrator, install on first invocation. |
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | per-user path | no | Workspace destination; sandbox mode uses it as the root for revisions and App files. |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
@@ -1786,6 +1783,7 @@ Inspect and manage deployed agents: list, get, wait, stream logs, start, stop, o
 | [`deployments start`](#agentbricks-deployments-start) | Start a deployment. |
 | [`deployments stop`](#agentbricks-deployments-stop) | Stop a deployment. |
 | [`deployments delete`](#agentbricks-deployments-delete) | Delete a deployment, and its Runtime Store when managed provisioning is enabled. |
+| [`deployments ssh`](#agentbricks-deployments-ssh) | Open a debug shell in a sandbox deployment’s existing session. |
 
 #### `agentbricks deployments list`
 
@@ -1911,6 +1909,38 @@ _Options_
 | `--delete-source` | flag | - | no | Also delete the workspace folder the deployment's source was uploaded to, once the deployment is gone. |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
+#### `agentbricks deployments ssh`
+
+Open a debug shell in a sandbox deployment's existing session. Requires `CAN_MANAGE`
+on the App and an OAuth profile. Resumes stopped compute; never creates a sandbox.
+`APP` accepts a base name or the full agent-bricks-prefixed deployment name. The CLI
+resolves the source revision from the deployment. Install the CLI with the `sandbox` extra.
+
+```sh
+agentbricks -p my-workspace deployments ssh my-agent --session-id demo
+agentbricks -p my-workspace deployments ssh my-agent --session-id demo --command 'pwd'
+```
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `APP` | yes | Sandbox deployment name. |
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--session-id` | string | - | yes | Existing session to debug; non-blank, at most 128 UTF-8 bytes. |
+| `--command` | string | - | no | Run one shell command without a PTY and return its exit code; 1–32768 characters. |
+
+The shell starts in the installed source directory with its virtual environment active.
+Interactive mode requires a POSIX terminal; command mode preserves stdout, stderr, and
+remote exit status. The session must have completed preparation or its first invocation.
+Missing sandboxes and incomplete installations return errors. Debug access is checked
+separately from chat access and does not hold the session's execution lock after setup.
+
+The terminal uses an authenticated WebSocket to the App, which connects to the sandbox
+using its configured HTTPS or SSH transport. Credentials and SSH keys stay out of persisted
+CLI state. Closing an HTTPS terminal terminates its remote command tree. Connections are
+limited to one hour; SFTP and port forwarding are not exposed.
+
 ### `agentbricks endpoint`
 
 Invoke or load test Databricks Apps and arbitrary HTTP endpoints.
@@ -2025,151 +2055,10 @@ agentbricks --profile <profile> --output json endpoint loadtest agent-bricks-my-
   --save-responses responses.json
 ```
 
-### `agentbricks environment`
-
-Inspect, invoke, and debug published sandbox environments. Source publication belongs to
-`agentbricks deploy APP --sandbox`, which also provisions the App-owned managed Runtime Store.
-The `environment create` command has been removed. Environment names identify published
-source revisions and are returned by deploy.
-
-```text
-agentbricks environment get NAME
-agentbricks environment prepare NAME
-agentbricks environment list [options]
-agentbricks environment invoke NAME [options]
-agentbricks environment ssh NAME [options]
-```
-
-List, invoke and SSH accept the following launcher options. List and SSH require a launcher.
-Invocation through a local workspace profile is supported only for historical standalone manifests;
-managed publications must be invoked through the App.
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--app` | string | - | one of app/url | Exact name of the deployed sandbox launcher App; no name prefix is added. |
-| `--url` | URL | - | one of app/url | Base URL of a local or hosted sandbox launcher. |
-| `--auth` / `--no-auth` | flag | on for app, off for URL | no | Inject Databricks OAuth. For a hosted URL use `--auth`; Apps require an OAuth profile. |
-
-Global `--output json` emits machine-readable results/errors; polling progress appears only in
-text mode on stderr. Environments are scoped to the launcher's namespace and access controls.
-
-#### `environment get`
-
-Read publication metadata by name or absolute Workspace manifest path. Managed publications
-return the owning App; use its APIs/UI for live runtime state. Historical v3/v4 manifests
-also list up to 100 sandbox mappings from their Lakebase backend.
-
-#### `environment prepare`
-
-Retry a historical v4 artifact build from its saved immutable source archive, including builder
-cleanup, or retry legacy v1 preparation. Source publications from `deploy --sandbox` prepare
-sessions through the App's session-create API or first invocation; this command does not build them.
-
-#### `environment list`
-
-List the latest 100 environments registered with the selected launcher.
-
-```sh
-agentbricks environment list --app my-launcher
-```
-
-#### `environment invoke`
-
-Invoke a session's pinned source revision in its sandbox. `NAME` is required.
-
-Without --app/--url, this invokes a standalone environment using the selected workspace profile.
-The first invocation installs its sandbox and binds ownership to this identity. It waits
-synchronously; --stream and --no-wait require an HTTP launcher. Use a separate environment for
-local testing if you intend to deploy an App under a different identity.
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--session-id` | string | - | yes | Session whose sandbox should be reused. |
-| `--invocation-id` | string | generated UUID | no | Stable retry identifier; reuse with the same input to retrieve the original run. |
-| `--json` | JSON object | - | yes | Agent input as a JSON object. |
-| `--retry` | flag | off | no | Reattach to an existing invocation; requires its original ID. Failed runs require a new ID. |
-| `--stream` | flag | off | no | Consume App SSE and print incremental text on stderr while waiting; stdout retains final run JSON. |
-| `--wait` / `--no-wait` | flag | wait | no | Poll until the invocation finishes, or immediately return the queued run record. |
-| `--timeout` | seconds, at least 0.1 | 300 | no | Maximum polling time; timing out does not cancel the run. Individual launcher HTTP requests have a 60-second timeout. |
-
-A session's first invocation pins an immutable source revision in Lakebase. Standalone published
-environments always use the creation snapshot. In the legacy launcher flow, Git environments use
-their creation snapshot; other environments read the current Workspace folder for each new session.
-Later turns, retries, and sandbox recreation retain that session's revision even when the working
-folder changes or disappears. Concurrent first turns select one revision. Use a new session ID to
-pick up working-folder changes; existing sessions do not upgrade automatically. Unchanged files
-are not installed again in a ready sandbox. Pause edits while a new session reads Workspace source,
-since those reads do not provide a transactional multi-file snapshot.
-
-The launcher UI's **View session source** opens the exact saved snapshot, including the resolved
-Git SHA when present. **Open working folder** opens the current mutable Workspace directory.
-Existing CLI sessions from the earlier prototype pin their most recently submitted revision during
-the upgrade; historical invocation IDs continue to resolve their original revisions.
-
-An invocation ID is scoped to the named environment and session, across source changes. Duplicate
-submissions return the original run, even if the source folder has since changed or disappeared.
-Different input with the same ID is rejected. The shared runtime detects stale workers and claims a fenced recovery attempt. The sandbox
-adapter marks that attempt failed without replaying arbitrary code. This does not make arbitrary agent side effects
-exactly once. Installation and execution retain the launcher's 240-second HTTPS command limit.
-
-```sh
-agentbricks environment invoke my-agent --app my-launcher --session-id demo \
-  --invocation-id call-1 --json '{"message":"Hello"}'
-# Fetch the same run without another agent turn, including after a polling timeout:
-agentbricks environment invoke my-agent --app my-launcher --session-id demo \
-  --invocation-id call-1 --json '{"message":"Hello"}' --no-wait
-```
-
-Failed runs exit nonzero in wait mode and remain terminal. Inspect the session before retrying
-with a new invocation ID (omit `--invocation-id` to generate one) and the same input. Reusing
-an ID only retrieves the original run; `--retry` does not reopen a failed invocation.
-
-#### `environment ssh`
-
-Open a debug shell in a session's installed agent environment through its launcher.
-Requires `CAN_MANAGE` on the App. Resumes stopped compute; never creates a sandbox.
-Hosted Apps use HTTPS terminal transport; SSH is available when configured.
-Install the CLI with the `sandbox` extra. `NAME` is the published environment name;
-`--app` is the exact deployed App name. Supply one of `--app` or `--url`.
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--session-id` | string | - | yes | Session whose existing sandbox to debug; non-blank, at most 128 UTF-8 bytes. |
-| `--command` | string | - | no | Run one shell command without a PTY and return its exit code; 1–32768 characters. |
-
-```sh
-agentbricks --profile my-workspace environment ssh my-agent \
-  --app my-launcher --session-id demo
-agentbricks --profile my-workspace environment ssh my-agent \
-  --app my-launcher --session-id demo --command 'pwd; python --version'
-```
-
-The shell starts in the installed source directory with its `.venv` active. Interactive
-mode requires a POSIX terminal and supports Ctrl-C, terminal resizing, and `exit`/Ctrl-D.
-Command mode preserves stdout, stderr, and the remote exit code and closes remote stdin.
-Debug sessions use a WebSocket to the App. The App connects to the session sandbox over
-the authenticated gRPC/TLS command API on port 443, with PTY and streamed input/output.
-This works from Apps where outbound gateway SSH on port 2222 is unavailable. Servers
-configured with `SANDBOX_DEBUG_TRANSPORT=ssh` use Lakebox SSH instead. The App retains
-its credentials and any private SSH key; the CLI sends its OAuth credential over TLS for a
-fresh workspace `CAN_MANAGE` check, including inherited user/group permissions.
-This command provides terminal/command access; native SSH port forwarding and SFTP are
-not exposed. Debugging does not reinstall source or start a model invocation. Closing
-an HTTPS terminal terminates its remote command tree; terminal connections are limited
-to one hour. The preview API has no resize RPC, so resizing uses the sandbox's
-passwordless `sudo stty` on that process's root-owned PTY.
-
-A new chat must finish explicit session preparation (or its first invocation) before connecting.
-Missing sandboxes and incomplete installations return errors. Another invocation can
-continue after connection setup; the debug shell does not hold the session's execution lock.
-For a local launcher use `--url http://127.0.0.1:PORT`; unauthenticated debug access requires
-the server's explicit `SANDBOX_ALLOW_LOCAL_DEBUG=true` and a loopback connection.
-Hosted URLs require `--auth`; the App grants needed for chat alone do not grant debug access.
-
 ### `agentbricks invoke`
 
-Invoke the environment served by an App; install its sandbox on first use. APP accepts the deployment's base
-name or its full agent-bricks-prefixed name. The environment defaults to the deployment binding.
+Invoke a sandbox deployment; install its session sandbox on first use. `APP` accepts the deployment's
+base name or its full agent-bricks-prefixed name. The agent binding is resolved from the App.
 
 ```sh
 agentbricks invoke support --session-id demo --json '{"message":"Hello"}' --stream
@@ -2181,7 +2070,6 @@ agentbricks invoke support --session-id demo --json '{"message":"Hello"}' --stre
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--environment` | string | deployment binding | no | Environment name. |
 | `--session-id` | string | - | yes | Stable conversation ID. |
 | `--invocation-id` | string | generated UUID | no | Stable retry identity. |
 | `--json` | JSON object | - | yes | Agent input. The generated OpenAI sandbox adapter accepts message. |

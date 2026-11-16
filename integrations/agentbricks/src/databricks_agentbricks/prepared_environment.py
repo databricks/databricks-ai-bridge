@@ -108,8 +108,7 @@ def prepare(workspace, manifest, *, progress=None):
     if on_demand(manifest):
         raise AgentCliError(
             "This environment installs on its first invocation.",
-            hint="Deploy it with agentbricks deploy APP --environment ENV, then invoke the App. "
-            "environment prepare is only for legacy prepared environments.",
+            hint="Republish source with agentbricks deploy APP --sandbox --source PROJECT.",
         )
     manifest.update(status="preparing", error=None)
     write_manifest(workspace, manifest, overwrite=True)
@@ -128,7 +127,8 @@ def prepare(workspace, manifest, *, progress=None):
         write_manifest(workspace, manifest, overwrite=True)
         raise AgentCliError(
             "Sandbox environment preparation failed.",
-            hint=f"{manifest['error']}\nRetry: agentbricks environment prepare {manifest['manifest_path']}",
+            hint=f"{manifest['error']}\nRepublish source with "
+            "agentbricks deploy APP --sandbox --source PROJECT.",
         ) from exc
     manifest.update(
         status="ready",

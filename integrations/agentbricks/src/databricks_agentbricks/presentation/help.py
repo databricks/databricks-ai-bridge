@@ -18,7 +18,7 @@ CommandPath = tuple[str, ...]
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
-    ("SHIP", ("deploy", "deployments", "environment", "invoke")),
+    ("SHIP", ("deploy", "deployments", "invoke")),
     ("EXPERIMENTAL", ("experimental",)),
 )
 
@@ -543,48 +543,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "invoke a deployed HTTP agent",
         ),
     ),
-    ("environment",): (
-        (
-            "agentbricks environment list --app <launcher>",
-            "list published environments",
-        ),
-        (
-            'agentbricks environment invoke my-agent --app <launcher> --session-id demo --json \'{"message":"Hello"}\'',
-            "invoke a session's pinned source in a sandbox",
-        ),
-    ),
-    ("environment", "list"): (
-        ("agentbricks environment list --app <launcher>", "list sandbox environments"),
-    ),
-    ("environment", "get"): (
-        ("agentbricks environment get my-agent", "inspect publication and runtime state"),
-    ),
-    ("environment", "prepare"): (
-        (
-            "agentbricks environment prepare my-agent",
-            "retry installation for a legacy prepared environment",
-        ),
-    ),
     ("invoke",): (
         (
             'agentbricks invoke my-agent --session-id demo --json \'{"message":"Hello"}\' --stream',
             "invoke the deployment; first use creates and installs its sandbox",
         ),
     ),
-    ("environment", "invoke"): (
+    ("deployments", "ssh"): (
         (
-            'agentbricks environment invoke my-agent --app <launcher> --session-id demo --json \'{"message":"Hello"}\'',
-            "run the agent and wait for its result",
-        ),
-    ),
-    ("environment", "ssh"): (
-        (
-            "agentbricks environment ssh my-agent --app <launcher> --session-id demo",
+            "agentbricks deployments ssh my-agent --session-id demo",
             "debug the session's installed agent environment",
         ),
         (
-            "agentbricks environment ssh my-agent --app <launcher> --session-id demo --command 'pwd'",
-            "run a command and return its exit code",
+            "agentbricks deployments ssh my-agent --session-id demo --command 'pwd'",
+            "run a debug command and return its exit code",
         ),
     ),
     ("endpoint", "invoke"): (
@@ -682,7 +654,6 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("dev",): "Run the agent locally with a chat UI",
     ("deploy",): "Deploy an agent to Databricks Apps",
     ("deployments",): "Manage deployed agents",
-    ("environment",): "Upload and run projects in sandboxes",
     ("memory",): "Manage an agent's long-term memory",
     ("sessions",): "Manage an agent's conversation sessions",
     ("tools",): "Discover integrations and manage tool bindings",

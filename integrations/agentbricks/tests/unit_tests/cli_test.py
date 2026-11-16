@@ -41,9 +41,11 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "endpoint",
-        "environment",
+        "invoke",
         "tools",
     } <= names
+    assert "environment" not in names
+    assert "ssh" in cli.deployments.commands
     assert "eval" not in names
     assert "mcp" not in names
     assert "pipeline" not in names

@@ -58,7 +58,7 @@ shared durable invocation state/events; the source catalog stays in Workspace.
 ## Review boundaries and remaining gaps
 
 - CLI publication/deployment: `services/sandbox_deploy.py`, `cli/prepared_deploy.py`
-  and the environment inspection/invocation/debug commands.
+  `cli/sandbox_deployments.py` for invocation and deployment-scoped debugging.
 - App APIs, UI and orchestration: `databricks_agentkit/sandbox/app.py`,
   `orchestrator.py`, `session_client.py`, `preparation.py` and `store.py`.
 - Sandbox execution: `bootstrap.py`, `persistent.py`, `runner.py`, `adapters/`;
