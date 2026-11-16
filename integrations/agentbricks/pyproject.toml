@@ -8,48 +8,47 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    # >=8.4: the --help graying styles the description column with ANSI, and 8.4+ measures column
-    # widths / wraps with ANSI-aware `term_len`, so the styling doesn't break table alignment.
     "click>=8.4",
-    "databricks-ai-bridge[memory]>=0.22.0",
     "fastapi>=0.129.0",
     "sqlalchemy[asyncio]>=2.0",
     "uvicorn>=0.20.0",
     "databricks-sdk>=0.124.0",
-    # Worker tracing needs neither model logging nor the tracking/registry client.
-    # The CLI's provisioning and prompt commands use the explicit `cli` extra below.
-    "mlflow-tracing>=3.18.0",
     "packaging>=23.2",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
-    # app_provisioner retries the SDK's `requests` connection errors; same range databricks-sdk requires.
     "requests>=2.28.1,<3",
     "rich>=13.7",
     "tomli>=2.0",
     "tomlkit>=0.13",
+    "databricks-agentkit-runtime==0.10.0.dev0",
+    "databricks-ai-bridge[memory,genie,vector-search]>=0.22.0",
+    "mlflow-skinny>=3.18.0",
 ]
 
 [project.optional-dependencies]
-# This prototype separates the worker and developer environments. Install [cli] for the CLI.
-cli = ["mlflow-skinny>=3.18.0"]
+# The CLI keeps management APIs available in an ordinary installation.
 genie = ["databricks-ai-bridge[genie]>=0.22.0"]
 loadtest = [
     "locust>=2.31",
 ]
 sandbox = ["paramiko>=3.5,<6", "grpcio>=1.60", "protobuf>=4.25.8,<7", "websockets>=14,<17"]
-# Framework adapters are optional. Worker/store/HTTP code is in the base; CLI users add [cli].
+# Framework extras preserve normal template features. Worker-only installs use the runtime project.
 langgraph = [
-    "databricks-langchain>=0.22.0",
+    "databricks-langchain[uc,model-logging]>=0.22.0",
     "langgraph>=1.1.0",
     "langgraph-checkpoint-sqlite>=3.0",
     "langchain>=1.0.0",
     "langchain-mcp-adapters>=0.3.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "mlflow>=3.18.0",
+    "databricks-agents>=1.9.3",
 ]
 openai = [
     "openai-agents>=0.15.0",
-    "databricks-openai>=0.13.0",
+    "databricks-openai[uc,model-logging]>=0.13.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "mlflow>=3.18.0",
+    "databricks-agents>=1.9.3",
 ]
 # `databricks_agentkit.model_upgrades` / `agentbricks models upgrade`: the GEPA optimizer and full mlflow
 # (prompt registry, genai scorers, pricing catalog). The upgrade job installs it next to the agent
@@ -93,21 +92,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = [
-    "NOTICE",
-    "src/databricks_agentkit/*",
-    "src/databricks_agentkit/sandbox/**",
-    "src/databricks_agentbricks/*",
-    "src/databricks_agentbricks/py.typed",
-    "src/databricks_agentbricks/templates/**",
-]
+include = ["NOTICE", "src/databricks_agentbricks/*", "src/databricks_agentbricks/py.typed", "src/databricks_agentbricks/templates/**"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/databricks_agentkit", "src/databricks_agentbricks"]
+packages = ["src/databricks_agentbricks"]
 
 [tool.uv.sources]
 databricks-ai-bridge = { path = "../..", editable = true }
 
+[tool.uv.sources.databricks-agentkit-runtime]
+path = "src"
+editable = true
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 # Templates under src/databricks_agentbricks/templates/ are code-as-data (scaffold snippets, not package

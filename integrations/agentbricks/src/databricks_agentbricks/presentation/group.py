@@ -256,7 +256,7 @@ def _usage_error_show(self: click.exceptions.UsageError, file=None) -> None:
     invocation = self.ctx.command_path if self.ctx is not None else "agentbricks"
     message = self.format_message()
     hint = f"run `{invocation} --help` to see the available options and arguments"
-    if errors._OUTPUT_MODE == "json":
+    if errors.get_output_mode() == "json":
         import json
 
         click.echo(json.dumps({"error": {"message": message, "hint": hint}}, indent=2), err=True)

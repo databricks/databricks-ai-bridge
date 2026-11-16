@@ -14,7 +14,6 @@ import pytest
 from click.testing import CliRunner
 from deploy_test import _DeployApi, _DeployRunner, _real_deploy_context
 
-from databricks_agentbricks import errors
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients.app_probe import ProbeOutcome, ProbeResult
 from databricks_agentbricks.projects.agent_project import AgentProject
@@ -35,7 +34,7 @@ def project(tmp_path: pathlib.Path) -> pathlib.Path:
 @pytest.fixture
 def json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     # The root group sets this from `-o json`; these tests invoke the subcommands directly.
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
 
 
 def _state(source: pathlib.Path) -> dict:

@@ -66,7 +66,7 @@ def _plain_progress(con: Console) -> bool:
     """Whether progress must be plain lines: under ``-o json`` or when ``con`` isn't a terminal."""
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
 
-    return errors._OUTPUT_MODE == "json" or not con.is_terminal
+    return errors.get_output_mode() == "json" or not con.is_terminal
 
 
 @contextmanager
@@ -175,7 +175,7 @@ def progress(
 
     con = con or _stdout
     err = err or _stderr
-    line_con = err if errors._OUTPUT_MODE == "json" else con
+    line_con = err if errors.get_output_mode() == "json" else con
     line_con.print(f"[{DIM}]•[/] {message}")
     start = clock()
     if _plain_progress(con):

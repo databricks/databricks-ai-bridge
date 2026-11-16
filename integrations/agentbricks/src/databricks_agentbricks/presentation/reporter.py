@@ -45,7 +45,7 @@ class ClickReporter:
         document and relayed command output moves to stderr. Like :meth:`note`, it writes to the
         current stream so output survives a live spinner.
         """
-        stream = sys.stderr if errors._OUTPUT_MODE == "json" else sys.stdout
+        stream = sys.stderr if errors.get_output_mode() == "json" else sys.stdout
         click.echo(message, nl=add_newline, file=stream)
 
     def timing(self, phase: str, seconds: float) -> None:

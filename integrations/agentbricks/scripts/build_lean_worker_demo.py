@@ -19,6 +19,7 @@ REPO = Path(__file__).resolve().parents[3]
 PACKAGES = (
     ".",
     "integrations/agentbricks",
+    "integrations/agentbricks/src",
     "integrations/langchain",
     "integrations/openai",
     "databricks_mcp",
@@ -44,12 +45,20 @@ def main():
         original = REPO / relative
         with tempfile.TemporaryDirectory(prefix="agentbricks-lean-wheel-") as directory:
             stage = Path(directory)
-            shutil.copytree(
-                original / "src",
-                stage / "src",
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-            )
-            for filename in ("pyproject.toml", "README.md", "LICENSE.txt", "NOTICE"):
+            package_root = original / "src"
+            if relative == "integrations/agentbricks/src":
+                shutil.copytree(
+                    original / "databricks_agentkit",
+                    stage / "databricks_agentkit",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
+            else:
+                shutil.copytree(
+                    package_root,
+                    stage / "src",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
+            for filename in ("pyproject.toml", "README.md", "RUNTIME.md", "LICENSE.txt", "NOTICE"):
                 if (original / filename).exists():
                     shutil.copy2(original / filename, stage / filename)
             digest = hashlib.sha256()
@@ -86,10 +95,10 @@ def main():
         shutil.copy2(args.source / "README.md", target / "README.md")
         shutil.copytree(wheels, target / "vendor")
         dependencies = [
-            "databricks-agentbricks[langgraph]>=0.3.0",
+            "databricks-agentkit-runtime[langgraph]==0.10.0.dev0",
             "databricks-langchain>=0.22.0",
             # uv.sources applies to direct project requirements, not arbitrary
-            # transitive requirements. Declare all five unpublished wheels.
+            # transitive requirements. Declare all unpublished wheels.
             "databricks-ai-bridge>=0.22.0",
             "databricks-openai>=0.18.0",
             "databricks-mcp>=0.9.2",
@@ -105,7 +114,7 @@ def main():
         ]
         if variant == "full":
             dependencies += [
-                "databricks-agentbricks[cli]",
+                "databricks-agentbricks==0.10.0.dev0",
                 "databricks-ai-bridge[genie,vector-search]",
                 "databricks-langchain[uc]",
                 "databricks-openai[uc]",

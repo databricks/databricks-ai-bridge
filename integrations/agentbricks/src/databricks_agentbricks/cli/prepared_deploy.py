@@ -76,6 +76,23 @@ def stage_runtime(
         base_version = str(metadata["project"]["version"]).split("+", 1)[0]
         metadata["project"]["version"] = f"{base_version}+sandbox.{digest.hexdigest()[:16]}"
         (project / "pyproject.toml").write_text(tomlkit.dumps(metadata))
+        sdk_metadata = project / "src/pyproject.toml"
+        sdk = tomlkit.parse(sdk_metadata.read_text())
+        sdk["project"]["version"] = metadata["project"]["version"]
+        sdk_metadata.write_text(tomlkit.dumps(sdk))
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--wheel",
+                "--no-sources",
+                "--out-dir",
+                str(target.resolve()),
+                str(project / "src"),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
         subprocess.run(
             [
                 "uv",
@@ -89,8 +106,9 @@ def stage_runtime(
             check=True,
             stdout=subprocess.DEVNULL,
         )
-    wheel = next(target.glob("*.whl"))
-    (target / "requirements.txt").write_text(f"./{wheel.name}[sandbox]\n")
+    cli_wheel = next(target.glob("databricks_agentbricks-*.whl"))
+    sdk_wheel = next(target.glob("databricks_agentkit_runtime-*.whl"))
+    (target / "requirements.txt").write_text(f"./{sdk_wheel.name}\n./{cli_wheel.name}[sandbox]\n")
     (target / "environment.json").write_text(json.dumps(manifest, indent=2))
     environment = {
         RUNTIME_ENVIRONMENT_ENV: SANDBOX,

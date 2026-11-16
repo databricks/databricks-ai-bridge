@@ -15,8 +15,8 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
 
-from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 from databricks_agentkit import models
+from databricks_agentkit._errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 from databricks_agentkit._pagination import validate_page_size
 from databricks_agentkit._permissions import (
     MAX_PERMISSION_PAGE_SIZE,

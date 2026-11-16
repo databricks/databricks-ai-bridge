@@ -781,8 +781,9 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         return next(index for index, event in enumerate(events) if predicate(event))
 
     create_index = event_index(
-        lambda event: event
-        == ("runtime.create", "agent-bricks-demo", "sp-123", "agent-bricks-demo", True)
+        lambda event: (
+            event == ("runtime.create", "agent-bricks-demo", "sp-123", "agent-bricks-demo", True)
+        )
     )
     sync_index = event_index(lambda event: event[0] == "apps" and event[1][0] == "sync")
     deploy_index = event_index(
@@ -1051,7 +1052,7 @@ def test_real_cli_deploy_prints_busy_retry_notices_to_stderr(
     monkeypatch.setattr(
         deploy_mod, "AppsClient", functools.partial(AppsClient, sleep=lambda _: None)
     )
-    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", output)
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", output)
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -1187,7 +1188,7 @@ def test_real_cli_json_deploy_keeps_payload_and_omits_text_summary(
     _custom_server_project(tmp_path)
     events: list[tuple] = []
     monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
-    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
 
     result = CliRunner().invoke(
         deploy_mod.deploy,

@@ -12,6 +12,9 @@ workers use the experimental wheels from this branch.
 [Traces](https://e2-dogfood.staging.cloud.databricks.com/#mlflow/experiments/1476495253550735/traces) ·
 [Optimization findings](https://docs.google.com/document/d/13X3RCi46JPWUuB74MOdqCbcaJ5wuVu3fjC2e1Y_aKFw/edit?tab=t.0#bookmark=id.wgjb4zzi3iwo)
 
+The linked App is the deployed baseline; the invocation API, reconciler, limits and
+paired packaging changes in the current draft have not been redeployed yet.
+
 ## Try the combined App
 
 Open the **Sandbox** tab and wait for **2 ready** warm spares. Choose **New Chat**;
@@ -38,12 +41,11 @@ Use Python 3.12, `uv`, and an authenticated Databricks CLI profile. From a check
 of `codex/agentbricks-lean-worker-prototype`:
 
 ```sh
-# Keep the normal orchestrator CLI separate from the experimental worker wheels.
-git fetch origin
-git worktree add ../sandbox-orchestrator origin/codex/agentbricks-sandbox-warm-pool
+# Both editable projects are required until the paired distributions are released.
 uv venv /tmp/lean-cli --python 3.12
 uv pip install --python /tmp/lean-cli/bin/python \
-  -e '../sandbox-orchestrator/integrations/agentbricks[sandbox]'
+  -e integrations/agentbricks/src \
+  -e 'integrations/agentbricks[sandbox]'
 source /tmp/lean-cli/bin/activate
 
 agentbricks -p DEFAULT init /tmp/lean-source --framework langgraph
@@ -64,7 +66,7 @@ agentbricks -p DEFAULT deploy sb-lean-mydemo --sandbox \
 
 Run lock resolution where public PyPI is reachable; the sandbox must be able to
 reach the index recorded in `uv.lock`. The builder creates content-versioned
-wheels for all five distributions, vendors them into the project, and declares
+wheels for all six distributions, vendors them into the project, and declares
 normal `uv.sources` requirements. The sandbox performs `uv sync --locked` and
 builds/installs the project under its own Python interpreter. There is no package
 exclusion or site-packages patch. The builder also produces a full-dependency
@@ -78,9 +80,32 @@ the repository.
 
 ## Scope
 
+`databricks-agentbricks` now owns the CLI/templates and depends on the paired
+`databricks-agentkit-runtime` distribution, which owns `databricks_agentkit`. Their
+wheel contents do not overlap. The worker demo depends directly on the runtime
+wheel; its installation has no CLI entry point. Ordinary CLI installs retain
+MLflow Skinny and existing framework/UC/model-logging capabilities, without
+requiring a new `[cli]` extra. Existing default templates keep selecting those
+CLI framework extras.
+
 The worker uses `mlflow-tracing`; provisioning commands retain MLflow Skinny.
 Numerical, UC, and model-logging dependencies become optional integration extras.
-These dependency-default changes need a compatibility plan before release.
+The new SDK and CLI wheels need coordinated publishing, versioning and installer
+upgrade validation before release. The sandbox publisher still builds from a
+checkout for this prototype; it stages both wheels together. Shared integration
+extras also need their release and minimum-version compatibility matrix. These
+changes have not been deployed to the linked App.
 Live validation covers LangGraph; OpenAI has import checks, and arbitrary custom
 servers and the optional integration/minimum-version matrix remain unverified.
 No new CLI surface or runtime-store schema is introduced by this branch.
+
+Packaging validation builds both wheels, verifies disjoint file ownership, and loads the
+installed SDK/server/sandbox API with CLI imports explicitly blocked. CLI help, management
+imports and focused regression suites also run against the artifacts or source. The local
+artifact smoke check reuses available dependencies. Fresh resolution from public PyPI is
+blocked by this session's DNS access; it is not a clean-install compatibility result.
+
+Before release, wire paired version stamping/publishing and pass the SDK wheel through the
+fake-workspace/suite artifact harness. Current unit jobs can use the local `uv.sources` SDK
+project; the old single-wheel release/suite workflows are not a complete release path for
+this split. Keep this as a demonstration draft until that work and the framework matrix pass.
