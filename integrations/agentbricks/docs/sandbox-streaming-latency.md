@@ -101,8 +101,7 @@ The capture procedure was:
    run. Capture direct stdout probes independently of files and `tail`.
 6. Stop both test sandboxes and confirm their state, then stop the diagnostic App.
 
-[Per-run results, coverage, identity and capture hashes](evidence/streaming-latency-2026-11-13.json)
-are included with this report. Raw timestamp captures and the instrumented-build,
+Raw timestamp captures and the instrumented-build,
 browser, analysis and plotting scripts remain in the local worktree at
 `.agentbricks-playground/.state/stream-latency-1113/`; the remote diagnostic endpoints
 are not shipped in the prototype package. The figure has
