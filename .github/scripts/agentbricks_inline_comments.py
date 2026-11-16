@@ -13,9 +13,11 @@ findings are gone, or whose lines changed, are minimized as outdated; resolved
 threads are left alone. The summary drops only findings that are visible inline.
 
 Usage: agentbricks_inline_comments.py --repo OWNER/NAME --pr N --head SHA
-           --review REVIEW --diff DIFF --out SUMMARY
-Writes the summary text to SUMMARY. If posting fails, SUMMARY is the unchanged
-review, so the summary comment still carries every finding.
+           --review REVIEW --diff DIFF [--findings FINDINGS] [--out SUMMARY]
+FINDINGS is JSON describing every finding (title, problem, fix, evidence) and,
+for each one visible inline, its comment URL; the summary comment lists them
+from it. SUMMARY is the review with inline findings replaced by counts. If
+posting fails, those findings are not marked inline, so the summary keeps them.
 """
 
 from __future__ import annotations
@@ -56,6 +58,10 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
 """
 FOOTER = re.compile(r"\n*<sub>AgentBricksReviewer finding for `[0-9a-f]+`\.</sub>\s*$")
 PAYLOAD_KEYS = ("path", "line", "side", "start_line", "start_side", "body")
+# `path:line` (or a range) at the start of a finding, before its title.
+LEADING_LOCATION = re.compile(r"^`?(?P<location>[\w.@+/-]+:\d+(?:-\d+)?)`?\s*(?:—|–|-|:)?\s*")
+DETAIL_LABEL = re.compile(r"^\**(?P<label>Problem|Fix|Evidence)\**:\**\s*(?P<text>.*)$", re.IGNORECASE)
+TITLE_LIMIT = 120
 
 
 def commentable_lines(diff: str) -> dict[str, set[int]]:
@@ -126,6 +132,69 @@ def anchor(finding: dict, lines: dict[str, set[int]]) -> dict | None:
     return None
 
 
+def split_finding(finding: dict) -> dict:
+    """A finding's parts: tags, location, title, and the Problem/Fix/Evidence lines.
+
+    Reviews in the older one-line format (trigger → consequence) have no labels;
+    their title is the trigger and the rest of the text becomes the problem.
+    """
+    text = finding["text"]
+    tags = TAGS.match(text)
+    tag_names = re.findall(r"\[([^\]]+)\]", tags.group("tags")) if tags else []
+    first, *rest = text[tags.end() if tags else 0 :].split("\n")
+    location = LEADING_LOCATION.match(first)
+    title = first[location.end() :] if location else first
+    details = {"problem": [], "fix": [], "evidence": []}
+    current = "problem"
+    for line in rest:
+        label = DETAIL_LABEL.match(line)
+        if label:
+            current = label.group("label").lower()
+            line = label.group("text")
+        elif re.match(r"^Verified-against:", line):
+            current = "evidence"
+        details[current].append(line)
+    if not details["problem"] and not details["fix"] and (len(title) > TITLE_LIMIT or "→" in title):
+        # Older one-line format: keep the whole sentence as the problem.
+        details["problem"] = [title.strip()]
+        title = title.split("→", 1)[0].strip()
+    if len(title) > TITLE_LIMIT:
+        title = title[:TITLE_LIMIT].rsplit(" ", 1)[0] + "…"
+    if title.count("`") % 2:
+        title = title[: title.rfind("`")].rstrip() + "…"
+    return {
+        "section": finding["section"],
+        "severity": tag_names[0] if tag_names else "",
+        "confidence": tag_names[1] if len(tag_names) > 1 else "",
+        "location": location.group("location") if location else "",
+        "title": title.strip(),
+        **{key: " ".join(part.strip() for part in value if part.strip()) for key, value in details.items()},
+    }
+
+
+def file_url(repo: str, head_sha: str, location: str) -> str | None:
+    """A link to the finding's lines at the reviewed commit."""
+    match = re.fullmatch(r"(?P<path>.+):(?P<start>\d+)(?:-(?P<end>\d+))?", location or "")
+    if not match:
+        return None
+    lines = f"L{match['start']}" + (f"-L{match['end']}" if match["end"] else "")
+    return f"https://github.com/{repo}/blob/{head_sha}/{match['path']}#{lines}"
+
+
+def render(parts: dict, head_sha: str) -> str:
+    """An inline comment: title, severity line, problem, fix, and collapsed evidence."""
+    meta = " · ".join(filter(None, (parts["severity"], parts["confidence"].lower(), parts["section"])))
+    lines = [f"**{parts['title']}**", f"<sub>{meta}</sub>", ""]
+    if parts["problem"]:
+        lines += [parts["problem"], ""]
+    if parts["fix"]:
+        lines += [f"**Fix:** {parts['fix']}", ""]
+    if parts["evidence"]:
+        lines += ["<details><summary>Evidence</summary>", "", parts["evidence"], "", "</details>", ""]
+    lines.append(f"<sub>AgentBricksReviewer finding for `{head_sha[:7]}`.</sub>")
+    return "\n".join(lines)
+
+
 def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]:
     """Inline comments to post, and the findings they came from."""
     lines = commentable_lines(diff)
@@ -134,13 +203,9 @@ def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]
         position = anchor(finding, lines)
         if position is None:
             continue
-        tags = TAGS.match(finding["text"])
-        title = f"**{tags.group('tags').strip()}** · {finding['section']}" if tags else f"**{finding['section']}**"
-        body_text = finding["text"][tags.end() :] if tags else finding["text"]
         body = (
             f"{INLINE_MARKER}\n<!-- agentbricks-reviewer-finding: {finding['section']} -->\n"
-            f"{title}\n\n{body_text.strip()}\n\n"
-            f"<sub>AgentBricksReviewer finding for `{head_sha[:7]}`.</sub>"
+            + render(split_finding(finding), head_sha)
         )
         comments.append({**position, "body": body, "section": finding["section"], "finding": len(anchored)})
         anchored.append(finding)
@@ -232,9 +297,13 @@ def set_minimized(comment: dict, minimized: bool) -> None:
     github(["graphql", "-f", f"query={mutation}", "-f", f"id={comment['id']}"])
 
 
-def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
-    """Post every inline comment in one COMMENT review; GitHub accepts all or none."""
-    github(
+def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> dict[int, str]:
+    """Post every inline comment in one COMMENT review; GitHub accepts all or none.
+
+    Returns each posted comment's URL by its finding index, as far as GitHub
+    reports them; a missing URL only drops a link from the summary.
+    """
+    review = github(
         [f"repos/{repo}/pulls/{pr}/reviews"],
         {
             "commit_id": head_sha,
@@ -244,6 +313,22 @@ def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
             "comments": [{key: c[key] for key in PAYLOAD_KEYS if key in c} for c in comments],
         },
     )
+    urls: dict[int, str] = {}
+    if not isinstance(review, dict) or "id" not in review:
+        return urls
+    try:
+        pages = github(["--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/reviews/{review['id']}/comments?per_page=100"])
+    except RuntimeError as error:
+        print(f"::warning::Posted inline findings but couldn't read their links: {error}")
+        return urls
+    pending = list(comments)
+    for page in pages or []:
+        for posted in page:
+            match = next((c for c in pending if c["body"] == posted.get("body") and c["path"] == posted.get("path")), None)
+            if match is not None:
+                urls[match["finding"]] = posted["html_url"]
+                pending.remove(match)
+    return urls
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -253,7 +338,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head", required=True)
     parser.add_argument("--review", required=True, type=Path)
     parser.add_argument("--diff", required=True, type=Path)
-    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--findings", type=Path, help="Write every finding, with inline comment URLs, as JSON")
+    parser.add_argument("--out", type=Path, help="Write the review with inline findings replaced by counts")
     args = parser.parse_args(argv)
 
     review = args.review.read_text(encoding="utf-8")
@@ -273,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     # Findings count as inline only once their comment is visible with current text;
     # anything else stays in the summary in full.
     visible: list[int] = []
+    urls: dict[int, str] = {}
     for earlier, planned in reuse:
         try:
             if FOOTER.sub("", earlier["body"]) != FOOTER.sub("", planned["body"]):
@@ -281,19 +368,30 @@ def main(argv: list[str] | None = None) -> int:
             if earlier["minimized"]:
                 set_minimized(earlier, False)
             visible.append(planned["finding"])
+            urls[planned["finding"]] = f"https://github.com/{args.repo}/pull/{args.pr}#discussion_r{earlier['database_id']}"
         except RuntimeError as error:
             print(f"::warning::Could not update an earlier inline comment; keeping its finding in the summary: {error}")
     if to_post:
         try:
-            post(args.repo, args.pr, args.head, to_post)
+            urls.update(post(args.repo, args.pr, args.head, to_post))
             visible += [c["finding"] for c in to_post]
         except RuntimeError as error:
             print(f"::warning::Could not post inline findings; keeping them in the summary comment: {error}")
     if not comments:
         print("No findings on commentable diff lines; keeping every finding in the summary comment.")
-    summary = rewrite(review, [anchored[i] for i in sorted(visible)])
     print(f"Inline: {len(to_post)} new, {len(reuse)} reused, {len(stale)} minimized; {len(visible)} of {len(comments)} visible.")
-    args.out.write_text(summary, encoding="utf-8")
+    if args.out:
+        args.out.write_text(rewrite(review, [anchored[i] for i in sorted(visible)]), encoding="utf-8")
+    if args.findings:
+        inline_ids = {id(anchored[i]): urls.get(i) for i in visible}
+        records = []
+        for finding in parse_findings(review):
+            match = next((a for a in anchored if a["start"] == finding["start"]), None)
+            shown = match is not None and id(match) in inline_ids
+            parts = split_finding(finding)
+            records.append({**parts, "inline": shown, "url": inline_ids.get(id(match)) if shown else None,
+                            "file_url": file_url(args.repo, args.head, parts["location"])})
+        args.findings.write_text(json.dumps(records, indent=2), encoding="utf-8")
     return 0
 
 
