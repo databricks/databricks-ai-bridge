@@ -1617,7 +1617,14 @@ test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covere
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The deployment workflow tracks phases and readiness internally; these observations are not
-logged as separate telemetry fields. Network
-errors are retried within the existing readiness budget; if the final probe remains unreachable,
+logged as separate telemetry fields. Network errors are retried within the existing readiness budget; if the final probe remains unreachable,
 the deployed app has unverified readiness rather than a reported application failure. These
 observations do not validate model or tool behavior.
+
+Command outcomes can be interpreted from the existing command path, exit code, error category,
+and options. Pending waits (`deployments wait` exit 75) and background submissions
+(`deploy --no-wait`) should not be counted as deployment failures. Deployment operation UUIDs
+stay in local state and the background worker; they are not uploaded. The separate uploaded
+`invocation_id` identifies one command and joins details-link arrivals to it.
+See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
+failure-rate denominators and coverage limits.
