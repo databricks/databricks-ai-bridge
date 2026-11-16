@@ -5,8 +5,10 @@ from databricks_agentkit._errors import (
     TRANSIENT_ERROR_CODES,
     AgentCliError,
     _set_renderer,
+    error_output_mode,
     get_output_mode,
     set_output_mode,
+    set_usage_output_mode,
     wrap_api_error,
 )
 
@@ -14,8 +16,10 @@ __all__ = [
     "AgentCliError",
     "FEATURE_DISABLED",
     "TRANSIENT_ERROR_CODES",
+    "error_output_mode",
     "get_output_mode",
     "set_output_mode",
+    "set_usage_output_mode",
     "wrap_api_error",
 ]
 

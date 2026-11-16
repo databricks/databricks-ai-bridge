@@ -95,7 +95,7 @@ def main():
         shutil.copy2(args.source / "README.md", target / "README.md")
         shutil.copytree(wheels, target / "vendor")
         dependencies = [
-            "databricks-agentkit-runtime[langgraph]==0.10.0.dev0",
+            "databricks-agentkit-runtime[langgraph]==0.11.0.dev0",
             "databricks-langchain>=0.22.0",
             # uv.sources applies to direct project requirements, not arbitrary
             # transitive requirements. Declare all unpublished wheels.
@@ -114,7 +114,7 @@ def main():
         ]
         if variant == "full":
             dependencies += [
-                "databricks-agentbricks==0.10.0.dev0",
+                "databricks-agentbricks==0.11.0.dev0",
                 "databricks-ai-bridge[genie,vector-search]",
                 "databricks-langchain[uc]",
                 "databricks-openai[uc]",

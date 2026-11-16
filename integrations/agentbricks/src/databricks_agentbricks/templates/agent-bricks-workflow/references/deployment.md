@@ -22,12 +22,29 @@ as `[agent].deployment_name` and prints it as `Deploy name`; from the project di
 Provisioning takes real time; do not start repeated deployments merely because one is still running.
 Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment before retrying.
 
+Deploy output includes an Agent details management link when the workspace's Agent Memory
+Sessions beta and new Agents UI are both enabled. JSON exposes it as `details_url`; `url` remains
+the deployed agent's invocation address. `--no-wait` and `deployments wait` also include the gated
+link, which can be used to inspect an in-progress deployment. `deployments get` shows it alongside
+the app URL. With both gates enabled, `deployments list` links each agent name to its details page
+and keeps an **Open app** link for invocation. Both commands preserve `url` and add `details_url`
+when available in JSON output.
+For a local deploy record, `deployments wait` only includes that link when the selected profile
+matches the recorded workspace host and ID. Use the deployment's original workspace profile;
+old records without workspace identity omit the link.
+
+`deploy` needs an `app.yaml` with a real `command:` in the source directory. If it exits before
+deploying with "No app.yaml", "No Agent Bricks project", or a placeholder command, run it from the
+project directory, pass `--source <directory>`, add the real start command to `app.yaml`, or create
+a project with `agentbricks init`.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
 `agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
 `timeout: 600000`), or run `agentbricks deploy <name> --no-wait` and then
-`agentbricks deployments wait <app-name>` until it exits 0; the agent then answers requests. Exit 75
+`agentbricks deployments wait <app-name>` until it exits 0. Check `ready` in JSON output: `true` means the server answered;
+`null` means readiness could not be verified because of access or network errors. Exit 75
 means it is still deploying; run the same command again. Exit 1 means it failed: the output carries the error and the log tail.
 Don't poll with `sleep`. A second `agentbricks deploy` of the same app is refused while one is still
 running from the project.

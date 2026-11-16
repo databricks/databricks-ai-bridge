@@ -45,6 +45,14 @@ def answering_app_probe(monkeypatch):
 
 
 @pytest.fixture
+def deployable_tmp_path(tmp_path):
+    """A minimal app.yaml in ``tmp_path``, since deploy refuses a source without one. Deploy test
+    modules opt in with ``pytestmark``; a test that writes its own app.yaml replaces it."""
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    return tmp_path
+
+
+@pytest.fixture
 def sandbox_downscope_enabled(monkeypatch):
     """Turn on the disabled sandbox downscope gate to cover the retained scoped path."""
     # Some runtime tests re-import tool_manifest, so the CLI's module object and the one a fresh

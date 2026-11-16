@@ -47,6 +47,21 @@ def set_output_mode(mode: str) -> None:
     _OUTPUT_MODE = mode
 
 
+# Usage errors may precede callbacks; the raw command line's output flag wins.
+_USAGE_OUTPUT_MODE: Optional[str] = None
+
+
+def set_usage_output_mode(mode: Optional[str]) -> None:
+    """Record the raw command line's output mode for error rendering."""
+    global _USAGE_OUTPUT_MODE
+    _USAGE_OUTPUT_MODE = mode
+
+
+def error_output_mode() -> str:
+    """Use the raw command line mode when available, otherwise the parsed mode."""
+    return _USAGE_OUTPUT_MODE or _OUTPUT_MODE
+
+
 _PREVIEW_HINT = (
     "These 2.0 agents APIs are in preview and gated per workspace. This handler is "
     "not enabled on the target workspace yet — try a different --profile or contact "
@@ -68,14 +83,24 @@ class AgentCliError(click.ClickException):
     """A user-facing CLI error rendered without a Python traceback."""
 
     def __init__(
-        self, message: str, *, error_code: Optional[str] = None, hint: Optional[str] = None
+        self,
+        message: str,
+        *,
+        error_code: Optional[str] = None,
+        hint: Optional[str] = None,
+        error_category: str | None = None,
+        subprocess_exit_code: int | None = None,
+        failure_detail: str | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
+        self.error_category = error_category
+        self.subprocess_exit_code = subprocess_exit_code
+        self.failure_detail = failure_detail
 
     def show(self, file=None) -> None:
-        if _OUTPUT_MODE == "json":
+        if error_output_mode() == "json":
             payload: dict = {"message": self.message}
             if self.error_code:
                 payload["code"] = self.error_code

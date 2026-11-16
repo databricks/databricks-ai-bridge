@@ -5,6 +5,7 @@ from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 
 from databricks_agentkit import workspace_client, workspace_headers
+from databricks_agentkit.langgraph.messages import with_total_tokens
 
 MODEL = "databricks-gpt-5-2"
 
@@ -31,4 +32,4 @@ async def invoke(messages: list[dict[str, Any]]) -> dict[str, Any]:
     result = await agent.ainvoke({"messages": messages})
     message = result["messages"][-1]
     output = message.model_dump() if hasattr(message, "model_dump") else message
-    return {"output": [output]}
+    return {"output": [with_total_tokens(output)]}

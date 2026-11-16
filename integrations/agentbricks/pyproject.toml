@@ -1,6 +1,6 @@
 [project]
 name = "databricks-agentbricks"
-version = "0.10.0.dev0"
+version = "0.11.0.dev0"
 description = "Agent Bricks CLI and AgentKit SDK for custom agents on Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -20,7 +20,7 @@ dependencies = [
     "rich>=13.7",
     "tomli>=2.0",
     "tomlkit>=0.13",
-    "databricks-agentkit-runtime==0.10.0.dev0",
+    "databricks-agentkit-runtime==0.11.0.dev0",
     "databricks-ai-bridge[memory,genie,vector-search]>=0.22.0",
     "mlflow-skinny>=3.18.0",
 ]

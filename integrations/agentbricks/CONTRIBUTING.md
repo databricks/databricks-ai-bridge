@@ -72,7 +72,7 @@ ordinary templates retain `databricks-agentbricks[FRAMEWORK]` and management API
 
 ## Testing SDK / runtime changes in a scaffold
 
-For an unpublished paired SDK override, also declare `databricks-agentkit-runtime==0.10.0.dev0`
+For an unpublished paired SDK override, also declare `databricks-agentkit-runtime==0.11.0.dev0`
 as a direct project dependency: `uv.sources` overrides apply to direct requirements.
 
 A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `agentbricks dev` and `agentbricks deploy`
@@ -199,6 +199,27 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
+The emitter follows bounded explicit exception causes and maps exception types and allowlisted
+service codes directly to the existing centralized `error_category`. `AgentCliError.failure_detail`
+and `subprocess_exit_code` preserve child output and status without changing the displayed message
+or process exit code. The CLI-independent scrubber lives in `telemetry/scrub.py`; Click context
+handling and upload orchestration remain in `cli/telemetry.py`.
+Workflow stages, readiness, child exit codes, and local deployment operation UUIDs
+are not part of the log schema. The top-level `failure_message` field carries
+up to 4096 UTF-8 bytes of exception text and available failed subprocess output after best-effort
+credential, path, and email scrubbing; this remains sensitive, labeled
+`DATA_LABEL_USER_COMMANDS_RESPONSE`, following the Asset Bundles error-message pattern.
+Combined exception, cause, and subprocess text over 65,536 characters is omitted before
+scrubbing so the input limit cannot discard credential context.
+Do not add raw text to centralizable fields. Privacy review is tracked in
+[LPP-8330](https://databricks.atlassian.net/browse/LPP-8330), referencing the DABs approval
+[LPP-5543](https://databricks.atlassian.net/browse/LPP-5543). LPP-8330 is approved; collection
+must satisfy its regional retention, access, and customer-policy controls.
+Regional logging and CMK policies can remove the text entirely; central analytics must use the
+existing command, exit-code, and error-category fields and account for missing text. Deploy the matching
+`proto/logs/frontend/agentbricks_cli/agentbricks_cli_log.proto` schema in Universe before releasing
+a CLI that emits `failure_message`.
+
 Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
 upload against the fake workspace's receiver. It verifies the FrontendLog payload without workspace
@@ -304,3 +325,42 @@ series starts with a new release branch from `main`. Tagging does not publish th
 secure public registry release and its approval to publish to PyPI. The gate runs the unit and framework tests and the E2E suites
 against the fake workspace (`--workspace fake`) from the built wheels. The live workspace E2E suites
 run separately in the private integration runner and are not included in this gate.
+
+## Interpreting command and deployment outcomes
+
+Completion events retain the existing command path, exit code, error category, and bounded option
+values. Deployment commands also record observed state in `deployment_outcome`, using
+`DEPLOYMENT_OUTCOME_UNSPECIFIED`, `DEPLOYMENT_OUTCOME_RUNNING`, `DEPLOYMENT_OUTCOME_SUCCEEDED`, or
+`DEPLOYMENT_OUTCOME_FAILED`. For command-result analysis, interpret an interrupted category first,
+then `deployments wait` with exit 75 as pending, then `deploy` with exit 0 and an explicitly true
+no-wait option as submitted, then exit 0 as succeeded, and other exits as failed.
+Exclude interruptions, pending waits, and background submissions from a product failure-rate
+denominator and report them separately. Missing events are unknown coverage, not success.
+
+Deployment operation UUIDs remain in local state and the background worker; they are not uploaded.
+The uploaded `invocation_id` is generated separately for each command and joins details-link
+arrivals to that command. It is independent of the local deployment operation UUID connecting
+launcher, worker, and waits. Use the FrontendLog event ID to deduplicate uploads. These logs measure
+command invocations, not unique deployment attempts: repeated `deployments wait` rows must not be
+added to the deployment failure-rate denominator. The current schema cannot correlate a launcher
+with its worker or waits.
+
+For startup analysis, segment `dev` invocations by error category, platform, and package version,
+and inspect regional `failure_message` where retained. Startup milestones, child exit codes,
+and workflow phases remain internal to the CLI. Completion-only telemetry cannot observe abrupt
+process termination or failed/unauthenticated uploads, so account for event coverage alongside
+failure rates. Deploy the schema before releasing failure-text collection.
+
+## Local process and signal coverage
+
+`tests/unit_tests/dev_signal_test.py` starts real Python child processes through the local-run
+adapter. On Linux/macOS it sends SIGINT to the terminal process group and to the child alone,
+before and after TCP listening, using both streaming and PTY output. An explicit child exit 130
+is tested separately on all three platforms; that value alone does not prove a user interrupt.
+The CLI retains parent-interruption evidence and the observed child return code internally.
+Caught parent interruptions use the existing interruption category and omit `failure_message`.
+These tests use a small TCP server, not Databricks CLI or a model invocation.
+
+POSIX signal cases are explicitly skipped on Windows. Native Windows console Ctrl+C propagation
+still needs validation with the installed Databricks CLI; passing these tests does not establish
+that Ctrl+C is absent from historical Windows failures. Platform CI wiring is a separate follow-up.

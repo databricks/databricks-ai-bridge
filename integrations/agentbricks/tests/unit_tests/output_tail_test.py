@@ -1,0 +1,173 @@
+"""Retention and relay regressions using synthetic output and local pipes."""
+
+import os
+import subprocess
+import sys
+import threading
+import time
+
+import pytest
+
+from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+def test_long_pem_output_is_omitted(chunk_size):
+    output = (
+        b"-----BEGIN PRIVATE KEY-----\n"
+        + b"synthetic-key-body\n" * 400
+        + b"-----END PRIVATE KEY-----\nstartup failed\n"
+    )
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == "[REDACTED]"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize(
+    "opening, closing",
+    [
+        (b"credentials = {\n", b"}\n"),
+        (b"tokens = [\n", b"]\n"),
+        (b'password="', b'"\n'),
+        (b"password:\n", b""),
+        (b"token=\n", b""),
+        (b"--token\n", b""),
+        (b"--password\n", b""),
+        (b"-api-key\n", b""),
+        (b"command --future-option\n", b""),
+        (b"Bearer\n", b""),
+        (b"Basic\n", b""),
+        (b"Be\rarer\n", b""),
+        ("Ba\u200bsic\n".encode(), b""),
+        ("-----BE\u200bGIN PRIVATE KEY-----\n".encode(), b""),
+    ],
+)
+def test_truncated_values_do_not_outlive_their_credential_context(chunk_size, opening, closing):
+    output = opening + b" \n" * 2000 + b"synthetic-opaque-value\n" + closing
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == "[REDACTED]"
+    tail.append(b"later output\n" * 400)
+    assert tail.text() == "[REDACTED]"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize(
+    "output",
+    [
+        b'credentials = {"value": "synthetic-opaque-value"}\n',
+        b"--password\nsynthetic-opaque-value\n",
+        b"-----BEGIN PRIVATE KEY-----\nsynthetic-key-body\n-----END PRIVATE KEY-----\n",
+        "進行中\nMissing dependency\n".encode(),
+    ],
+)
+def test_short_output_keeps_its_context_for_downstream_scrubbing(chunk_size, output):
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == output.decode()
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+@pytest.mark.parametrize("output", [b"x" * 3072, "進".encode() * 1024])
+def test_output_at_byte_limit_is_kept_until_any_additional_byte(chunk_size, output):
+    tail = OutputTail()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == output.decode()
+    tail.append(b"\n")
+    assert tail.text() == "[REDACTED]"
+    tail.append(b"later error\n")
+    assert tail.text() == "[REDACTED]"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 8192])
+def test_long_plain_unicode_output_omits_the_final_error(chunk_size):
+    tail = OutputTail()
+    output = ("進行中\n" * 1000 + "Missing dependency\n").encode()
+    for offset in range(0, len(output), chunk_size):
+        tail.append(output[offset : offset + chunk_size])
+    assert tail.text() == "[REDACTED]"
+
+
+def test_reader_owns_its_pipe_after_the_original_is_closed():
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0) as source, open(os.devnull, "wb") as sink:
+        relay = StreamRelay(source, sink.fileno())
+        source.close()
+        try:
+            os.write(write_fd, b"final failure\n")
+        finally:
+            os.close(write_fd)
+        relay.finish()
+        assert not relay._thread.is_alive()
+        assert relay.tail.text() == "final failure\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses nonblocking POSIX pipes")
+def test_idle_reader_stops_while_a_descendant_keeps_the_pipe_open():
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd, "rb", buffering=0) as source, open(os.devnull, "wb") as sink:
+            relay = StreamRelay(source, sink.fileno())
+            source.close()
+            started = time.monotonic()
+            relay.finish()
+            relay._thread.join(timeout=1)
+            assert not relay._thread.is_alive()
+            assert time.monotonic() - started < 1.5
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uses Linux pipe sizing")
+@pytest.mark.parametrize("blocking", [True, False])
+def test_slow_open_destination_preserves_every_byte_after_child_exit(blocking):
+    import fcntl
+
+    payload = b"x" * 10000 + b"\nFINAL-FAILURE\n"
+    read_fd, write_fd = os.pipe()
+    fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+    os.set_blocking(write_fd, blocking)
+    received = bytearray()
+    child_exited = threading.Event()
+
+    def consume():
+        child_exited.wait(timeout=5)
+        time.sleep(0.5)
+        with os.fdopen(read_fd, "rb", buffering=0) as stream:
+            while data := stream.read(4096):
+                received.extend(data)
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    try:
+        with subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'x' * 10000 + b'\\nFINAL-FAILURE\\n')",
+            ],
+            stdout=subprocess.PIPE,
+            bufsize=0,
+            pipesize=4096,
+        ) as proc:
+            assert proc.stdout is not None
+            relay = StreamRelay(proc.stdout, write_fd)
+            try:
+                assert proc.wait(timeout=5) == 0
+                child_exited.set()
+                relay.finish()
+                assert not relay._thread.is_alive()
+                assert relay.tail.text() == "[REDACTED]"
+            finally:
+                child_exited.set()
+                proc.kill()
+    finally:
+        os.close(write_fd)
+        consumer.join(timeout=5)
+    assert not consumer.is_alive()
+    assert bytes(received) == payload
