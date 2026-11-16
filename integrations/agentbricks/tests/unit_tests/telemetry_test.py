@@ -1150,6 +1150,22 @@ def test_exception_string_failure_preserves_cause_text():
     assert _log(_Context(), exit_code=1, exception=error)["failure_message"] == "root cause"
 
 
+@pytest.mark.parametrize(
+    "code,category", [(0, None), (75, "ERROR_CATEGORY_RUNTIME"), (1, "ERROR_CATEGORY_INTERRUPTED")]
+)
+def test_nonfailure_outcomes_omit_failure_text(code, category):
+    log = _log(
+        _real_context("deployments", "wait"),
+        exit_code=code,
+        error_category=category,
+        exception=AgentCliError("private text"),
+    )
+    assert "failure_message" not in log
+    assert "diagnostics" not in log
+    if code == 75:
+        assert "error_category" not in log
+
+
 @pytest.mark.parametrize("outcome", ["DEPLOYMENT_OUTCOME_RUNNING", "DEPLOYMENT_OUTCOME_SUCCEEDED"])
 def test_details_link_and_command_share_invocation_id(monkeypatch, outcome):
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)

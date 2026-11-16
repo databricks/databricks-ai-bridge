@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Optional
 
 from databricks_agentbricks.clients.workspace_identity import WorkspaceIdentity
+from databricks_agentbricks.diagnostics import operation_uuid
 from databricks_agentbricks.reporting import Reporter, phase_name
 
 STATE_DIR = ".agentbricks"
@@ -196,9 +197,11 @@ def _running_state(
     started_at: str,
     now: str,
     log: Optional[pathlib.Path],
+    operation_id: str | None = None,
     workspace: WorkspaceIdentity | None = None,
 ) -> dict[str, Any]:
     return {
+        "operation_id": operation_uuid(operation_id),
         "deployment": app,
         "pid": pid,
         "started_at": started_at,
@@ -217,6 +220,7 @@ def record_background_start(
     *,
     pid: int,
     now: float,
+    operation_id: str | None = None,
     workspace: WorkspaceIdentity | None = None,
 ) -> pathlib.Path:
     """Record a just-spawned background deploy as running, before its process records anything.
@@ -238,6 +242,7 @@ def record_background_start(
                 started_at=stamp,
                 now=stamp,
                 log=log_path(source_dir.absolute(), app),
+                operation_id=operation_id,
                 workspace=workspace,
             ),
         )
@@ -258,11 +263,13 @@ class DeployStateTracker:
         *,
         result_payload: Callable[[Any], dict[str, Any]],
         background: bool = False,
+        operation_id: str | None = None,
         pid: Optional[int] = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._result_payload = result_payload
         self._background = background
+        self._operation_id = operation_uuid(operation_id)
         self._pid = os.getpid() if pid is None else pid
         self._clock = clock
         self._path: Optional[pathlib.Path] = None
@@ -283,6 +290,8 @@ class DeployStateTracker:
             started_at=previous.get("started_at", now) if inherited else now,
             now=now,
             log=log_path(source_dir, app) if self._background else None,
+            operation_id=self._operation_id
+            or (previous.get("operation_id") if inherited else None),
             workspace=WorkspaceIdentity.from_dict(previous.get("workspace")) if inherited else None,
         )
         self._write()

@@ -41,6 +41,7 @@ from databricks_agentbricks.diagnostics import (
     CommandDiagnostics,
     FailureStage,
     Readiness,
+    operation_uuid,
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
@@ -571,6 +572,7 @@ class DeployService:
             "status": deploy_state.FAILED,
             "error": deploy_state.EXITED_UNEXPECTEDLY,
         }
+        self._diagnostics.operation_id = operation_uuid(state.get("operation_id"))
         state = deploy_state.resolve_state(state, now=now)
         status = str(state.get("status") or deploy_state.FAILED)
         result = state.get("result")
