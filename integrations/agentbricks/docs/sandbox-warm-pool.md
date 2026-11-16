@@ -101,7 +101,8 @@ Live measurements and deployment identity follow.
 The [combined App](https://agent-bricks-sb-lean-five-14-6051921418418893.staging.aws.databricksapps.com)
 uses two unassigned warm spares and the optimized worker from
 [draft #917](https://github.com/databricks/databricks-ai-bridge/pull/917).
-Open Sandbox, wait for **2 ready**, then choose New Chat.
+Open Sandbox, wait for **2 ready**, then choose New Chat. This is the previously deployed
+baseline; the invocation API, reconciliation and capacity changes below have not been redeployed.
 
 Measurements and optimization tradeoffs are maintained in the
 [investigation doc](https://docs.google.com/document/d/13X3RCi46JPWUuB74MOdqCbcaJ5wuVu3fjC2e1Y_aKFw/edit?tab=t.0#bookmark=id.wgjb4zzi3iwo).
