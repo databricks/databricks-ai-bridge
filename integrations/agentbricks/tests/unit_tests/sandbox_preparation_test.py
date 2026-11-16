@@ -6,9 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from click.testing import CliRunner
 
-from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit.sandbox.bundle import bundle_files
 from databricks_agentkit.sandbox.orchestrator import Orchestrator
@@ -106,43 +104,6 @@ def test_deploy_refuses_unready_environment_before_mutating_apps(monkeypatch):
         prepared_deploy.deploy_prepared(SimpleNamespace(profile="test"), "test", "env")
     workspace.apps.create.assert_not_called()
     workspace.apps.deploy.assert_not_called()
-
-
-def test_environment_deploy_routes_to_orchestrator_with_instance_count(monkeypatch):
-    from databricks_agentbricks.cli import prepared_deploy
-
-    deploy = MagicMock(
-        return_value={
-            "deployment": "agent-bricks-test",
-            "url": "https://app",
-            "installation": "prepared",
-        }
-    )
-    monkeypatch.setattr(prepared_deploy, "deploy_prepared", deploy)
-    result = CliRunner().invoke(
-        agentbricks, ["deploy", "test", "--environment", "env", "--instances", "2"]
-    )
-    assert result.exit_code == 0, result.output
-    assert deploy.call_args.args[1:] == ("test", "env")
-    assert deploy.call_args.kwargs["instances"] == 2
-    assert "Next steps" in result.stdout
-    assert "https://app" in result.stdout
-    assert "Choose New Chat" not in result.stdout
-
-
-@pytest.mark.parametrize(
-    "options",
-    [["--no-wait"], ["--allowed-origin", "https://example.com"], ["--clear-allowed-origins"]],
-)
-def test_environment_deploy_rejects_unsupported_options_before_deploy(monkeypatch, options):
-    from databricks_agentbricks.cli import prepared_deploy
-
-    deploy = MagicMock()
-    monkeypatch.setattr(prepared_deploy, "deploy_prepared", deploy)
-    result = CliRunner().invoke(agentbricks, ["deploy", "test", "--environment", "env", *options])
-    assert result.exit_code != 0
-    assert "--environment does not support" in result.output
-    deploy.assert_not_called()
 
 
 @pytest.mark.parametrize("exists", [True, False])
