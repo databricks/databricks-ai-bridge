@@ -14,6 +14,7 @@ from unittest.mock import Mock, call
 
 import pytest
 import requests
+import yaml
 from databricks.sdk.errors import (
     BadRequest,
     InternalError,
@@ -33,6 +34,11 @@ from databricks_agentbricks.clients.apps_user_auth_client import (
     AppUserScopeUpdatePlan,
 )
 from databricks_agentbricks.clients.tracing_client import TraceTable, TraceTableKind
+from databricks_agentbricks.diagnostics import (
+    CommandDiagnostics,
+    FailureStage,
+    Readiness,
+)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.app_manifest import AppManifest
@@ -69,6 +75,8 @@ from databricks_agentbricks.services.deployment.tool_access import ToolAccessPla
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
 
 
 def _auth_plan(
@@ -295,6 +303,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
             "AGENT_MEMORY_STORE": "mem-id",
             "AGENT_SESSION_STORE": "session",
             "RUNTIME_STORE_DATABASE": "db-id",
+            "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
         }
 
     app.sync_source.side_effect = check_manifest_before_sync
@@ -393,7 +402,6 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     assert result.env["RUNTIME_STORE_DATABASE"] == "db-id"
     assert result.session_grant_error == "grant denied"
     assert result.tool_access is not None and result.tool_access.app_resources == 1
-    assert result.created_app_yaml is True
     assert result.uses_runtime_api is True
 
 
@@ -680,8 +688,8 @@ env:
         return late_patch
 
     deployment_fixture.runtime.after_app_created.side_effect = add_late_patch
-    deployment_fixture.app.resolve_workspace_path.side_effect = (
-        lambda *args: phases.append("workspace") or "/Workspace/custom"
+    deployment_fixture.app.resolve_workspace_path.side_effect = lambda *args: (
+        phases.append("workspace") or "/Workspace/custom"
     )
     deployment_fixture.app.sync_source.side_effect = lambda *args: phases.append("sync")
     deployment_fixture.app.wait_for_compute.side_effect = lambda *args: phases.append("wait")
@@ -710,10 +718,10 @@ env:
         "UV_INDEX_URL": "https://packages.example/simple",
         "UV_DEFAULT_INDEX": "https://packages.example/simple",
         "RUNTIME_LATE": "late",
+        "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
     }
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
-    assert result.created_app_yaml is False
     context = deployment_fixture.app.start_compute.call_args.args[0]
     deployment_fixture.app.start_compute.assert_called_once_with(context, None, 3)
     deployment_fixture.runtime.after_app_created.assert_called_once_with(
@@ -721,13 +729,74 @@ env:
     )
 
 
-def test_deploy_with_no_manifest_changes_does_not_scaffold_app_yaml(
+def _assert_no_workspace_call(f: SimpleNamespace) -> None:
+    f.provider.get.assert_not_called()
+    f.app.prepare_app_auth.assert_not_called()
+    f.apps.app_state.assert_not_called()
+    f.apps.exists.assert_not_called()
+    f.app.start_compute.assert_not_called()
+
+
+def test_deploy_outside_a_project_fails_before_any_workspace_call(
     deployment_fixture, tmp_path: pathlib.Path
 ):
-    result = deployment_fixture.service.deploy(_request(tmp_path))
+    (tmp_path / "app.yaml").unlink()
 
-    assert result.created_app_yaml is False
+    with pytest.raises(AgentCliError) as exc_info:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc_info.value.message == (
+        f"No Agent Bricks project in {tmp_path.resolve()} (no agent.toml or app.yaml)."
+    )
+    _assert_no_workspace_call(deployment_fixture)
     assert not (tmp_path / "app.yaml").exists()
+
+
+def test_deploy_of_a_project_without_app_yaml_names_the_expected_path(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    (tmp_path / "app.yaml").unlink()
+    deployment_fixture.resolver.load.return_value.write()
+
+    with pytest.raises(AgentCliError, match=f"No app.yaml in {tmp_path.resolve()}"):
+        deployment_fixture.service.prepare(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert not (tmp_path / "app.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "match"),
+    [
+        ("command: ['# TODO: set your run command']\n", "has a placeholder command"),
+        ("command: [unterminated", "Could not parse"),
+        ("[]\n", "top level must be an object"),
+        ("false\n", "top level must be an object"),
+        ("0\n", "top level must be an object"),
+    ],
+)
+def test_deploy_rejects_an_unusable_app_yaml_before_any_workspace_call(
+    deployment_fixture, tmp_path: pathlib.Path, text: str, match: str
+):
+    (tmp_path / "app.yaml").write_text(text)
+
+    with pytest.raises(AgentCliError, match=match):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    _assert_no_workspace_call(deployment_fixture)
+    assert (tmp_path / "app.yaml").read_text() == text
+
+
+def test_deploy_with_no_resource_changes_records_shared_compute_placement(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.resolver.load.return_value = None
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert yaml.safe_load((tmp_path / "app.yaml").read_text()) == {
+        "command": ["python", "app.py"],
+        "env": [{"name": "AGENTBRICKS_RUNTIME_ENVIRONMENT", "value": "shared_compute"}],
+    }
     deployment_fixture.provider.get.assert_called_once_with()
 
 
@@ -770,7 +839,10 @@ def test_declarative_unbind_prunes_stale_store_env_from_existing_manifest(
         entry["name"]: entry["value"]
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
-    assert env == {"KEEP": "preserve-me"}
+    assert env == {
+        "KEEP": "preserve-me",
+        "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
+    }
     assert result.memory_grant_attempted is False
     assert result.session_grant_attempted is False
     memory_client.assert_not_called()
@@ -1676,6 +1748,30 @@ def _notes(fixture) -> list[str]:
     return [call.args[0] for call in fixture.reporter.note.call_args_list]
 
 
+@pytest.mark.parametrize("tracked", [False, True])
+@pytest.mark.parametrize("error_type", [AgentCliError, RuntimeError, KeyboardInterrupt])
+def test_rollout_outcome_resets_before_preparation(
+    deployment_fixture, tmp_path, tracked, error_type
+):
+    tracker = DeployStateTracker(result_payload=lambda result: {}) if tracked else None
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+    request = _request(tmp_path)
+    service.deploy(request)
+    assert service.rollout_outcome == deploy_state.SUCCEEDED
+
+    error = error_type("rollout failed")
+    deployment_fixture.app.roll_out.side_effect = error
+    with pytest.raises(error_type) as caught:
+        service.deploy(request)
+    assert caught.value is error
+    assert service.rollout_outcome == deploy_state.FAILED
+
+    deployment_fixture.app.prepare_app_auth.side_effect = AgentCliError("preparation failed")
+    with pytest.raises(AgentCliError, match="preparation failed"):
+        service.deploy(request)
+    assert service.rollout_outcome is None
+
+
 def test_deploy_records_success_through_the_state_tracker(
     deployment_fixture, tmp_path: pathlib.Path
 ):
@@ -1836,7 +1932,12 @@ def test_wait_reports_the_apps_failure_message(deployment_fixture, tmp_path):
 
 # --- readiness: wait until the App answers ---------------------------------------------------
 
-_PROBE_DETAIL = {"answered": "HTTP 200", "booting": "HTTP 502", "unverifiable": "HTTP 403"}
+_PROBE_DETAIL = {
+    "answered": "HTTP 200",
+    "booting": "HTTP 502",
+    "unverifiable": "HTTP 403",
+    "unreachable": "connection refused",
+}
 _SUCCEEDED_APP = {
     "url": "https://demo.example",
     "compute_status": {"state": "ACTIVE"},
@@ -1857,7 +1958,11 @@ class _ScriptedProbe:
         if self._on_probe is not None:
             self._on_probe()
         outcome = self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
-        return ProbeResult(outcome, _PROBE_DETAIL[outcome])
+        return ProbeResult(
+            outcome,
+            _PROBE_DETAIL[outcome],
+            {"answered": 200, "booting": 502, "unverifiable": 403}.get(outcome),
+        )
 
 
 def test_deploy_waits_for_the_app_to_answer_after_rollout_and_grants(
@@ -1944,7 +2049,7 @@ def test_deploy_succeeds_with_a_note_when_the_app_cant_be_checked(
     assert result.ready is None
     (note,) = [n for n in _notes(deployment_fixture) if n.startswith("Couldn't check")]
     assert note.startswith("Couldn't check the agent answers: ")
-    assert note.endswith(". It may return 502 for a few seconds.")
+    assert note.endswith(". The deployment completed, but readiness is unverified.")
     assert not any(
         c.args[0].startswith("Waiting for the agent")
         for c in deployment_fixture.reporter.progress.call_args_list
@@ -1984,3 +2089,64 @@ def test_server_wait_treats_an_uncheckable_app_as_deployed_and_says_so(
 
     assert (result.status, result.ready) == ("succeeded", None)
     assert any(n.startswith("Couldn't check the agent answers") for n in _notes(deployment_fixture))
+
+
+@pytest.mark.parametrize("outcome", ["booting", "unreachable"])
+def test_readiness_timeout_retains_observation_without_misreporting_network_failure(
+    deployment_fixture, tmp_path, outcome
+):
+    diagnostics = CommandDiagnostics()
+    clock = _Clock()
+    service = _service_with(
+        deployment_fixture, clock, diagnostics=diagnostics, app_probe=_ScriptedProbe(outcome)
+    )
+    if outcome == "booting":
+        with pytest.raises(AgentCliError, match="didn't answer within"):
+            service.deploy(_request(tmp_path))
+        assert diagnostics.failure_stage == FailureStage.READY
+        assert diagnostics.readiness == Readiness.BOOTING
+        assert diagnostics.probe_http_status == 502
+        assert service.rollout_outcome == deploy_state.FAILED
+    else:
+        assert service.deploy(_request(tmp_path)).ready is None
+        assert diagnostics.failure_stage is None
+        assert diagnostics.readiness == Readiness.UNREACHABLE
+        assert diagnostics.probe_http_status is None
+        assert service.rollout_outcome == deploy_state.SUCCEEDED
+    assert sum(clock.sleeps) == 300
+
+
+def test_network_recovery_can_confirm_readiness(deployment_fixture, tmp_path):
+    diagnostics = CommandDiagnostics()
+    service = _service_with(
+        deployment_fixture,
+        _Clock(),
+        diagnostics=diagnostics,
+        app_probe=_ScriptedProbe("unreachable", "booting", "answered"),
+    )
+    assert service.deploy(_request(tmp_path)).ready is True
+    assert diagnostics.readiness == Readiness.ANSWERED
+    assert diagnostics.probe_http_status == 200
+    assert diagnostics.failure_stage is None
+
+
+@pytest.mark.parametrize(
+    ("collaborator", "method", "stage"),
+    [
+        ("resolver", "load", FailureStage.PREFLIGHT),
+        ("memory", "preflight", FailureStage.PREFLIGHT),
+        ("session", "preflight", FailureStage.PREFLIGHT),
+        ("app", "start_compute", FailureStage.APP_START),
+        ("memory", "reconcile", FailureStage.RECONCILE),
+        ("app", "roll_out", FailureStage.ROLLOUT),
+    ],
+)
+def test_deploy_preserves_the_failed_phase(
+    deployment_fixture, tmp_path, collaborator, method, stage
+):
+    diagnostics = CommandDiagnostics()
+    getattr(getattr(deployment_fixture, collaborator), method).side_effect = AgentCliError("failed")
+    service = _service_with(deployment_fixture, _Clock(), diagnostics=diagnostics)
+    with pytest.raises(AgentCliError):
+        service.deploy(_request(tmp_path))
+    assert diagnostics.failure_stage == stage

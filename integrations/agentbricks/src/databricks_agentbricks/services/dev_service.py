@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -99,12 +100,14 @@ class DevService:
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
         free_port: Callable[[], int],
+        diagnostics: CommandDiagnostics | None = None,
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
         self._free_port = free_port
+        self._diagnostics = diagnostics or CommandDiagnostics()
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -114,83 +117,91 @@ class DevService:
         ``app.agentbricksdev.yaml`` remains in place while presentation and ``run`` execute, then
         is removed along with the local tracing process even when either of those operations fails.
         """
-        source_dir = pathlib.Path(request.source)
-        app_yaml = source_dir / "app.yaml"
-        if not app_yaml.exists():
-            raise AgentCliError(
-                f"No app.yaml found at {app_yaml}.",
-                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
+        with self._diagnostics.phase(FailureStage.PROJECT):
+            source_dir = pathlib.Path(request.source)
+            app_yaml = source_dir / "app.yaml"
+            if not app_yaml.exists():
+                raise AgentCliError(
+                    f"No app.yaml found at {app_yaml}.",
+                    hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
+                    error_category="ERROR_CATEGORY_CONFIGURATION",
+                )
+
+            project = self._project_resolver.load(source_dir)
+            if project is not None and project.tools:
+                require_managed_tool_support(source_dir)
+
+            # Fail before starting tracing or writing the local manifest: `apps run-local` does not
+            # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
+            port = request.app_port or _DEFAULT_APP_PORT
+            if self._port_in_use(port):
+                raise AgentCliError(
+                    f"Port {port} is already in use (possibly a previous agentbricks dev run).",
+                    hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
+                    error_category="ERROR_CATEGORY_CONFIGURATION",
+                )
+
+            # Resource bindings are read only for the preview/presentation.  Dev is fully local and
+            # deliberately does not provision, fetch, or otherwise contact any workspace resource.
+            memory_store, session_store, trace_experiment = (
+                self._project_resolver.resource_bindings(source_dir)
             )
 
-        project = self._project_resolver.load(source_dir)
-        if project is not None and project.tools:
-            require_managed_tool_support(source_dir)
-
-        # Fail before starting tracing or writing the local manifest: `apps run-local` does not
-        # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
-        port = request.app_port or _DEFAULT_APP_PORT
-        if self._port_in_use(port):
-            raise AgentCliError(
-                f"Port {port} is already in use (possibly a previous agentbricks dev run).",
-                hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
-            )
-
-        # Resource bindings are read only for the preview/presentation.  Dev is fully local and
-        # deliberately does not provision, fetch, or otherwise contact any workspace resource.
-        memory_store, session_store, trace_experiment = self._project_resolver.resource_bindings(
-            source_dir
-        )
-
-        tracing = self._local_tracing.start_dev(source_dir)
+        with self._diagnostics.phase(FailureStage.TRACING):
+            tracing = self._local_tracing.start_dev(source_dir)
         tracing_server, tracing_env = tracing.server, tracing.environment
         entry_point: pathlib.Path | None = None
         try:
-            # Repeat runs reuse an existing environment; an explicit request overrides that
-            # auto-detection exactly as the old Click command did.
-            prepare_environment = request.prepare_environment
-            if prepare_environment is None:
-                prepare_environment = not (source_dir / ".venv").exists()
+            with self._diagnostics.phase(FailureStage.PROJECT):
+                # Repeat runs reuse an existing environment; an explicit request overrides that
+                # auto-detection exactly as the old Click command did.
+                prepare_environment = request.prepare_environment
+                if prepare_environment is None:
+                    prepare_environment = not (source_dir / ".venv").exists()
+                self._diagnostics.prepare_environment = prepare_environment
 
-            local_env = dict(tracing_env)
-            if memory_store:
-                # Display-only: lets the chat app say the bound store connects on deploy. Memory
-                # itself stays off locally; nothing resolves a store from this.
-                local_env[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
-            entry_point = _dev_entry_point(
-                app_yaml,
-                local_env or None,
-                allowed_origins=project.allowed_origins if project is not None else None,
-            )
-            preview = DevPreview(
-                source_dir=source_dir,
-                port=port,
-                server=project.server if project else None,
-                tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
-                local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
-                tracing_warning=tracing.warning,
-                tracing_help=tracing.help,
-                memory_store=memory_store,
-                session_store=session_store,
-                trace_experiment=trace_experiment,
-                has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
-            )
+                local_env = dict(tracing_env)
+                if memory_store:
+                    # Display-only: lets the chat app say the bound store connects on deploy. Memory
+                    # itself stays off locally; nothing resolves a store from this.
+                    local_env[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
+                entry_point = _dev_entry_point(
+                    app_yaml,
+                    local_env or None,
+                    allowed_origins=project.allowed_origins if project is not None else None,
+                )
+                preview = DevPreview(
+                    source_dir=source_dir,
+                    port=port,
+                    server=project.server if project else None,
+                    tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
+                    local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
+                    tracing_warning=tracing.warning,
+                    tracing_help=tracing.help,
+                    memory_store=memory_store,
+                    session_store=session_store,
+                    trace_experiment=trace_experiment,
+                    has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
+                )
+                app_port = self._free_port()
             yield DevPlan(
                 preview=preview,
                 entry_point=entry_point,
                 prepare_environment=prepare_environment,
                 # The user-facing port is run-local's proxy; the app gets a free port behind it so
                 # concurrent runs don't collide on run-local's default app or proxy port.
-                app_port=self._free_port(),
+                app_port=app_port,
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
             # process, and a setup/run/presentation exception must not leave either resource behind.
-            try:
-                if entry_point is not None:
-                    entry_point.unlink(missing_ok=True)
-            finally:
-                if tracing_server is not None:
-                    self._local_tracing.stop(tracing_server)
+            with self._diagnostics.phase(FailureStage.CLEANUP):
+                try:
+                    if entry_point is not None:
+                        entry_point.unlink(missing_ok=True)
+                finally:
+                    if tracing_server is not None:
+                        self._local_tracing.stop(tracing_server)
 
     def run(
         self,
@@ -203,15 +214,16 @@ class DevService:
         ``on_ready`` is called once the agent answers on its port, not when the command starts.
         ``quiet_status`` gives the line to show while run-local's output is quiet before then.
         """
-        self._apps_client.run_local(
-            plan.preview.source_dir,
-            plan.entry_point.name,
-            prepare_environment=plan.prepare_environment,
-            port=plan.preview.port,
-            app_port=plan.app_port,
-            on_ready=on_ready,
-            quiet_status=quiet_status,
-        )
+        with self._diagnostics.phase(FailureStage.RUN_LOCAL):
+            self._apps_client.run_local(
+                plan.preview.source_dir,
+                plan.entry_point.name,
+                prepare_environment=plan.prepare_environment,
+                port=plan.preview.port,
+                app_port=plan.app_port,
+                on_ready=on_ready,
+                quiet_status=quiet_status,
+            )
 
 
 def _dev_entry_point(

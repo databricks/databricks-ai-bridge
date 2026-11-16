@@ -203,23 +203,24 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(name=name):
                 result = gate.decide(review(change_risk=name), diff(CODE))
                 self.assertEqual(result["risk"]["level"], level)
-                self.assertEqual(result["approve"], level in {"low", "medium"})
+                self.assertTrue(result["approve"], result)
 
-    def test_max_risk_can_be_restricted_to_low(self):
-        result = gate.decide(review(change_risk="MODERATE"), diff(CODE), max_risk="low")
-        self.assertFalse(result["approve"], result)
-        self.assertTrue(any("allows up to LOW risk" in reason for reason in result["reasons"]))
-        self.assertEqual(result["max_risk"], "low")
-        section = gate.overview(review(change_risk="MODERATE"), result)
-        self.assertIn("Lower the change risk to LOW or below", section)
+    def test_high_risk_does_not_override_other_approval_gates(self):
+        for kwargs in (
+            {"score": 94}, {"reviewers": "1/2"},
+            {"blocking": "A bug."}, {"security": "A vulnerability."},
+            {"uncertain": "An unverified finding."},
+        ):
+            with self.subTest(kwargs=kwargs):
+                result = gate.decide(review(change_risk="HIGH", **kwargs), diff(CODE))
+                self.assertFalse(result["approve"], result)
+                self.assertEqual(result["risk"]["label"], "risk:high")
+        for content in (diff("REVIEW.md"), diff(CODE, added=501)):
+            with self.subTest(content=content):
+                result = gate.decide(review(change_risk="HIGH"), content)
+                self.assertFalse(result["approve"], result)
 
-    def test_invalid_max_risk_fails_closed(self):
-        for level in ("high", "unrated", "MODERATE", ""):
-            with self.subTest(level=level):
-                with self.assertRaises(ValueError):
-                    gate.decide(review(), diff(CODE), max_risk=level)
-
-    def test_missing_or_invalid_assessment_withholds_approval(self):
+    def test_missing_or_invalid_assessment_is_advisory(self):
         for text in (
             review().replace("**Change risk:** LOW", ""),
             review(change_risk="Unrated"),
@@ -231,10 +232,10 @@ class ChangeRiskTest(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 result = gate.decide(text, diff(CODE))
-                self.assertFalse(result["approve"])
+                self.assertTrue(result["approve"], result)
                 self.assertEqual(result["risk"]["label"], "risk:unrated")
 
-    def test_risk_rationale_is_required(self):
+    def test_missing_or_duplicate_rationale_is_advisory(self):
         for text in (
             review().replace("**Risk rationale:** Small compatible change with focused tests and straightforward rollback.", ""),
             review().replace("Small compatible change with focused tests and straightforward rollback.", ""),
@@ -242,7 +243,7 @@ class ChangeRiskTest(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 result = gate.decide(text, diff(CODE))
-                self.assertFalse(result["approve"])
+                self.assertTrue(result["approve"], result)
                 self.assertEqual(result["risk"]["label"], "risk:unrated")
 
     def test_unrated_is_preserved_even_for_sensitive_paths(self):
@@ -256,9 +257,12 @@ class ChangeRiskTest(unittest.TestCase):
     def test_high_assessment_is_not_downgraded_by_lower_floors(self):
         text = review(change_risk="HIGH")
         decision = gate.decide(text, diff(CODE))
-        self.assertFalse(decision["approve"])
+        self.assertTrue(decision["approve"])
         self.assertEqual(decision["risk"]["label"], "risk:high")
-        self.assertIn("**Change risk:** HIGH · `risk:high`", gate.overview(text, decision))
+        comment = gate.overview(text, decision)
+        self.assertIn("**Change risk:** HIGH · `risk:high`", comment)
+        self.assertIn("Small compatible change", comment)
+        self.assertIn("eligible for auto-approval", comment)
 
     def test_public_interface_and_runtime_changes_have_medium_floor(self):
         for path in (
@@ -275,15 +279,15 @@ class ChangeRiskTest(unittest.TestCase):
                 self.assertEqual(result["risk"]["model_level"], "low")
 
     def test_sensitive_paths_have_high_floor(self):
-        for path in (
-            "REVIEW.md", "integrations/agentbricks/REVIEW.md", "uv.lock",
-            ".github/workflows/main.yml",
-            "integrations/agentbricks/src/auth/helper.py",
-            "integrations/agentbricks/src/migrations/update.py",
+        for path, approved in (
+            ("REVIEW.md", False), ("integrations/agentbricks/REVIEW.md", False),
+            ("uv.lock", False), (".github/workflows/main.yml", False),
+            ("integrations/agentbricks/src/auth/helper.py", True),
+            ("integrations/agentbricks/src/migrations/update.py", True),
         ):
             with self.subTest(path=path):
                 result = gate.decide(review(), diff(path))
-                self.assertFalse(result["approve"])
+                self.assertEqual(result["approve"], approved)
                 self.assertEqual(result["risk"]["label"], "risk:high")
 
     def test_cross_package_production_changes_have_medium_floor(self):
@@ -332,7 +336,7 @@ class ChangeRiskTest(unittest.TestCase):
                 result = gate.decide(review(change_risk=risk), diff(path, added=added))
                 self.assertTrue(result["review_passed"], result)
                 self.assertEqual(result["review_reasons"], [])
-                self.assertEqual(result["approve"], path == CODE and risk in {"LOW", "MODERATE"} and added == 1)
+                self.assertEqual(result["approve"], path == CODE and added == 1)
 
     def test_review_failures_withhold_ai_label_verdict(self):
         for text in (review(score=94), review(score=101), review(reviewers="1/2"),
@@ -400,6 +404,84 @@ class ChangeRiskTest(unittest.TestCase):
         paths = [f"src/pkg/m{i}.py" for i in range(8)]
         section = gate.overview(review(), gate.decide(review(), diff(*paths)))
         self.assertIn("`src/pkg/m4.py`, and 3 more", section)
+
+
+
+class FindingsOverviewTest(unittest.TestCase):
+    FINDINGS = [
+        {"section": "Blocking issues", "severity": "HIGH", "location": "a.py:3", "title": "Crash on empty input",
+         "problem": "p", "fix": "f", "evidence": "e", "inline": True, "url": "https://x/1"},
+        {"section": "Non-blocking notes", "severity": "LOW", "location": "docs/b.md:9", "title": "Stale example",
+         "problem": "The example uses the old flag.", "fix": "Use `--new`.", "evidence": "Read docs/b.md:1-20.",
+         "inline": False, "url": None, "file_url": "https://x/blob/b.md#L9"},
+    ]
+
+    def test_inline_findings_are_one_linked_headline(self):
+        text = review(blocking="- [HIGH] [HIGH CONFIDENCE] `a.py:3` — x")
+        section = gate.overview(text, gate.decide(text, diff(CODE)), self.FINDINGS)
+        self.assertIn("**Blocking issues**\n- **HIGH** · [`a.py:3`](https://x/1) — Crash on empty input\n", section)
+        self.assertNotIn("\n  p\n", section)
+
+    def test_findings_not_shown_inline_keep_their_details(self):
+        section = gate.overview(review(), gate.decide(review(), diff(CODE)), self.FINDINGS)
+        self.assertIn("- **LOW** · [`b.md:9`](https://x/blob/b.md#L9) — Stale example\n  The example uses the old flag.\n"
+                      "  **Fix:** Use `--new`.\n  <sub>Read docs/b.md:1-20.</sub>", section)
+
+    def test_no_findings_says_so(self):
+        section = gate.overview(review(), gate.decide(review(), diff(CODE)), [])
+        self.assertIn("### Summary\n\nNo findings.", section)
+
+    def test_risk_factors_are_hidden_unless_ci_raised_the_level(self):
+        text = review(change_risk="HIGH")
+        section = gate.overview(text, gate.decide(text, diff(".github/workflows/a.yml")), [])
+        self.assertNotIn("CI raised", section)
+        self.assertIn("move them to a separate PR (`.github/workflows/a.yml`)", section)
+
+
+class ShortLocationTest(unittest.TestCase):
+    def test_paths_shrink_to_the_shortest_unique_suffix(self):
+        short = gate.short_locations([
+            "integrations/agentbricks/src/pkg/presentation/group.py:203",
+            "integrations/agentbricks/src/pkg/cli/__init__.py:4",
+            "integrations/agentbricks/src/pkg/runtime/__init__.py:9-12",
+            "",
+        ])
+        self.assertEqual(short, {
+            "integrations/agentbricks/src/pkg/presentation/group.py:203": "group.py:203",
+            "integrations/agentbricks/src/pkg/cli/__init__.py:4": "cli/__init__.py:4",
+            "integrations/agentbricks/src/pkg/runtime/__init__.py:9-12": "runtime/__init__.py:9-12",
+        })
+
+
+class ApproachTest(unittest.TestCase):
+    def test_summary_keeps_the_first_sentence_and_details_the_rest(self):
+        text = review().replace("## Approach\n\nSound.\n", "## Approach\n\nSound overall. `parse()` could reuse `split()`.\n\n"
+                                "**Review rules:** `REVIEW.md`\n")
+        section = gate.overview(text, gate.decide(text, diff(CODE)), [])
+        self.assertIn("**Approach:** Sound overall. More in **Details**.", section)
+        self.assertNotIn("reuse", section)
+        self.assertTrue(gate.details(text).startswith("**Approach:** Sound overall. `parse()` could reuse `split()`.\n\n"
+                                                      "**Review rules:** `REVIEW.md`"))
+
+    def test_one_sentence_approach_is_not_repeated_in_details(self):
+        self.assertNotIn("Approach", gate.details(review()))
+
+
+class DetailsTest(unittest.TestCase):
+    def test_details_hold_rules_and_summary_without_repeating_the_overview(self):
+        text = review().replace("## Summary\n", "**Review rules:** `REVIEW.md` · checked: BRIDGE-001\n\n## Summary\n\n"
+                                "**Diff size (computed):** 1 file\n\nShares use additions + deletions, blah.\n"
+                                "Tests include fixtures.\n\n")
+        text_details = gate.details(text)
+        self.assertTrue(text_details.startswith("**Review rules:** `REVIEW.md`"))
+        self.assertIn("**Diff size (computed):** 1 file", text_details)
+        self.assertIn("### Changes\nA change.", text_details)
+        self.assertNotIn("Shares use additions", text_details)
+        for repeated in ("Review score", "Change risk", "Risk rationale", "Sound.", "Blocking issues"):
+            self.assertNotIn(repeated, text_details)
+
+    def test_details_are_empty_without_rules_or_summary(self):
+        self.assertEqual(gate.details("**Review score:** 100/100 · reviewers: 2/2\n"), "")
 
 
 if __name__ == "__main__":
