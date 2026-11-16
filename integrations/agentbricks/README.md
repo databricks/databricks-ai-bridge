@@ -1628,3 +1628,7 @@ stay in local state and the background worker; they are not uploaded. The separa
 `invocation_id` identifies one command and joins details-link arrivals to it.
 See [outcome interpretation](CONTRIBUTING.md#interpreting-command-and-deployment-outcomes) for
 failure-rate denominators and coverage limits.
+
+Local runs track parent interruption and child exit status internally. A child-only SIGINT or
+explicit exit 130 remains a runtime failure; it is not treated as a confirmed user cancellation.
+Caught parent interruptions use the existing interruption category and omit failure text.

@@ -337,3 +337,17 @@ and inspect regional `failure_message` where retained. Startup milestones, child
 and workflow phases remain internal to the CLI. Completion-only telemetry cannot observe abrupt
 process termination or failed/unauthenticated uploads, so account for event coverage alongside
 failure rates. Deploy the schema before releasing failure-text collection.
+
+## Local process and signal coverage
+
+`tests/unit_tests/dev_signal_test.py` starts real Python child processes through the local-run
+adapter. On Linux/macOS it sends SIGINT to the terminal process group and to the child alone,
+before and after TCP listening, using both streaming and PTY output. An explicit child exit 130
+is tested separately on all three platforms; that value alone does not prove a user interrupt.
+The CLI retains parent-interruption evidence and the observed child return code internally.
+Caught parent interruptions use the existing interruption category and omit `failure_message`.
+These tests use a small TCP server, not Databricks CLI or a model invocation.
+
+POSIX signal cases are explicitly skipped on Windows. Native Windows console Ctrl+C propagation
+still needs validation with the installed Databricks CLI; passing these tests does not establish
+that Ctrl+C is absent from historical Windows failures. Platform CI wiring is a separate follow-up.

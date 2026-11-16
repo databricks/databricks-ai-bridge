@@ -600,16 +600,24 @@ class AppsClient:
             self._diagnostics.local_agent_listened()
             on_ready()
 
-        result = self._run(
-            args,
-            self._profile,
-            check=False,
-            cwd=str(source_dir),
-            env=_get_run_local_env(),
-            ready_probe=lambda: accepts_connections(app_port),
-            on_ready=_on_ready,
-            quiet_status=quiet_status,
-        )
+        def _on_exit(code: int) -> None:
+            self._diagnostics.subprocess_exit_code = code
+
+        try:
+            result = self._run(
+                args,
+                self._profile,
+                check=False,
+                cwd=str(source_dir),
+                env=_get_run_local_env(),
+                ready_probe=lambda: accepts_connections(app_port),
+                on_ready=_on_ready,
+                on_exit=_on_exit,
+                quiet_status=quiet_status,
+            )
+        except KeyboardInterrupt:
+            self._diagnostics.parent_interrupted = True
+            raise
         self._diagnostics.subprocess_exit_code = result.returncode
         if result.returncode != 0:
             detail = (result.stderr or "").strip() or (result.stdout or "").strip() or None
