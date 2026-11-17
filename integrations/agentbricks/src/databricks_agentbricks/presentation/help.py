@@ -157,6 +157,24 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "entries", "delete"): (
         ("agentbricks memory entries delete --store <store> <entry>", "delete an entry"),
     ),
+    ("memory", "changes"): (
+        ("agentbricks memory changes list --store <store>", "list memory write history"),
+        ("agentbricks memory changes get <change-id> --store <store>", "inspect entry versions"),
+    ),
+    ("memory", "changes", "list"): (
+        (
+            "agentbricks memory changes list --store <store> --actor-id alice "
+            "--source-type dreamer --path /preferences/",
+            "filter change metadata",
+        ),
+    ),
+    ("memory", "changes", "get"): (
+        (
+            "agentbricks -o json memory changes get <change-id> --store <store> "
+            "--memory-entry-id <entry-id>",
+            "read one entry version and its predecessor link",
+        ),
+    ),
     ("memory", "pipeline"): (
         (
             "agentbricks memory pipeline create --memory-store agent-memory "

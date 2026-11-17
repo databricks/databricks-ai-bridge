@@ -11,6 +11,7 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
+import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
@@ -114,6 +115,31 @@ def memory_entry_path(store: str, entry: str) -> str:
     if not entry:
         raise AgentCliError("A memory entry id or resource name is required.")
     return f"{memory_store_path(store)}/entries/{entry}"
+
+
+def _memory_change_id(value: str, label: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", value):
+        raise AgentCliError(f"{label} must contain 1-255 letters, digits, hyphens, or underscores.")
+    return value
+
+
+def _memory_changes_path(store: str) -> str:
+    name = memory_store_path(store)
+    _memory_change_id(name.split("/", 1)[1], "Store id")
+    return f"{_BASE}/{name}/changes"
+
+
+def _memory_change_filter_path(path: Optional[str]) -> Optional[str]:
+    if path and (
+        not path.startswith("/")
+        or "\x00" in path
+        or "//" in path
+        or any(part in {".", ".."} for part in path.split("/"))
+    ):
+        raise AgentCliError(
+            "Path must be absolute, without NUL, repeated slashes, or . / .. segments."
+        )
+    return path
 
 
 def _profile_host(profile: str) -> Optional[str]:
@@ -466,6 +492,58 @@ class _AgentBricksApiClient:
 
     def delete_memory_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{memory_store_path(name)}")
+
+    # --- memory changes ------------------------------------------------------
+
+    def list_memory_changes(
+        self,
+        store: str,
+        *,
+        actor_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> dict:
+        """Read one page of change headers without entry contents."""
+        validate_page_size(page_size)
+        return self._do(
+            "GET",
+            _memory_changes_path(store),
+            query=_query(
+                actor_id=actor_id,
+                source_type=source_type,
+                path_prefix=_memory_change_filter_path(path_prefix),
+                page_size=page_size,
+                page_token=page_token,
+            ),
+        )
+
+    def get_memory_changes(
+        self,
+        store: str,
+        change_id: str,
+        *,
+        memory_entry_id: Optional[str] = None,
+        path: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> dict:
+        """Read a change header and one page of complete versions and predecessor links."""
+        validate_page_size(page_size)
+        resource = _memory_changes_path(store) + "/" + _memory_change_id(change_id, "Change id")
+        if memory_entry_id:
+            _memory_change_id(memory_entry_id, "Memory entry id")
+        return self._do(
+            "GET",
+            resource,
+            query=_query(
+                memory_entry_id=memory_entry_id,
+                path=_memory_change_filter_path(path),
+                page_size=page_size,
+                page_token=page_token,
+            ),
+        )
 
     # --- memory entries ------------------------------------------------------
 
