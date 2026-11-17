@@ -111,8 +111,13 @@ def sessions_unbind(obj, source: pathlib.Path) -> None:
     from databricks_agentbricks.projects.agent_project import AgentProject
 
     project = AgentProject.load(source)
-    if project.unbind_session_store():
+    removed = project.unbind_session_store()
+    if removed:
         project.write()
+    if obj.output == "json":
+        render.emit_json({"session_store": None, "removed": removed, "manifest": str(project.path)})
+        return
+    if removed:
         render.success(
             "Removed session store binding",
             fields={"agent.toml": str(project.path)},
