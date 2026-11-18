@@ -263,7 +263,7 @@ def test_init_refuses_existing_generated_project_without_changing_profile(tmp_pa
     second = _init(dest, "--profile", "staging", output="json")
 
     assert second.exit_code != 0
-    assert "already exists" in second.output
+    assert "already exists" in " ".join(second.output.split())
     assert (dest / ".env").read_text().startswith("DATABRICKS_CONFIG_PROFILE=production\n")
 
 
