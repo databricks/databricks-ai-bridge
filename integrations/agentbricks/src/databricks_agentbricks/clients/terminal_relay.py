@@ -79,8 +79,7 @@ def run(
     _copy_window_size(master)
     previous_winch = signal.signal(signal.SIGWINCH, lambda *_: _copy_window_size(master))
     try:
-        # stdin stays the real terminal, so typed input (e.g. at a debugger prompt) still reaches
-        # the app; the process group is unchanged, so Ctrl+C reaches it as before.
+        # Keep stdin attached so an agent's debugger can read terminal input.
         proc = subprocess.Popen(
             cmd,
             cwd=cwd,
@@ -121,6 +120,12 @@ def run(
         relay.clear_status()
     except KeyboardInterrupt:
         relay.clear_status()
+        if isolated:
+            from databricks_agentbricks.clients.process_runner import stop_process
+
+            stop_process(proc, isolated=True, signum=signal.SIGINT)
+            relay.drain(_OUTPUT_GRACE_S)
+            raise
         # Ctrl+C reaches the child too. Keep relaying its shutdown output, give it a moment to exit
         # cleanly as `subprocess.run` does, then make sure it is gone.
         deadline = time.monotonic() + _SIGINT_WAIT_S

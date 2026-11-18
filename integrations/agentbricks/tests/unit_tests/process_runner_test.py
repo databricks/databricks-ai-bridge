@@ -14,8 +14,12 @@ import pytest
 from databricks_agentbricks.clients.process_runner import run_process
 
 _CHILD = """
-import pathlib, socket, subprocess, sys, time
+import pathlib, signal, socket, subprocess, sys, time
 root = pathlib.Path(sys.argv[1])
+def interrupt(signum, frame):
+    (root/'interrupted').touch()
+    sys.exit(130)
+signal.signal(signal.SIGINT, interrupt)
 grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
 (root/'grandchild').write_text(str(grandchild.pid))
 sock = socket.socket()
@@ -95,6 +99,8 @@ def test_supervisor_reaps_server_and_descendants(tmp_path, mode, ending):
             assert parent.returncode == 143, stderr
         else:
             assert parent.returncode != 0
+        if ending == "interrupt":
+            assert (tmp_path / "interrupted").exists(), "server did not receive Ctrl-C"
         deadline = time.monotonic() + 3
         while _alive(grandchild) and time.monotonic() < deadline:
             time.sleep(0.02)
