@@ -52,7 +52,11 @@ def allocation(registry, session_id):
 
 class RegistryReservation:
     def __init__(self, record):
-        self.record, self.key = record, record.key
+        self.record = record
+
+    @property
+    def key(self):
+        return self.record.key
 
     async def read(self):
         row = await blocking(self.record.get)
@@ -60,8 +64,8 @@ class RegistryReservation:
             return None
         return SessionBinding(
             row["sandbox_id"],
-            row["source_hash"],
-            row["status"],
+            row.get("source_hash", ""),
+            row.get("status", "pending"),
             row.get("source_revision"),
             row.get("execution_principal"),
             (row.get("bootstrap_metrics") or {}).get("worker_state_key"),
@@ -77,6 +81,7 @@ class RegistryReservation:
             binding.source_hash,
             binding.sandbox_id,
             binding.status,
+            None,
             **kwargs,
         )
 
@@ -107,14 +112,17 @@ class LakeboxProvider:
         self.lakebox = lakebox
         self.snapshots = {}
 
-    def capture(self, value):
+    def capture(self, value, sandbox_id=None):
         if value is None:
             return None
-        self.snapshots[value["sandboxId"]] = value
-        return Sandbox(value["sandboxId"], value.get("status", "unknown").lower())
+        sandbox_id = value.get("sandboxId") or sandbox_id
+        if not sandbox_id:
+            raise ValueError("Sandbox response is missing its identity")
+        self.snapshots[sandbox_id] = {**value, "sandboxId": sandbox_id}
+        return Sandbox(sandbox_id, value.get("status", "unknown").lower())
 
     async def get(self, sandbox_id):
-        return self.capture(await blocking(self.lakebox.get, sandbox_id))
+        return self.capture(await blocking(self.lakebox.get, sandbox_id), sandbox_id)
 
     async def find(self, name):
         return self.capture(await blocking(self.lakebox.find_named, name))
@@ -126,7 +134,7 @@ class LakeboxProvider:
         await blocking(self.lakebox.set_idle_timeout, sandbox_id)
 
     async def start(self, sandbox_id):
-        return self.capture(await blocking(self.lakebox.start, sandbox_id))
+        return self.capture(await blocking(self.lakebox.start, sandbox_id), sandbox_id)
 
     async def stop(self, sandbox_id):
         try:
@@ -144,7 +152,7 @@ class LakeboxProvider:
                 "terminated",
             }:
                 raise
-        return self.capture(result)
+        return self.capture(result, sandbox_id)
 
 
 def run_sync(coroutine):

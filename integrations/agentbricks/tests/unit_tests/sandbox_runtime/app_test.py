@@ -15,6 +15,10 @@ from databricks_agentkit.sandbox.orchestrator import Orchestrator
 from databricks_agentkit.sandbox.session_client import SessionSandboxClient
 
 
+async def no_sleep(seconds):
+    pass
+
+
 @pytest.fixture
 def client(monkeypatch):
     # App routing runs normally. External source, database, and execution services
@@ -292,9 +296,7 @@ def test_stop_duration_includes_api_request_and_confirmed_shutdown_wait(client, 
     monkeypatch.setattr(
         "databricks_agentkit.sandbox.session_client.time.perf_counter", lambda: clock[0]
     )
-    monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time.sleep", lambda seconds: None
-    )
+    monkeypatch.setattr("databricks_agentkit.sandbox.session_lifecycle.asyncio.sleep", no_sleep)
 
     @contextmanager
     def session(key):
@@ -349,9 +351,7 @@ def test_stop_is_idempotent_after_platform_auto_stop(client, status):
 
 @pytest.mark.parametrize("reply", [None, {}])
 def test_empty_stop_reply_requires_observed_shutdown(client, monkeypatch, reply):
-    monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time.sleep", lambda seconds: None
-    )
+    monkeypatch.setattr("databricks_agentkit.sandbox.session_lifecycle.asyncio.sleep", no_sleep)
     saved = MagicMock()
     app.state.orchestrator.registry.session.return_value.__enter__.return_value = SimpleNamespace(
         get=lambda: {"sandbox_id": "ours", "source_hash": "digest"},
@@ -371,9 +371,7 @@ def test_empty_stop_reply_requires_observed_shutdown(client, monkeypatch, reply)
 
 
 def test_missing_sandbox_does_not_record_confirmed_shutdown(client, monkeypatch):
-    monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time.sleep", lambda seconds: None
-    )
+    monkeypatch.setattr("databricks_agentkit.sandbox.session_lifecycle.asyncio.sleep", no_sleep)
     saved = MagicMock()
     app.state.orchestrator.registry.session.return_value.__enter__.return_value = SimpleNamespace(
         get=lambda: {"sandbox_id": "ours", "source_hash": "digest"},
@@ -391,7 +389,7 @@ def test_missing_sandbox_does_not_record_confirmed_shutdown(client, monkeypatch)
 def test_shutdown_deadline_does_not_record_success(client, monkeypatch):
     clock = iter([10, 10, 191])
     monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time",
+        "databricks_agentkit.sandbox.session_lifecycle.time",
         SimpleNamespace(perf_counter=lambda: 0.0, monotonic=lambda: next(clock)),
     )
     saved = MagicMock()
@@ -510,9 +508,7 @@ def test_cancelled_stop_response_is_reconciled_without_replaying_command(
 ):
     from databricks.sdk.errors import Cancelled
 
-    monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time.sleep", lambda seconds: None
-    )
+    monkeypatch.setattr("databricks_agentkit.sandbox.session_lifecycle.asyncio.sleep", no_sleep)
     saved = MagicMock()
     app.state.orchestrator.registry.session.return_value.__enter__.return_value = SimpleNamespace(
         get=lambda: {"sandbox_id": "ours", "source_hash": "digest"},
