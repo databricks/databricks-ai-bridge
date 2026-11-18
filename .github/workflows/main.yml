@@ -26,6 +26,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m unittest discover .github/scripts/tests
+      - run: python .github/agentbricks-reviewer/test_prompt.py
 
   core_test:
     runs-on: ubuntu-latest

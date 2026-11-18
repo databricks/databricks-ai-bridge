@@ -136,6 +136,19 @@ class GrantOutcome:
         return cls(attempted=False, error=None)
 
 
+def _store_disabled_error(
+    kind: str, store_name: str, unbind_command: str, cause: AgentCliError
+) -> AgentCliError:
+    """A bound store whose API is turned off: say nothing was created and how to get unblocked."""
+    unbind = f"Or run `{unbind_command}` to deploy without it."
+    return AgentCliError(
+        f"{cause.message.rstrip('.')}. agent.toml binds {kind} store {store_name!r}, so deploy "
+        "stopped before creating anything.",
+        error_code=cause.error_code,
+        hint=f"{cause.hint}\n{unbind}" if cause.hint else unbind,
+    )
+
+
 class MemoryStoreProvisioner:
     """The memory store declared in agent.toml, reconciled and granted on its own.
 
@@ -149,6 +162,17 @@ class MemoryStoreProvisioner:
     def __init__(self, memory_store_client: MemoryStoreClient, reporter: Reporter) -> None:
         self._memory_store_client = memory_store_client
         self._reporter = reporter
+
+    def preflight(self, ctx: ResourceContext) -> None:
+        """Fail before deploy creates anything if the bound memory store's API is turned off."""
+        if not ctx.memory_store:
+            return
+        try:
+            self._memory_store_client.check_enabled()
+        except AgentCliError as exc:
+            raise _store_disabled_error(
+                "memory", ctx.memory_store, "agentbricks memory unbind", exc
+            ) from exc
 
     def reconcile(self, ctx: ResourceContext) -> MemoryStoreState:
         """Create the declared memory store if absent and wire ``AGENT_MEMORY_STORE``.
@@ -216,6 +240,17 @@ class SessionStoreProvisioner:
     def __init__(self, session_store_client: SessionStoreClient, reporter: Reporter) -> None:
         self._session_store_client = session_store_client
         self._reporter = reporter
+
+    def preflight(self, ctx: ResourceContext) -> None:
+        """Fail before deploy creates anything if the bound session store's API is turned off."""
+        if not ctx.session_store:
+            return
+        try:
+            self._session_store_client.check_enabled()
+        except AgentCliError as exc:
+            raise _store_disabled_error(
+                "session", ctx.session_store, "agentbricks sessions unbind", exc
+            ) from exc
 
     def reconcile(self, ctx: ResourceContext) -> SessionStoreState:
         """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``.

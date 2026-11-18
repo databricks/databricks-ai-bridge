@@ -18,10 +18,16 @@ import uuid
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
-from typing import Any
+from typing import Any, Literal
+from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
 from click.core import ParameterSource
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import Timeout as RequestsTimeout
+
+from databricks_agentbricks.telemetry.scrub import MAX_FAILURE_INPUT_CHARS, scrub_failure_text
 
 _DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
@@ -34,6 +40,57 @@ _CHOICE_VALUE_PREFIX = "AGENTBRICKS_CLI_"
 _MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
 _MAX_STATIC_NAME_LENGTH = 128
+_DEPLOYMENT_META_KEY = "agentbricks.deployment_telemetry"
+DeploymentOutcome = Literal[
+    "DEPLOYMENT_OUTCOME_UNSPECIFIED",
+    "DEPLOYMENT_OUTCOME_RUNNING",
+    "DEPLOYMENT_OUTCOME_SUCCEEDED",
+    "DEPLOYMENT_OUTCOME_FAILED",
+]
+
+
+@dataclass
+class DeploymentTelemetry:
+    """Attribution for a single printed command result, not a logical rollout."""
+
+    invocation_id: str
+    background_child: bool = False
+    details_link_emitted: bool = False
+    deployment_outcome: DeploymentOutcome = "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def begin_deployment(*, background_child: bool = False) -> None:
+    ctx = click.get_current_context()
+    ctx.meta[_DEPLOYMENT_META_KEY] = DeploymentTelemetry(
+        invocation_id=str(uuid.uuid4()), background_child=background_child
+    )
+
+
+def set_deployment_outcome(outcome: DeploymentOutcome) -> None:
+    """Record observed state without replacing a deployment exception."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        attribution = _deployment_metadata(ctx)
+        if attribution is not None:
+            attribution.deployment_outcome = outcome
+    except BaseException:
+        return
+
+
+def deployment_details_url(url: str | None) -> str | None:
+    """Join browser arrivals to command telemetry while preserving opt-out."""
+    ctx = click.get_current_context()
+    attribution = ctx.meta.get(_DEPLOYMENT_META_KEY)
+    if not isinstance(attribution, DeploymentTelemetry):
+        return url
+    attribution.details_link_emitted = url is not None
+    if url is None or attribution.background_child or _telemetry_disabled():
+        return url
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query.extend([("source", "agentbricks-cli"), ("cli_invocation_id", attribution.invocation_id)])
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
 
 _ERROR_CATEGORIES = frozenset(
     {
@@ -97,6 +154,8 @@ class _AgentBricksCliLog:
     exit_code: int
     error_category: str | None = None
     parameters: tuple[_ParameterEntry, ...] = ()
+    failure_message: str | None = None
+    deployment: DeploymentTelemetry | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -110,6 +169,15 @@ class _AgentBricksCliLog:
             data["error_category"] = self.error_category
         if self.parameters:
             data["parameters"] = [parameter.to_dict() for parameter in self.parameters]
+        if self.failure_message is not None:
+            data["failure_message"] = self.failure_message
+        if self.deployment is not None:
+            data.update(
+                invocation_id=self.deployment.invocation_id,
+                background_child=self.deployment.background_child,
+                details_link_emitted=self.deployment.details_link_emitted,
+                deployment_outcome=self.deployment.deployment_outcome,
+            )
         return data
 
 
@@ -140,6 +208,7 @@ def emit_command(
     execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
+    exception: BaseException | None = None,
 ) -> None:
     """Emit one command record in a daemon worker, bounded by a short foreground join."""
 
@@ -150,6 +219,7 @@ def emit_command(
         execution_time_ms=execution_time_ms,
         exit_code=exit_code,
         error_category=error_category,
+        exception=exception,
     )
     payload = _FrontendLogPayload(
         log=log,
@@ -187,49 +257,81 @@ def _bounded_error_category(value: object | None) -> str:
     )
 
 
+def _exception_chain(exc: BaseException | None):
+    seen: set[int] = set()
+    for _ in range(8):
+        if exc is None or id(exc) in seen:
+            return
+        seen.add(id(exc))
+        yield exc
+        exc = exc.__cause__
+
+
+_SERVICE_ERROR_CATEGORIES = {
+    code: f"ERROR_CATEGORY_{category}"
+    for category, codes in {
+        "AUTHENTICATION": (
+            "UNAUTHENTICATED",
+            "INVALID_TOKEN",
+            "INVALID_CREDENTIALS",
+            "TOKEN_EXPIRED",
+        ),
+        "AUTHORIZATION": ("PERMISSION_DENIED", "FORBIDDEN", "UNAUTHORIZED", "NOT_AUTHORIZED"),
+        "NETWORK": (
+            "NETWORK_ERROR",
+            "CONNECTION_ERROR",
+            "UNAVAILABLE",
+            "DEADLINE_EXCEEDED",
+            "TIMEOUT",
+            "TIMED_OUT",
+            "CANCELLED",
+            "ABORTED",
+        ),
+        "CONFIGURATION": ("INVALID_ARGUMENT", "FAILED_PRECONDITION", "CONFIGURATION_ERROR"),
+        "RUNTIME": (
+            "NOT_FOUND",
+            "ALREADY_EXISTS",
+            "RESOURCE_EXHAUSTED",
+            "INTERNAL_ERROR",
+            "FEATURE_DISABLED",
+            "UNIMPLEMENTED",
+            "NOT_IMPLEMENTED",
+        ),
+    }.items()
+    for code in codes
+}
+
+
 def _error_category(exc: BaseException) -> str:
     """Map an exception to the bounded enum in ``agentbricks_cli_log.proto``."""
 
-    # Click's parser exceptions contain the user's option/argument text.  We use only their type,
-    # never their message, in the emitted record.
+    # Categories remain code-defined even when a separate sensitive message is available.
     import click
 
     if isinstance(exc, click.UsageError):
         return "ERROR_CATEGORY_USAGE"
     if isinstance(exc, (KeyboardInterrupt, click.Abort)):
         return "ERROR_CATEGORY_INTERRUPTED"
-    if isinstance(exc, (ImportError, ModuleNotFoundError)):
-        return "ERROR_CATEGORY_DEPENDENCY"
-    if isinstance(exc, (TimeoutError, ConnectionError)):
-        return "ERROR_CATEGORY_NETWORK"
-    if isinstance(exc, (FileNotFoundError, IsADirectoryError, NotADirectoryError)):
-        return "ERROR_CATEGORY_CONFIGURATION"
-
-    # AgentCliError deliberately exposes only a bounded error_code.  Keep this duck-typed so the
-    # telemetry module does not add a dependency edge to the CLI error implementation.
-    error_code = getattr(exc, "error_code", None)
-    if isinstance(error_code, str):
-        code = error_code.upper()
-        if code in {"UNAUTHENTICATED", "INVALID_TOKEN", "INVALID_CREDENTIALS", "TOKEN_EXPIRED"}:
-            return "ERROR_CATEGORY_AUTHENTICATION"
-        if code in {"PERMISSION_DENIED", "FORBIDDEN", "UNAUTHORIZED", "NOT_AUTHORIZED"}:
-            return "ERROR_CATEGORY_AUTHORIZATION"
-        if code in {
-            "CANCELLED",
-            "UNAVAILABLE",
-            "DEADLINE_EXCEEDED",
-            "ABORTED",
-            "TIMEOUT",
-            "TIMED_OUT",
-            "NETWORK_ERROR",
-            "CONNECTION_ERROR",
-        }:
+    chain = list(_exception_chain(exc))
+    for error in chain:
+        category = getattr(error, "error_category", None)
+        if isinstance(category, str) and category in _ERROR_CATEGORIES:
+            return category
+        code = getattr(error, "error_code", None)
+        if isinstance(code, str) and (category := _SERVICE_ERROR_CATEGORIES.get(code.upper())):
+            return category
+    for error in chain:
+        if isinstance(error, ImportError):
+            return "ERROR_CATEGORY_DEPENDENCY"
+        if isinstance(
+            error,
+            (TimeoutError, ConnectionError, URLError, RequestsConnectionError, RequestsTimeout),
+        ):
             return "ERROR_CATEGORY_NETWORK"
-        if code in {"INVALID_ARGUMENT", "FAILED_PRECONDITION", "CONFIGURATION_ERROR"}:
+        if isinstance(
+            error, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
+        ):
             return "ERROR_CATEGORY_CONFIGURATION"
-
-    if isinstance(exc, PermissionError):
-        return "ERROR_CATEGORY_CONFIGURATION"
     return "ERROR_CATEGORY_RUNTIME"
 
 
@@ -351,6 +453,7 @@ def _build_log(
     execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
+    exception: BaseException | None = None,
 ) -> _AgentBricksCliLog:
     """Build a bounded log from static Click metadata and command outcome."""
 
@@ -363,15 +466,55 @@ def _build_log(
         command_exit_code = int(exit_code)
     except (TypeError, ValueError, OverflowError):
         command_exit_code = 1
+    category = _bounded_error_category(error_category) if command_exit_code else None
+    is_failure = bool(command_exit_code) and category != "ERROR_CATEGORY_INTERRUPTED"
+    if (
+        is_failure
+        and invocation.command_path == "agentbricks deployments wait"
+        and command_exit_code == 75
+    ):
+        category = None
+        is_failure = False
     return _AgentBricksCliLog(
         command_path=invocation.command_path,
         package_version=_package_version(),
         operating_system=platform.system().lower(),
         execution_time_ms=duration_ms,
         exit_code=command_exit_code,
-        error_category=_bounded_error_category(error_category) if command_exit_code else None,
+        error_category=category,
         parameters=invocation.parameters,
+        failure_message=_failure_message(exception) if is_failure else None,
+        deployment=_deployment_metadata(ctx),
     )
+
+
+def _failure_message(exc: BaseException | None) -> str | None:
+    if isinstance(
+        exc, (KeyboardInterrupt, click.Abort, click.UsageError, click.exceptions.Exit, SystemExit)
+    ):
+        return None
+    parts: list[str] = []
+    separator = "\nCaused by: "
+    size = 0
+    for error in _exception_chain(exc):
+        try:
+            text = str(error)
+        except Exception:
+            continue
+        for part in (text, getattr(error, "failure_detail", None)):
+            if not isinstance(part, str) or not part or part in parts:
+                continue
+            size += len(part) + (len(separator) if parts else 0)
+            # Cutting raw fragments can discard credential context before scrubbing.
+            if size > MAX_FAILURE_INPUT_CHARS:
+                return None
+            parts.append(part)
+    return scrub_failure_text(separator.join(parts)) or None
+
+
+def _deployment_metadata(ctx: Any) -> DeploymentTelemetry | None:
+    metadata = getattr(ctx, "meta", {}).get(_DEPLOYMENT_META_KEY)
+    return metadata if isinstance(metadata, DeploymentTelemetry) else None
 
 
 def _root_obj(ctx: Any) -> Any:

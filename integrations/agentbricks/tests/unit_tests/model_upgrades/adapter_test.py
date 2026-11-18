@@ -728,6 +728,32 @@ def test_bandit_proposer_picks_model_without_llm():
     assert out == {"model:ep1": "m_b"}
 
 
+def test_reflection_lm_returns_the_reflection_text(mocker):
+    litellm = pytest.importorskip("litellm")
+    response = litellm.ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "IMPROVED"}}]
+    )
+    completion = mocker.patch("litellm.completion", return_value=response)
+
+    lm = opt._make_litellm_reflection_lm("my-model")
+
+    assert lm("rewrite this") == "IMPROVED"
+    completion.assert_called_once_with(
+        model="databricks/my-model", messages=[{"role": "user", "content": "rewrite this"}]
+    )
+
+
+def test_reflection_lm_rejects_a_non_model_response(mocker):
+    """A streamed or async result has no `.choices`; fail with a clear error instead."""
+    pytest.importorskip("litellm")
+    mocker.patch("litellm.completion", return_value=object())
+
+    lm = opt._make_litellm_reflection_lm("my-model")
+
+    with pytest.raises(TypeError, match="Expected a litellm ModelResponse"):
+        lm([{"role": "user", "content": "rewrite this"}])
+
+
 def test_bandit_proposer_delegates_prompt_to_reflection_lm(mocker):
     """The prompt branch calls InstructionProposalSignature.run (the LM path)."""
     fake_run = mocker.patch(

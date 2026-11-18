@@ -58,8 +58,8 @@ keeps facts the agent recalls across conversations, keyed by `actor`: `runtime/a
 (`auth = "user"`) tool bound, the adapter also namespaces a supplied `actor` to the signed-in user; see
 [Request-user authorization](#request-user-authorization).
 
-Memory is off under `agentbricks dev`, so try it against the deployed app: two invocations with
-different `session_id`s and the same `actor`.
+Memory is off by default under `agentbricks dev`, so try it against the deployed app: two
+invocations with different `session_id`s and the same `actor`.
 
 ```bash
 ACTOR=user-123
@@ -96,6 +96,9 @@ curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 SSE records contain events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
 and HITL `interrupt`s. Replay from a cursor with
 `GET /api/invocations/{id}/events?after={sequence}`.
+
+A message's `content` is its answer text. Models that reason (Claude 5.x) add a separate
+`{"role": "assistant", "content": [{"type": "reasoning", ...}]}` message before the answer.
 
 ## Human approval
 
@@ -159,12 +162,26 @@ Use `agentbricks init --framework openai --disable-chat-app` for API-only output
 - Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
-- Bind long-term memory with `agentbricks memory bind <store>`.
+- Bind long-term memory with `agentbricks memory bind <store>`; `agentbricks deploy` creates the
+  store if it doesn't exist. Memory and session stores are off by default in `agentbricks dev` (the
+  chat app shows "Not connected" for memory locally) and connect after deploy. To start with
+  memories already in the store, create it and add entries before you bind and deploy:
+
+  ```bash
+  agentbricks memory stores create --name <store>    # prints a Store ID
+  agentbricks memory entries create --store <Store ID> --actor-id you@example.com \
+    --path /preferences/style.md --content "Prefers concise answers."
+  ```
+
+  `--path` is the entry's key in the store, not a file on your machine; the deployed chat app uses
+  the signed-in user's email as the actor.
 - Route the agent's model through a Unity Gateway model service you own with
   `agentbricks experimental models bind`, then search for a better model and prompt on your own
   eval set with `agentbricks experimental models upgrade`. These commands are experimental, so
   their flags may change between releases.
 - Bind durable transcript history with `agentbricks sessions bind <store>`.
+  Session stores are off by default in `agentbricks dev`; the binding takes effect after
+  `agentbricks deploy`.
 
 ```bash
 agentbricks --profile <profile> deploy agent-openai --source .

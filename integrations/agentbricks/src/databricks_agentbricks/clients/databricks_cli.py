@@ -9,21 +9,31 @@ share it without importing each other.
 
 from __future__ import annotations
 
-import collections
+import os
+import stat
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
 from typing import Optional
 
+from databricks_agentbricks.clients import terminal_relay
+from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
 from databricks_agentbricks.errors import AgentCliError
 
-# Lines of relayed output a `tee` run keeps for callers that inspect a failure.
-_TEE_TAIL_LINES = 200
 # Seconds between readiness probes while a long-running command starts up.
 _READY_POLL_S = 0.25
 # Seconds an interrupted command gets to exit on its own before it is killed (as `subprocess.run`).
 _SIGINT_WAIT_S = 0.25
+APP_BUSY_MARKER = "another operation is in progress"
+
+
+class DatabricksCliResult(subprocess.CompletedProcess[str]):
+    """Retain retry facts independently of diagnostic output truncation."""
+
+    def __init__(self, args: list[str], returncode: int, *, stdout: str, app_busy: bool) -> None:
+        super().__init__(args, returncode, stdout=stdout, stderr="")
+        self.app_busy = app_busy
 
 
 def _databricks(
@@ -39,24 +49,40 @@ def _databricks(
     tee: bool = False,
     ready_probe: Optional[Callable[[], bool]] = None,
     on_ready: Optional[Callable[[], None]] = None,
+    on_exit: Optional[Callable[[int], None]] = None,
+    quiet_status: Optional[Callable[[float], str]] = None,
 ) -> subprocess.CompletedProcess:
     """Run one ``databricks`` command.
 
     ``capture`` collects stdout/stderr instead of showing them. ``tee`` relays the command's merged
-    output live to *our* stderr, line by line, and also returns its tail as ``stdout``: the user
-    still sees a long ``sync``/``apps deploy`` as it runs, stdout stays clean for ``-o json``, and the
-    caller can still match the failure text (for example, a busy App).
+    output live to *our* stderr, line by line, so users see a long ``sync``/``apps deploy`` as it
+    runs while stdout stays clean for ``-o json``.
 
     ``ready_probe`` is for a long-running server command such as ``apps run-local``: its output
     streams as usual, the probe is polled while the command runs, and ``on_ready`` is called once
     the probe first succeeds. A command that exits before it is ready never triggers ``on_ready``,
-    so the caller can hold back a success message until the server actually answers.
+    so the caller can hold back a success message until the server actually answers. With
+    ``quiet_status`` too, on a terminal that supports it, the output is relayed through a
+    pseudo-terminal and that status line is drawn whenever the output goes quiet before then (see
+    ``terminal_relay``); otherwise the output streams as usual.
     """
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    if ready_probe is not None:
-        result = _run_until_ready(cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready)
+    if ready_probe is not None and quiet_status is not None and terminal_relay.supported():
+        result = terminal_relay.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            probe=ready_probe,
+            on_ready=on_ready,
+            quiet_status=quiet_status,
+            on_exit=on_exit,
+        )
+    elif ready_probe is not None:
+        result = _run_until_ready(
+            cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready, on_exit=on_exit
+        )
     elif tee:
         result = _run_tee(cmd, cwd=cwd, env=env)
     else:
@@ -73,15 +99,21 @@ def _databricks(
         # leaks the underlying tool at the customer. The captured stderr still rides along as the
         # hint so debugging isn't lost.
         detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(action or "A Databricks CLI command failed.", hint=detail)
+        raise AgentCliError(
+            action or "A Databricks CLI command failed.",
+            hint=detail,
+            subprocess_exit_code=result.returncode,
+            failure_detail=(result.stderr or result.stdout or "").strip() or None,
+        )
     return result
 
 
 def _run_tee(
     cmd: list[str], *, cwd: Optional[str], env: Optional[Mapping[str, str]]
 ) -> subprocess.CompletedProcess:
-    """Run ``cmd`` relaying its merged output to stderr; return its tail as ``stdout``."""
-    tail: collections.deque[str] = collections.deque(maxlen=_TEE_TAIL_LINES)
+    """Relay merged output to stderr, retaining bounded diagnostics and independent retry facts."""
+    tail = OutputTail()
+    app_busy = False
     with subprocess.Popen(
         cmd,
         text=True,
@@ -94,8 +126,9 @@ def _run_tee(
         for line in proc.stdout:
             sys.stderr.write(line)
             sys.stderr.flush()
-            tail.append(line)
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(tail), stderr="")
+            app_busy |= APP_BUSY_MARKER in line.lower()
+            tail.append(line.encode("utf-8", errors="replace"))
+    return DatabricksCliResult(cmd, proc.returncode, stdout=tail.text(), app_busy=app_busy)
 
 
 def _run_until_ready(
@@ -105,9 +138,35 @@ def _run_until_ready(
     env: Optional[Mapping[str, str]],
     probe: Callable[[], bool],
     on_ready: Optional[Callable[[], None]],
+    on_exit: Optional[Callable[[int], None]] = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with its output streamed, calling ``on_ready`` once ``probe`` first succeeds."""
-    with subprocess.Popen(cmd, text=True, cwd=cwd, env=env) as proc:
+    stdout_target = None if os.isatty(1) else subprocess.PIPE
+    stderr_target = None if os.isatty(2) else subprocess.PIPE
+    if stdout_target is not None and stderr_target is not None:
+        try:
+            out, err = os.fstat(1), os.fstat(2)
+            if out.st_ino and os.path.samestat(out, err):
+                if stat.S_ISREG(out.st_mode):
+                    # File identity cannot distinguish independent opens from a shared offset.
+                    stdout_target = stderr_target = None
+                else:
+                    # A single pipe preserves write ordering into a shared stream.
+                    stderr_target = subprocess.STDOUT
+        except OSError:
+            pass
+    with subprocess.Popen(
+        cmd,
+        stdout=stdout_target,
+        stderr=stderr_target,
+        bufsize=0,
+        cwd=cwd,
+        env=env,
+    ) as proc:
+        # Preserve terminal buffering and prompts when only one stream is redirected.
+        stdout = StreamRelay(proc.stdout, 1) if proc.stdout is not None else None
+        stderr = StreamRelay(proc.stderr, 2) if proc.stderr is not None else None
+        drain_output = False
         try:
             while proc.poll() is None:
                 if probe():
@@ -116,6 +175,7 @@ def _run_until_ready(
                     proc.wait()
                     break
                 time.sleep(_READY_POLL_S)
+            drain_output = True
         except KeyboardInterrupt:
             # Ctrl-C reaches the child too; give it a moment to exit cleanly, as `subprocess.run`
             # does, then make sure it is gone.
@@ -127,4 +187,22 @@ def _run_until_ready(
         except BaseException:
             proc.kill()
             raise
-    return subprocess.CompletedProcess(cmd, proc.returncode)
+        finally:
+            try:
+                proc.wait()
+                if on_exit is not None:
+                    on_exit(proc.returncode)
+                if drain_output:
+                    for relay in (stdout, stderr):
+                        if relay is not None:
+                            relay.finish()
+            finally:
+                for relay in (stdout, stderr):
+                    if relay is not None:
+                        relay.cancel()
+    return subprocess.CompletedProcess(
+        cmd,
+        proc.returncode,
+        stdout=stdout.tail.text() if stdout is not None else "",
+        stderr=stderr.tail.text() if stderr is not None else "",
+    )

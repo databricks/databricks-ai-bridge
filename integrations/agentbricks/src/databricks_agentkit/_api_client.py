@@ -100,7 +100,11 @@ def memory_pipeline_path(name: str) -> str:
 
 
 # CLI trigger names → API `DreamerPolicy.Trigger` values.
-MEMORY_PIPELINE_TRIGGERS = {"manual": "MANUAL_ONLY", "scheduled": "SCHEDULED"}
+MEMORY_PIPELINE_TRIGGERS = {
+    "manual": "MANUAL_ONLY",
+    "scheduled": "SCHEDULED",
+    "always-on": "ALWAYS_ON",
+}
 
 
 def memory_entry_path(store: str, entry: str) -> str:

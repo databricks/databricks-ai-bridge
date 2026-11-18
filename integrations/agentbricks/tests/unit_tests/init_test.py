@@ -6,9 +6,11 @@ stubbed here so tests don't touch the real bundled templates.
 
 from __future__ import annotations
 
+import importlib
 import json
 import pathlib
 import re
+import sys
 from unittest import mock
 
 import pytest
@@ -58,6 +60,9 @@ def _copy_writing(files: dict[str, str] | None = None):
             path.write_text(content)
 
     return _copy
+
+
+_REAL_COPY = init_mod._copy_packaged_template
 
 
 @pytest.fixture(autouse=True)
@@ -704,6 +709,63 @@ def test_init_json_reports_the_deployment_name(
     payload = json.loads(result.output)
     assert payload["deployment_name"] == _manifest(dest)["agent"]["deployment_name"]
     assert payload["deployment_name_truncated"] is truncated
+
+
+_FRAMEWORK_DEPS = {
+    "langgraph": ("databricks_langchain", "langgraph", "langchain", "langchain_mcp_adapters"),
+    "openai": ("agents", "databricks_openai"),
+}
+
+
+@pytest.fixture
+def scaffolded_modules(monkeypatch: pytest.MonkeyPatch):
+    """Import a freshly scaffolded project's `agent.*` / `runtime.*` modules, then forget them."""
+
+    def _clear():
+        for name in list(sys.modules):
+            if name.split(".")[0] in ("agent", "runtime"):
+                sys.modules.pop(name, None)
+
+    def _import(dest: pathlib.Path, module: str):
+        _clear()
+        monkeypatch.syspath_prepend(str(dest))
+        return importlib.import_module(module)
+
+    yield _import
+    _clear()
+
+
+def _scaffold(monkeypatch: pytest.MonkeyPatch, dest: pathlib.Path, framework: str) -> None:
+    for dependency in _FRAMEWORK_DEPS[framework]:
+        pytest.importorskip(dependency, reason=f"Requires databricks-agentbricks[{framework}]")
+    monkeypatch.setattr(init_mod, "_copy_packaged_template", _REAL_COPY)
+    result = CliRunner().invoke(init_mod.init, ["--framework", framework, str(dest)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_agent_defaults_to_claude_sonnet_5_5(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, scaffolded_modules, framework: str
+):
+    dest = tmp_path / "proj"
+    _scaffold(monkeypatch, dest, framework)
+    monkeypatch.delenv("AGENT_MODEL_SERVICE_AGENT", raising=False)
+
+    assert scaffolded_modules(dest, "agent.agent").MODEL == "system.ai.claude-sonnet-5-5"
+    # The chat UI's model picker preselects the agent's default.
+    assert scaffolded_modules(dest, "runtime.ui")._default_model() == "system.ai.claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_agent_bound_model_service_overrides_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, scaffolded_modules, framework: str
+):
+    dest = tmp_path / "proj"
+    _scaffold(monkeypatch, dest, framework)
+    monkeypatch.setenv("AGENT_MODEL_SERVICE_AGENT", "main.x.llm")
+
+    assert scaffolded_modules(dest, "agent.agent").MODEL == "main.x.llm"
+    assert scaffolded_modules(dest, "runtime.ui")._default_model() == "main.x.llm"
 
 
 def test_existing_with_name_records_it(tmp_path: pathlib.Path):

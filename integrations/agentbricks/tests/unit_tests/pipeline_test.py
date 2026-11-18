@@ -107,6 +107,63 @@ def test_get_run_uses_pipeline_api(output):
         assert "SUCCEEDED" in result.stdout
 
 
+def test_get_run_renders_stats():
+    workspace = mock.Mock()
+    workspace.api_client.do.return_value = {
+        "name": "memory-pipelines/p-123/runs/123",
+        "state": "SUCCEEDED",
+        # int64 fields arrive as JSON strings, and keys may be camelCase.
+        "stats": {
+            "actorsSucceeded": "7",
+            "actorsSkipped": "2",
+            "actorsFailed": "1",
+            "entriesWritten": "31",
+            "actorsProcessed": "9",
+        },
+    }
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "get", "memory-pipelines/p-123/runs/123"],
+        obj=_Ctx(_AgentBricksApiClient(workspace_client=workspace)),
+    )
+    assert result.exit_code == 0, result.output
+    lines = [" ".join(line.split()) for line in result.stdout.splitlines()]
+    assert "Actors succeeded 7" in lines
+    assert "Actors skipped 2" in lines
+    assert "Actors failed 1" in lines
+    assert "Entries written 31" in lines
+    assert not any("processed" in line.lower() for line in lines)
+
+
+def test_get_run_renders_created_and_finished_times():
+    workspace = mock.Mock()
+    workspace.api_client.do.return_value = {
+        "name": "memory-pipelines/p-123/runs/123",
+        "state": "SUCCEEDED",
+        "createTime": "2026-10-16T12:00:00.123Z",
+        "endTime": "2026-10-16T12:30:00Z",
+    }
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "get", "memory-pipelines/p-123/runs/123"],
+        obj=_Ctx(_AgentBricksApiClient(workspace_client=workspace)),
+    )
+    assert result.exit_code == 0, result.output
+    lines = [" ".join(line.split()) for line in result.stdout.splitlines()]
+    # Rendered in local time; midday UTC keeps the date stable across time zones.
+    assert any(line.startswith("Created Oct 16, 2026, ") for line in lines)
+    assert any(line.startswith("Finished Oct 16, 2026, ") for line in lines)
+
+
+def test_get_run_without_stats_shows_placeholders():
+    client = _Client()
+    result = CliRunner().invoke(_pipeline(), ["run", "p-123"], obj=_Ctx(client))
+    assert result.exit_code == 0, result.output
+    lines = [" ".join(line.split()) for line in result.stdout.splitlines()]
+    assert "Actors failed —" in lines
+    assert "Entries written —" in lines
+
+
 def test_get_run_surfaces_api_error():
     workspace = mock.Mock()
     workspace.api_client.do.side_effect = AgentCliError("Run not found", error_code="NOT_FOUND")
@@ -180,6 +237,8 @@ def test_pause_resume_update_only_trigger(command, trigger, output, name):
         ("pause", {"trigger": "TRIGGER_UNSPECIFIED"}, "paused"),
         ("pause", {}, "paused"),
         ("resume", {"trigger": "SCHEDULED"}, "resumed"),
+        # Resuming would otherwise downgrade an always-on pipeline to daily scheduled runs.
+        ("resume", {"trigger": "ALWAYS_ON"}, "resumed"),
     ],
 )
 def test_pause_resume_rejects_existing_state(command, policy, state):
@@ -291,16 +350,35 @@ def test_create_accepts_store_names_and_model():
     assert "memory-pipelines/p-123" in result.output
 
 
-def test_create_with_scheduled_trigger():
+@pytest.mark.parametrize("trigger", ["scheduled", "always-on"])
+def test_create_with_automatic_trigger(trigger):
     client = _Client()
     result = CliRunner().invoke(
         _pipeline(),
-        ["create", "--memory-store", "m", "--session-store", "s", "--trigger", "scheduled"],
+        ["create", "--memory-store", "m", "--session-store", "s", "--trigger", trigger],
         obj=_Ctx(client),
     )
 
     assert result.exit_code == 0, result.output
-    assert client.calls[0][1]["trigger"] == "scheduled"
+    assert client.calls[0][1]["trigger"] == trigger
+
+
+def test_pause_always_on_pipeline_switches_to_manual():
+    workspace = mock.Mock()
+    workspace.api_client.do.side_effect = [
+        {**PIPELINE, "dreamer_policy": {"trigger": "ALWAYS_ON"}},
+        {**PIPELINE, "dreamer_policy": {"trigger": "MANUAL_ONLY"}},
+    ]
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    result = CliRunner().invoke(_pipeline(), ["pause", "p-123"], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    assert workspace.api_client.do.call_args_list[-1] == mock.call(
+        "PATCH",
+        "/api/2.0/agents/memory-pipelines/p-123",
+        query={"update_mask": "dreamer_policy.trigger"},
+        body={"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": "MANUAL_ONLY"}},
+    )
 
 
 def test_create_rejects_unknown_trigger_before_api_call():
@@ -385,7 +463,7 @@ def test_update_accepts_model_and_instructions_file(model, tmp_path):
     ]
 
 
-@pytest.mark.parametrize("trigger", ["manual", "scheduled"])
+@pytest.mark.parametrize("trigger", ["manual", "scheduled", "always-on"])
 def test_update_accepts_trigger(trigger):
     client = _Client()
     result = CliRunner().invoke(

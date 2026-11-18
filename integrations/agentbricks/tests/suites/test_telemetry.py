@@ -10,6 +10,7 @@ import json
 import pathlib
 import time
 
+import pytest
 from harness.agentbricks_cli import AgentbricksCli
 from harness.fake_workspace import TELEMETRY_PATH, TelemetryUpload
 from harness.target import TargetWorkspace, require_fake_workspace
@@ -33,6 +34,8 @@ def test_telemetry(
     log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
     assert log["command_path"] == "agentbricks init"
     assert log["exit_code"] == 0
+    assert "failure_message" not in log
+    assert "diagnostics" not in log
 
 
 def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> TelemetryUpload:
@@ -42,3 +45,34 @@ def _next_upload(uploads: list[TelemetryUpload], already_seen: int) -> Telemetry
         assert time.monotonic() < deadline, f"no upload to {TELEMETRY_PATH}"
         time.sleep(0.1)
     return uploads[already_seen]
+
+
+@pytest.mark.parametrize(
+    "directory, retains_reason", [("private-project", True), ("token=synthetic-secret", False)]
+)
+def test_failure_telemetry(
+    agentbricks_cli: AgentbricksCli,
+    target_workspace: TargetWorkspace,
+    tmp_path: pathlib.Path,
+    directory: str,
+    retains_reason: bool,
+) -> None:
+    workspace = require_fake_workspace(target_workspace, "a telemetry receiver")
+    destination = tmp_path / directory
+    destination.mkdir()
+    uploaded = len(workspace.telemetry)
+    result = agentbricks_cli.run(
+        f"init {destination}", check=False, env={"AGENTBRICKS_DISABLE_TELEMETRY": ""}
+    )
+    assert result.returncode == 1
+    upload = _next_upload(workspace.telemetry, uploaded)
+    assert upload.authorization == "Bearer fake-token"
+    (proto_log,) = upload.body["protoLogs"]
+    log = json.loads(proto_log)["entry"]["agentbricks_cli_log"]
+    assert log["exit_code"] == 1
+    assert "diagnostics" not in log
+    assert log["failure_message"].startswith("Destination ")
+    assert ("already exists" in log["failure_message"]) is retains_reason
+    assert str(tmp_path) not in proto_log
+    assert directory not in proto_log
+    assert "synthetic-secret" not in proto_log

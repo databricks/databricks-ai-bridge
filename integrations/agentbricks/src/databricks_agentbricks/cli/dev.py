@@ -17,12 +17,14 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
     announce_starting,
     local_trace_label,
+    starting_status,
 )
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
@@ -37,12 +39,16 @@ from databricks_agentbricks.services.dev_service import (
 
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
+    diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
+    diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks),
+        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
+        diagnostics=diagnostics,
     )
 
 
@@ -113,6 +119,9 @@ def dev(
                     has_chat_ui=plan.preview.has_chat_ui,
                     deployment_name=plan.preview.deployment_name,
                 ),
+                # A spinner in the quiet stretches before the agent answers (e.g. while it imports
+                # its libraries), so a long wait doesn't look like a hang.
+                quiet_status=starting_status,
             )
         except AgentCliError:
             # Separate the error from the run-local logs it follows.

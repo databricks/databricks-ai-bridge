@@ -99,6 +99,11 @@ class AgentbricksCli:
             "AGENTBRICKS_DISABLE_TELEMETRY": "1",
             # MLflow prints its own hint to stdout when a command starts a local server.
             "MLFLOW_DISABLE_AGENT_HINT": "1",
+            # Each `agentbricks dev` starts a local MLflow server. MLflow's defaults (four workers and
+            # a job runner with eight consumers, for UI-launched scorers and evaluation that no suite
+            # uses) take about 2.7 GB per server, and parallel tests ran CI runners out of memory.
+            "MLFLOW_WORKERS": "1",
+            "MLFLOW_SERVER_ENABLE_JOB_EXECUTION": "false",
         }
         self._sequence = 0
 
