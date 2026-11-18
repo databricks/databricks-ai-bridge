@@ -590,7 +590,7 @@ def test_resume_timeout_releases_lock_and_never_creates(runtime, monkeypatch):
     lakebox.start.return_value = {"sandboxId": "sandbox-one", "status": "Starting"}
     clock = iter([0, 0, 241])
     monkeypatch.setattr(
-        "databricks_agentkit.sandbox.session_client.time",
+        "databricks_agentkit.sandbox.session_lifecycle.time",
         SimpleNamespace(perf_counter=lambda: 0.0, monotonic=lambda: next(clock)),
     )
     with pytest.raises(HTTPException) as failure:
