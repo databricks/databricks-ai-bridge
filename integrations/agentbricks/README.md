@@ -182,8 +182,8 @@ Telemetry runs only when a leaf command is invoked, whether its callback succeed
 and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
 reuse the command's workspace client or let the Databricks SDK resolve the selected or default
 profile. Authenticate first with `agentbricks auth login <profile>` or configure SDK auth;
-an SDK `external-browser` profile may prompt during telemetry even for local commands such as
-`init`. The CLI waits up to two seconds for client setup, authentication, and upload on a daemon
+telemetry skips an SDK `external-browser` profile to avoid opening browser consent from a local
+command such as `init`. The CLI waits up to two seconds for client setup, authentication, and upload on a daemon
 thread, returning sooner if the worker finishes. This is not a delivery guarantee: unfinished
 uploads can be lost when the process exits after the allowance expires. Missing credentials or a
 failed upload never change the command result.
@@ -226,9 +226,10 @@ To move an existing project to a different workspace later, run `agentbricks aut
 its directory. Rerunning `agentbricks init` on a project it scaffolded changes nothing. (`--existing`
 is different: it prepares a migration for a project Agent Bricks didn't generate.)
 
-`dev` and `deploy` validate the resolved profile's authentication up front and fail fast with the
-`agentbricks auth login` command to run — an unauthenticated external-browser profile would
-otherwise hang on a browser login that never completes.
+`deploy` validates the resolved profile's authentication up front. `dev` does the same when a
+profile or workspace authentication is configured, while a local-only project can run offline.
+An unauthenticated external-browser profile fails fast with the `agentbricks auth login` command
+to run instead of hanging on a browser login.
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.

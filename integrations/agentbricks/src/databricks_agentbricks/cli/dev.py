@@ -31,6 +31,11 @@ from databricks_agentbricks.presentation.dev import (
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
+from databricks_agentbricks.projects.profiles import (
+    env_auth_configured,
+    sdk_auth_type,
+    workspace_for_profile,
+)
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
@@ -133,9 +138,15 @@ def dev(
     service = build_dev_service(obj)
     with obj.diagnostics.phase(FailureStage.PROJECT):
         service.check_project(source)
-    # Auth is checked before anything is started: an unauthenticated external-browser profile
-    # would otherwise hang the local agent on a browser flow with no error.
-    if not env_credential:
+    # A local-only project can run without workspace credentials. A selected or configured
+    # workspace still needs a bounded check before the agent can start browser authentication.
+    has_workspace_target = not env_credential and bool(
+        obj.profile
+        or env_auth_configured()
+        or sdk_auth_type(None)
+        or workspace_for_profile(None)[0]
+    )
+    if has_workspace_target:
         try:
             validated = preflight_auth(obj.profile, obj.profile_info.source)
         except Exception:

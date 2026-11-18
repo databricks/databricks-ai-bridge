@@ -35,22 +35,18 @@ from databricks_agentbricks.projects.agent_project import (
     default_experiment_name,
     default_store_name,
 )
-from databricks_agentbricks.projects.config import (
-    _load_persisted_metadata,
-    write_project_metadata,
-)
+from databricks_agentbricks.projects.config import write_project_metadata
 from databricks_agentbricks.projects.env_file import write_env
 from databricks_agentbricks.projects.profiles import (
     SOURCE_CONFIG_DEFAULT,
-    SOURCE_ENV_VAR,
     SOURCE_FLAG,
-    SOURCE_LEGACY_DEFAULT,
     auth_login_command,
     auth_switch_command,
     configured_profiles,
     env_auth_configured,
     profile_exists,
     profile_host,
+    resolve_profile,
     sdk_default_profile,
 )
 from databricks_agentbricks.projects.types import (
@@ -149,35 +145,11 @@ def _bundled_template_ref() -> str:
         return "bundled"
 
 
-def _is_generated_project(dest: pathlib.Path) -> bool:
-    """Whether `init` (this CLI family) scaffolded `dest`, by its persisted metadata marker."""
-    try:
-        return _load_persisted_metadata(dest) is not None
-    except AgentCliError:
-        return False
-
-
-def _report_already_initialized(obj, dest: pathlib.Path) -> None:
-    """Re-run of `init` on a project this CLI scaffolded: nothing is written.
-
-    Re-scaffolding would clobber user code, so the project's identity and `.env` stay as they
-    are; `--existing` migration is for projects Agent Bricks did NOT generate.
-    """
-    if obj.output == "json":
-        render.emit_json({"already_initialized": True, "directory": str(dest)})
-        return
-    render.console().print(
-        f"{dest} is already an Agent Bricks project; nothing was changed. Run `agentbricks dev` / "
-        f"`agentbricks deploy`, or `{auth_switch_command(None)} --source {dest}` to change "
-        "its workspace."
-    )
-
-
 def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, str]]:
     """(profile, source) to pin in a new project's `.env`: `--profile`, the global `-p`, the
     saved legacy default, the DATABRICKS_CONFIG_PROFILE env var, else None when env-var auth is
-    configured, else the default chosen with `databricks auth
-    switch`, else `DEFAULT` (the order the SDK itself falls back in).
+    configured, else the default chosen with `databricks auth switch`, else `DEFAULT` (the order
+    the SDK itself falls back in).
 
     Never the cwd project's `.env` — `init` may run inside another project, and the new project
     must not inherit its workspace. A pinned profile keeps the project on its workspace however
@@ -188,11 +160,9 @@ def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, st
         return flag_profile, SOURCE_FLAG
     if obj.profile_info.source == SOURCE_FLAG and obj.profile:
         return obj.profile, SOURCE_FLAG
-    if obj.profile_info.source == SOURCE_LEGACY_DEFAULT and obj.profile:
-        return obj.profile, SOURCE_LEGACY_DEFAULT
-    env_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
-    if env_profile:
-        return env_profile, SOURCE_ENV_VAR
+    fallback = resolve_profile(None)
+    if fallback.name:
+        return fallback.name, fallback.source
     if env_auth_configured():
         return None
     return sdk_default_profile()
@@ -484,9 +454,7 @@ def init(
     """Scaffold a local agent project from an Agent Bricks template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
-    directory must not already exist — except a project `init` itself scaffolded, where a rerun
-    changes nothing and points at `agentbricks dev` / `agentbricks deploy` (use
-    `agentbricks auth switch <profile>` to change its workspace). Use --existing to migrate a
+    directory must not already exist. Use --existing to migrate a
     project Agent Bricks did not generate. Once scaffolded, deploy it with
     `agentbricks deploy <name> --source <directory>`. init records a deployment name that fits the
     Databricks Apps limit (--name, or the directory name shortened to 17 characters), so
@@ -544,14 +512,11 @@ def init(
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
-        if not _is_generated_project(dest):
-            raise AgentCliError(
-                f"Destination '{dest}' already exists.",
-                hint=f"Use --existing to prepare a migration from an existing "
-                f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
-            )
-        _report_already_initialized(obj, dest)
-        return
+        raise AgentCliError(
+            f"Destination '{dest}' already exists.",
+            hint=f"Use --existing to prepare a migration from an existing "
+            f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
+        )
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
     try:

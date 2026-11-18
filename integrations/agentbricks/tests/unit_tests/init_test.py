@@ -255,6 +255,18 @@ def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
     copied.assert_not_called()
 
 
+def test_init_refuses_existing_generated_project_without_changing_profile(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    first = _init(dest, "--profile", "production")
+    assert first.exit_code == 0, first.output
+
+    second = _init(dest, "--profile", "staging", output="json")
+
+    assert second.exit_code != 0
+    assert "already exists" in second.output
+    assert (dest / ".env").read_text().startswith("DATABRICKS_CONFIG_PROFILE=production\n")
+
+
 def test_init_rejects_unknown_framework(tmp_path: pathlib.Path):
     result = CliRunner().invoke(
         init_mod.init, ["--framework", "nope", str(tmp_path / "x")], obj=_Ctx()
@@ -332,6 +344,22 @@ def test_init_inside_another_project_does_not_inherit_its_env_profile(
     body = (dest / ".env").read_text()
     assert "cwd-project" not in body
     assert "DATABRICKS_CONFIG_PROFILE=DEFAULT" in body
+
+
+def test_init_inside_another_project_uses_saved_default(tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=cwd-project\n")
+    config_home = tmp_path / "agentbricks-config"
+    config_home.mkdir()
+    (config_home / "config.json").write_text(json.dumps({"profile": "saved"}))
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(config_home))
+    dest = tmp_path / "new-proj"
+
+    result = CliRunner().invoke(cli_app.agentbricks, ["init", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert (dest / ".env").read_text().startswith("DATABRICKS_CONFIG_PROFILE=saved\n")
 
 
 def test_init_with_databricks_host_and_no_profile_writes_no_env(

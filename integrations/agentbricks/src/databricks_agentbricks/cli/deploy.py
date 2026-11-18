@@ -357,7 +357,6 @@ def deploy(
         # Fail fast in the foreground on anything quick to check; the child repeats these checks.
         with diagnostics.phase(FailureStage.PREFLIGHT):
             prepared = service.prepare(request)
-            service.check_auth()
             workspace = service.workspace_identity()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)

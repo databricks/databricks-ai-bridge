@@ -523,7 +523,7 @@ def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.
     assert "Traces" not in result.output
 
 
-def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
+def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path, validated_profile):
     # No stores + no auth: obj.client() would raise, but with nothing bound it's never called (and
     # local tracing needs no workspace), so dev still runs the agent locally offline.
     from databricks_agentbricks.errors import AgentCliError
@@ -545,6 +545,7 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_OfflineCtx())
     assert result.exit_code == 0, result.output
     assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+    validated_profile.assert_not_called()
 
 
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
@@ -917,6 +918,22 @@ def test_dev_unauthenticated_profile_fails_before_run_local(
     assert "Using profile 'proj' (from .env)" in out
     assert "'proj' (from .env) isn't authenticated" in out
     assert "agentbricks auth login proj" in out
+    run_local.assert_not_called()
+
+
+def test_dev_default_browser_auth_still_fails_before_run_local(
+    tmp_path: pathlib.Path, monkeypatch, write_databrickscfg, validated_profile
+):
+    _write_project(tmp_path, "")
+    write_databrickscfg("[DEFAULT]\nhost = https://ws.example\nauth_type = external-browser\n")
+    run_local = mock.Mock()
+    monkeypatch.setattr(dev_mod, "_databricks", run_local)
+
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "agentbricks auth login" in result.output
+    validated_profile.assert_not_called()
     run_local.assert_not_called()
 
 

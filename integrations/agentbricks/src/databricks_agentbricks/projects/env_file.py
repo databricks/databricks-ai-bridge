@@ -5,12 +5,14 @@ from __future__ import annotations
 import io
 import os
 import pathlib
+import re
 import tempfile
 
 from dotenv import dotenv_values
 from dotenv.parser import parse_stream
 
 _BOM = "\ufeff"
+_BARE_PROFILE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def _read_text(path: pathlib.Path) -> str:
@@ -47,10 +49,24 @@ def _parse_env(text: str, *, interpolate: bool = True) -> dict[str, str]:
     return {key: value for key, value in values.items() if value is not None}
 
 
+def _profile_value(profile: str) -> str:
+    if _BARE_PROFILE.fullmatch(profile):
+        return profile
+    escaped = (
+        profile.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
 def _with_profile_binding(text: str, profile: str) -> str:
     """Rewrite parsed profile bindings while preserving all unrelated dotenv text verbatim."""
     bom = _BOM if text.startswith(_BOM) else ""
     body = text.removeprefix(_BOM)
+    assignment = f"DATABRICKS_CONFIG_PROFILE={_profile_value(profile)}"
     updated: list[str] = []
     replaced = False
     for binding in parse_stream(io.StringIO(body)):
@@ -60,13 +76,13 @@ def _with_profile_binding(text: str, profile: str) -> str:
                 ending = (
                     "\r\n" if original.endswith("\r\n") else "\n" if original.endswith("\n") else ""
                 )
-                updated.append(f"DATABRICKS_CONFIG_PROFILE={profile}{ending}")
+                updated.append(f"{assignment}{ending}")
                 replaced = True
             continue
         updated.append(original)
     if not replaced:
         ending = "\r\n" if "\r\n" in body else "\n"
-        updated.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}{ending}")
+        updated.insert(0, f"{assignment}{ending}")
     return bom + "".join(updated)
 
 

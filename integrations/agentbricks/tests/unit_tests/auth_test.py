@@ -288,6 +288,18 @@ def test_switch_from_a_subfolder_rewrites_the_root_env(env_project, monkeypatch)
     assert not (subfolder / ".env").exists()
 
 
+def test_switch_round_trips_profile_name_with_comment_character(project, write_databrickscfg):
+    write_databrickscfg("[my #prof]\nhost = https://special.example\n")
+
+    switched = _invoke_profile(["switch", "my #prof"])
+
+    assert switched.exit_code == 0, switched.output
+    assert read_env(project / ".env")["DATABRICKS_CONFIG_PROFILE"] == "my #prof"
+    described = _get_json(["auth", "describe"])
+    assert described["profile"] == "my #prof"
+    assert described["workspace_host"] == "https://special.example"
+
+
 def test_set_rewrites_profile_line_and_keeps_other_lines(project):
     (project / ".env").write_text("OTHER=1\nDATABRICKS_CONFIG_PROFILE=old\nLAST=2\n")
 
