@@ -1,0 +1,1 @@
+../../../.claude/skills/agentbricks-review/SKILL.md

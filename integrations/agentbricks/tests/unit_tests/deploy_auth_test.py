@@ -52,6 +52,8 @@ from databricks_agentbricks.services.deployment.provisioners import (
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
+pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
+
 
 def _project(root, *, auth="user", legacy=False):
     project = AgentProject.create(root, framework="langgraph", server="agentbricks")
@@ -244,10 +246,21 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     assert plan.scopes == ("genie",)
 
 
+# Scopes a user-auth sandbox with token injection requests on top of `ai-gateway`.
+SANDBOX_TOKEN_SCOPES = {
+    "workspace.workspace",
+    "files",
+    "sql",
+    "catalog.catalogs:read",
+    "catalog.schemas:read",
+    "catalog.tables:read",
+}
+
+
 @pytest.mark.parametrize(
     ("binding", "expected"),
     [
-        (ToolSpec.sandbox("sandbox", auth="user"), {"ai-gateway", "workspace.workspace"}),
+        (ToolSpec.sandbox("sandbox", auth="user"), {"ai-gateway", *SANDBOX_TOKEN_SCOPES}),
         (
             ToolSpec.sandbox("sandbox", auth="user", databricks_access_token_included=False),
             {"ai-gateway"},
@@ -268,7 +281,7 @@ def test_unscoped_sandbox_requests_gateway_and_token_scopes(tmp_path, binding, e
     [
         (
             lambda: ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files", "workspace.workspace"},
+            {"ai-gateway", *SANDBOX_TOKEN_SCOPES},
         ),
         (
             lambda: ToolSpec.sandbox(

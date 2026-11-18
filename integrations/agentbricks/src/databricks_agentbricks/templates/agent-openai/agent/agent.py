@@ -17,6 +17,7 @@ from agent.mcps import build_mcp_servers
 from agent.tools import all_tools
 from databricks_agentkit import workspace_client, workspace_headers
 from databricks_agentkit.openai import (
+    chat_model,
     configure_tracing,
     genie_tools,
     mcp_servers,
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 # `agentbricks experimental models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
 # as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models upgrade` can change the model without a code
 # change.
-MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
+MODEL = resolve_model_service() or "system.ai.claude-sonnet-5-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -100,7 +101,8 @@ def create_agent(
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        model=model or MODEL,
+        # chat_model sends Claude reasoning signatures back on the next turn.
+        model=chat_model(model or MODEL),
         tools=[
             *all_tools(),
             *memory_tools(actor),

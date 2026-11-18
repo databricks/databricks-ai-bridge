@@ -1,9 +1,11 @@
 import os
-from typing import Any, Generator
+import re
+from typing import Any, Generator, Iterable, cast
+from uuid import uuid4
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
@@ -106,6 +108,322 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
         if message.get("role") == "assistant" and message.get("tool_calls"):
             if _is_empty_content(message.get("content")):
                 message["content"] = " "
+
+
+def _split_reasoning_content(content: list) -> tuple[str | None, list[dict[str, Any]]]:
+    """Split AI Gateway Claude content parts into answer text and thinking blocks.
+
+    Claude 5.x returns ``reasoning`` parts (summary text plus a ``signature``) before the answer's
+    ``text`` parts. The thinking blocks use the Anthropic shape the OpenAI Agents SDK reads.
+    """
+    texts = []
+    thinking_blocks: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            texts.append(part)
+        elif isinstance(part, dict) and part.get("type") == "text":
+            texts.append(part.get("text") or "")
+        elif isinstance(part, dict) and part.get("type") == "reasoning":
+            for summary in part.get("summary") or []:
+                if not isinstance(summary, dict):
+                    continue
+                block: dict[str, Any] = {"type": "thinking", "thinking": summary.get("text") or ""}
+                if summary.get("signature"):
+                    block["signature"] = summary["signature"]
+                thinking_blocks.append(block)
+    return ("".join(texts) if texts else None), thinking_blocks
+
+
+def _split_reasoning_in_message(message: Any) -> None:
+    """Move list content's reasoning onto ``thinking_blocks`` and leave the answer as a string."""
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return
+    text, thinking_blocks = _split_reasoning_content(content)
+    message.content = text
+    if thinking_blocks:
+        message.thinking_blocks = thinking_blocks
+
+
+def _split_reasoning_in_response(response: Any) -> None:
+    for choice in getattr(response, "choices", None) or []:
+        _split_reasoning_in_message(
+            getattr(choice, "message", None) or getattr(choice, "delta", None)
+        )
+
+
+def _restore_reasoning_in_messages(messages: Any) -> None:
+    """Send assistant ``thinking_blocks`` back as the AI Gateway's ``reasoning`` content parts.
+
+    Claude requires each reasoning signature on the next turn, notably after a tool call.
+    """
+    if not messages:
+        return
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        thinking_blocks = message.pop("thinking_blocks", None)
+        if not thinking_blocks:
+            continue
+        parts: list[Any] = [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": block.get("thinking") or "",
+                        "signature": block.get("signature") or "",
+                    }
+                ],
+            }
+            for block in thinking_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        ]
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            parts.append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            parts.extend(content)
+        message["content"] = parts
+
+
+class _ReasoningSplittingStream:
+    """Stream wrapper that splits each Claude chunk's reasoning out of ``delta.content``."""
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def __iter__(self):
+        for chunk in self._stream:
+            _split_reasoning_in_response(chunk)
+            yield chunk
+
+    async def __aiter__(self):
+        async for chunk in self._stream:
+            _split_reasoning_in_response(chunk)
+            yield chunk
+
+    def __enter__(self):
+        self._stream.__enter__()
+        return self
+
+    def __exit__(self, *args: Any):
+        return self._stream.__exit__(*args)
+
+    async def __aenter__(self):
+        await self._stream.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: Any):
+        return await self._stream.__aexit__(*args)
+
+
+# AI Gateway returns Gemini's thought signature as a non-standard `thoughtSignature` field on
+# each tool call and rejects the next request unless it's sent back. openai-agents round-trips
+# Google's spelling (`extra_content.google.thought_signature`), so translate between the two.
+# The gateway also uses the function name as Gemini's tool-call id, which openai-agents rejects
+# when a run calls the same tool twice: suffix those ids locally and send the original back.
+# The long-term fix is for the gateway to keep signatures server-side and issue unique ids.
+_GATEWAY_SIGNATURE_KEY = "thoughtSignature"
+_LOCAL_ID_SUFFIX = re.compile(r"__gw[0-9a-f]{8}$")
+
+
+def _local_tool_call_id(call_id: str) -> str:
+    return f"{call_id}__gw{uuid4().hex[:8]}"
+
+
+def _adapt_gateway_tool_calls(tool_calls: Any, streamed: dict | None = None) -> None:
+    """Give Gemini tool calls unique ids and Google-spelled signatures.
+
+    For streams, `streamed` keeps each tool-call index's local id and the signature so far:
+    signatures may arrive in fragments, and openai-agents keeps the last delta's value.
+    """
+    for tool_call in tool_calls or []:
+        index = getattr(tool_call, "index", None)
+        call_id = getattr(tool_call, "id", None)
+        if call_id and call_id == getattr(getattr(tool_call, "function", None), "name", None):
+            if streamed is None:
+                tool_call.id = _local_tool_call_id(call_id)
+            else:
+                tool_call.id = streamed.setdefault(("id", index), _local_tool_call_id(call_id))
+        signature = getattr(tool_call, _GATEWAY_SIGNATURE_KEY, None)
+        if not signature or getattr(tool_call, "extra_content", None):
+            continue
+        if streamed is not None:
+            key = ("signature", index)
+            signature = streamed[key] = streamed.get(key, "") + signature
+        tool_call.extra_content = {"google": {"thought_signature": signature}}
+
+
+def _flatten_signed_text_parts(message: Any) -> None:
+    """Join Gemini's signed text parts (`[{"type": "text", "text": ..., "thoughtSignature": ...}]`)
+    into string content. Google requires only function-call signatures back, so text-part ones are
+    dropped. Lists with any other part type are left as they are.
+    """
+    content = getattr(message, "content", None)
+    if (
+        isinstance(content, list)
+        and content
+        and all(isinstance(part, dict) and part.get("type") == "text" for part in content)
+        and any(_GATEWAY_SIGNATURE_KEY in part for part in content)
+    ):
+        message.content = "".join(part.get("text") or "" for part in content)
+
+
+def _adapt_gateway_response(response: Any) -> None:
+    for choice in getattr(response, "choices", None) or []:
+        _flatten_signed_text_parts(choice.message)
+        _adapt_gateway_tool_calls(getattr(choice.message, "tool_calls", None))
+
+
+def _adapt_gateway_chunk(chunk: Any, streamed: dict) -> Any:
+    """`streamed` holds one state dict per choice: tool-call indexes are local to a choice."""
+    for choice in getattr(chunk, "choices", None) or []:
+        _flatten_signed_text_parts(choice.delta)
+        state = streamed.setdefault(getattr(choice, "index", None), {})
+        _adapt_gateway_tool_calls(getattr(choice.delta, "tool_calls", None), state)
+    return chunk
+
+
+def _adapt_gateway_stream(stream: Any) -> None:
+    """Adapt chunks as the (sync) stream yields them."""
+    iterator, streamed = stream._iterator, {}
+    stream._iterator = (_adapt_gateway_chunk(chunk, streamed) for chunk in iterator)
+
+
+def _adapt_async_gateway_stream(stream: Any) -> None:
+    """Adapt chunks as the async stream yields them."""
+
+    async def adapted(iterator):
+        streamed: dict = {}
+        async for chunk in iterator:
+            yield _adapt_gateway_chunk(chunk, streamed)
+
+    stream._iterator = adapted(stream._iterator)
+
+
+def _gateway_tool_call_id(call_id: Any) -> Any:
+    return _LOCAL_ID_SUFFIX.sub("", call_id) if isinstance(call_id, str) else call_id
+
+
+def _restore_gateway_messages(messages: Any) -> None:
+    """Send Gemini tool calls back as the gateway issued them: original ids, `thoughtSignature`."""
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool" and "tool_call_id" in message:
+            message["tool_call_id"] = _gateway_tool_call_id(message["tool_call_id"])
+        tool_calls: Any = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for i, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            call = cast(dict[str, Any], tool_call)
+            restored: dict[str, Any] = {}
+            if (call_id := _gateway_tool_call_id(call.get("id"))) != call.get("id"):
+                restored["id"] = call_id
+            extra = call.get("extra_content")
+            google = extra.get("google") if isinstance(extra, dict) else None
+            if isinstance(google, dict) and google.get("thought_signature"):
+                restored[_GATEWAY_SIGNATURE_KEY] = google["thought_signature"]
+            if restored:
+                # Replace the dict rather than edit it: the caller may reuse its tool-call dicts.
+                kept = {k: v for k, v in call.items() if k != "extra_content"}
+                tool_calls[i] = kept | restored
+
+
+class _ModelAdapter:
+    """Model-family request and response handling. The default sends and returns as is.
+
+    Adapters are stateless; stream state lives in each adapted stream.
+    """
+
+    def prepare_request(self, kwargs: dict) -> None:
+        pass
+
+    def adapt_response(self, response: Any) -> Any:
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        return stream
+
+
+class _ClaudeAdapter(_ModelAdapter):
+    """Round-trips Claude's signed reasoning and avoids empty assistant content."""
+
+    def prepare_request(self, kwargs: dict) -> None:
+        _restore_reasoning_in_messages(kwargs.get("messages"))
+        _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
+
+    def adapt_response(self, response: Any) -> Any:
+        _split_reasoning_in_response(response)
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        return _ReasoningSplittingStream(stream)
+
+
+class _GeminiAdapter(_ModelAdapter):
+    """Round-trips Gemini's tool-call thought signatures and repeated tool-call ids."""
+
+    def prepare_request(self, kwargs: dict) -> None:
+        _restore_gateway_messages(kwargs.get("messages"))
+
+    def adapt_response(self, response: Any) -> Any:
+        _adapt_gateway_response(response)
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        if isinstance(stream, AsyncStream):
+            _adapt_async_gateway_stream(stream)
+        elif isinstance(stream, Stream):
+            _adapt_gateway_stream(stream)
+        return stream
+
+
+_DEFAULT_ADAPTER = _ModelAdapter()
+_CLAUDE_ADAPTER = _ClaudeAdapter()
+_GEMINI_ADAPTER = _GeminiAdapter()
+
+
+def _is_gemini_model(model: str | None) -> bool:
+    """Returns True if the model is a Gemini variant."""
+    if not model:
+        return False
+    return "gemini" in model.lower()
+
+
+def _model_adapter(model: str | None) -> _ModelAdapter:
+    if _is_claude_model(model):
+        return _CLAUDE_ADAPTER
+    if _is_gemini_model(model):
+        return _GEMINI_ADAPTER
+    return _DEFAULT_ADAPTER
+
+
+def _prepare_completion_request(kwargs: dict) -> _ModelAdapter:
+    """Request preparation shared by the sync and async completions clients."""
+    model = kwargs.get("model")
+    if _should_strip_strict(model):
+        _strip_strict_from_tools(kwargs.get("tools"))
+    # `messages` may be any iterable: read it once so the adapter and the SDK see the same list.
+    messages = kwargs.get("messages")
+    if isinstance(messages, Iterable) and not isinstance(messages, (list, str, bytes, dict)):
+        kwargs["messages"] = list(messages)
+    adapter = _model_adapter(model)
+    adapter.prepare_request(kwargs)
+    _strip_strict_from_kwargs(kwargs)
+    return adapter
+
+
+def _adapt_completion(adapter: _ModelAdapter, kwargs: dict, response: Any) -> Any:
+    if kwargs.get("stream"):
+        return adapter.adapt_stream(response)
+    return adapter.adapt_response(response)
 
 
 def _resolve_base_url(
@@ -230,16 +548,14 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
 
 
 class DatabricksCompletions(Completions):
-    """Completions that conditionally strips 'strict' from tools for non-GPT models."""
+    """Completions that conditionally strips 'strict' from tools for non-GPT models.
+
+    Claude and Gemini requests and responses go through a model-family adapter.
+    """
 
     def create(self, **kwargs):
-        model = kwargs.get("model")
-        if _should_strip_strict(model):
-            _strip_strict_from_tools(kwargs.get("tools"))
-        if _is_claude_model(model):
-            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        return super().create(**kwargs)
+        adapter = _prepare_completion_request(kwargs)
+        return _adapt_completion(adapter, kwargs, super().create(**kwargs))
 
 
 class DatabricksChat(Chat):
@@ -434,16 +750,14 @@ class DatabricksOpenAI(OpenAI):
 
 
 class AsyncDatabricksCompletions(AsyncCompletions):
-    """Async completions that conditionally strips 'strict' from tools for non-GPT models."""
+    """Async completions that conditionally strips 'strict' from tools for non-GPT models.
+
+    Claude and Gemini requests and responses go through a model-family adapter.
+    """
 
     async def create(self, **kwargs):
-        model = kwargs.get("model")
-        if _should_strip_strict(model):
-            _strip_strict_from_tools(kwargs.get("tools"))
-        if _is_claude_model(model):
-            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        return await super().create(**kwargs)
+        adapter = _prepare_completion_request(kwargs)
+        return _adapt_completion(adapter, kwargs, await super().create(**kwargs))
 
 
 class AsyncDatabricksChat(AsyncChat):

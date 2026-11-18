@@ -415,7 +415,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("experimental", "models"): (
         (
-            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-5-5",
             "call a model service you own (deploy creates it)",
         ),
         (
@@ -429,7 +429,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("experimental", "models", "bind"): (
         (
-            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-5-5",
             "declare the agent's model service in agent.toml",
         ),
         (

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from databricks_agentkit.openai.history import read_history
     from databricks_agentkit.openai.mcp import mcp_servers
     from databricks_agentkit.openai.memory import memory_tools
+    from databricks_agentkit.openai.models import chat_model
     from databricks_agentkit.openai.sessions import session_store
     from databricks_agentkit.runtime import (
         start_trace,
@@ -56,6 +57,8 @@ def configure_tracing() -> None:
 
 
 __all__ = [
+    # Agents SDK model for a gateway model name — pass to Agent(model=...).
+    "chat_model",
     "genie_tools",
     # MCP servers from agent.toml (plus any you pass) — hand them to Agent(mcp_servers=...).
     "mcp_servers",
@@ -77,6 +80,7 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds OpenAI autolog).
 _MODULE_BY_NAME = {
+    "chat_model": "databricks_agentkit.openai.models",
     "genie_tools": "databricks_agentkit.openai.genie",
     "mcp_servers": "databricks_agentkit.openai.mcp",
     "memory_tools": "databricks_agentkit.openai.memory",

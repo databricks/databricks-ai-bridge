@@ -39,6 +39,17 @@ _IMPORT_ERROR = (
     "Install with: pip install 'databricks-langchain[sandbox]'"
 )
 
+_USER_AGENT_PRODUCT = "databricks-langchain"
+
+
+def _user_agent_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("databricks-langchain")
+    except PackageNotFoundError:
+        return "unknown"
+
 
 class DatabricksSandboxSession:
     """Provision a Databricks sandbox and hand back a ready DatabricksSandboxTool.
@@ -81,6 +92,13 @@ class DatabricksSandboxSession:
     ) -> None:
         if not _sandbox_imports_available:
             raise ImportError(_IMPORT_ERROR)
+        # Tag the caller's client in place so command-exec (gRPC) traffic is
+        # attributed to this integration (gRPC reads the User-Agent per call).
+        # CRUD/REST snapshots the User-Agent when the WorkspaceClient is built, so
+        # full CRUD attribution needs the token set before that client is built.
+        config = getattr(workspace_client, "config", None)
+        if config is not None:
+            config.with_user_agent_extra(_USER_AGENT_PRODUCT, _user_agent_version())
         self._client = workspace_client
         self._sandbox_id = sandbox_id or f"lc-{uuid.uuid4().hex[:12]}"
         self._inactivity_timeout = inactivity_timeout

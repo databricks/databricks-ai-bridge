@@ -12,9 +12,10 @@ from databricks_agentbricks.errors import AgentCliError, wrap_api_error
 
 @pytest.fixture(autouse=True)
 def _reset_output_mode():
-    # Keep the process-global output mode from leaking between tests.
+    # Keep the process-global output modes from leaking between tests, including the line-level one.
     yield
     errors.set_output_mode("text")
+    errors.set_usage_output_mode(None)
 
 
 def test_error_renders_json_object_in_json_mode(capsys):
@@ -105,3 +106,43 @@ def test_retry_timeout_surfaces_original_service_error():
 def test_retry_timeout_without_cause_falls_through():
     mapped = wrap_api_error(TimeoutError("Timed out after 0:01:00"))
     assert "Timed out" in mapped.message
+
+
+def test_feature_disabled_error_says_how_to_enable_the_preview():
+    # An opted-out workspace gets HTTP 404 with FEATURE_DISABLED. The server message names the
+    # preview; the hint must say where to turn it on, not suggest switching profiles.
+    class FeatureDisabled(RuntimeError):
+        error_code = "FEATURE_DISABLED"
+
+    mapped = wrap_api_error(
+        FeatureDisabled("The Agent Memory Sessions preview is not enabled for this workspace")
+    )
+    assert mapped.error_code == "FEATURE_DISABLED"
+    assert mapped.message == "The Agent Memory Sessions preview is not enabled for this workspace"
+    assert mapped.hint is not None
+    assert "Settings > Feature Previews" in mapped.hint
+    assert "few minutes" in mapped.hint
+    assert "--profile" not in mapped.hint
+
+
+@pytest.mark.parametrize("error_code", ["NOT_IMPLEMENTED", "UNIMPLEMENTED"])
+def test_unimplemented_preview_api_keeps_the_profile_hint(error_code):
+    # These codes mean the API isn't deployed to this workspace at all, so no toggle fixes it.
+    class Unimplemented(RuntimeError):
+        def __init__(self, message: str, error_code: str) -> None:
+            super().__init__(message)
+            self.error_code = error_code
+
+    mapped = wrap_api_error(Unimplemented("not implemented", error_code))
+    assert mapped.hint is not None
+    assert "--profile" in mapped.hint
+    assert "Feature Previews" not in mapped.hint
+
+
+def test_not_found_404_gets_no_preview_hint():
+    # FEATURE_DISABLED shares HTTP 404 with a genuinely missing resource; only the code decides.
+    class ResourceDoesNotExist(RuntimeError):
+        error_code = "RESOURCE_DOES_NOT_EXIST"
+
+    mapped = wrap_api_error(ResourceDoesNotExist("Memory store 'x' does not exist"))
+    assert mapped.hint is None

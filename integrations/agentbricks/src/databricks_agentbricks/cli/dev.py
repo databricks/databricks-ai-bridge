@@ -18,6 +18,7 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
@@ -25,6 +26,7 @@ from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
     announce_starting,
     local_trace_label,
+    starting_status,
 )
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
@@ -54,12 +56,16 @@ def _env_credential(env_file: dict[str, str]) -> Optional[str]:
 
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
+    diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
+    obj.diagnostics = diagnostics
+    diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks),
+        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
+        diagnostics=diagnostics,
     )
 
 
@@ -122,7 +128,8 @@ def dev(
         local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
 
     service = build_dev_service(obj)
-    service.check_project(source)
+    with obj.diagnostics.phase(FailureStage.PROJECT):
+        service.check_project(source)
     # Auth is checked before anything is started: an unauthenticated external-browser profile
     # would otherwise hang the local agent on a browser flow with no error.
     if not env_credential:
@@ -166,6 +173,9 @@ def dev(
                     local_trace_label(plan.preview),
                     has_chat_ui=plan.preview.has_chat_ui,
                 ),
+                # A spinner in the quiet stretches before the agent answers (e.g. while it imports
+                # its libraries), so a long wait doesn't look like a hang.
+                quiet_status=starting_status,
             )
         except AgentCliError:
             # Separate the error from the run-local logs it follows.

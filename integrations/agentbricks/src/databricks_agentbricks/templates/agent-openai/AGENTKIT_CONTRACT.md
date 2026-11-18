@@ -14,8 +14,8 @@ needs runtime wiring as well as manifest configuration.
 | --- | --- |
 | `dev`, `deploy` | Installable dependencies and an `app.yaml` command starting the application |
 | `tools add mcp`, `uc-function`, `genie`, `sandbox` | Load bindings into agent tool lists and tool execution |
-| `sessions bind` | Select the bound session store and supply session/actor identity |
-| `memory bind` | Include bound, actor-scoped memory tools in the agent tool list |
+| `sessions bind` | Select the bound session store and supply session/actor identity; off by default in `dev`, connects after `deploy` |
+| `memory bind` | Include bound, actor-scoped memory tools in the agent tool list; off by default in `dev`, connects after `deploy` |
 | `tracing bind`, `tracing unbind` | Initialize tracing and open a root span from resolved config |
 | `endpoint invoke` | An HTTP endpoint; the caller supplies its path and complete request body |
 

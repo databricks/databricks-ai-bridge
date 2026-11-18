@@ -15,6 +15,18 @@ from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.types import AgentServer
 
 _IDENTITY_DEFAULT_SCOPES = frozenset({"iam.access-control:read", "iam.current-user:read"})
+# A user-auth sandbox credential carries only the App's user API scopes, so sandbox code can call
+# just the APIs they cover: workspace files, Volume files, SQL warehouses, and UC metadata reads.
+_SANDBOX_TOKEN_SCOPES = frozenset(
+    {
+        "workspace.workspace",
+        "files",
+        "sql",
+        "catalog.catalogs:read",
+        "catalog.schemas:read",
+        "catalog.tables:read",
+    }
+)
 
 
 def _validate_forwarding(app: App) -> None:
@@ -117,7 +129,7 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
         ):
             scopes.add("files")
         if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
-            scopes.add("workspace.workspace")
+            scopes.update(_SANDBOX_TOKEN_SCOPES)
     return scopes
 
 

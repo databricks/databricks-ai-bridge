@@ -44,6 +44,20 @@ def _iter_stores(list_page: Callable[..., Any], key: str) -> Iterator[Any]:
             return
 
 
+def _raise_if_feature_disabled(list_page: Callable[..., Any]) -> None:
+    """Raise the API's error if the stores API is turned off for this workspace, else return.
+
+    A workspace that opted out of the Agent Memory Sessions preview answers every store call with
+    HTTP 404 and ``FEATURE_DISABLED``. Only that code is raised: 404 alone also means a missing
+    resource, and any other failure is left for the real operation to report in context.
+    """
+    try:
+        list_page(page_size=1)
+    except AgentCliError as exc:
+        if exc.error_code == "FEATURE_DISABLED":
+            raise
+
+
 @dataclass(frozen=True)
 class MemoryStoreReconcileResult:
     """Facts produced while reconciling a memory store."""
@@ -121,6 +135,10 @@ class MemoryStoreClient:
             self._api_client_provider.get().list_memory_stores, "managed_memory_stores"
         )
 
+    def check_enabled(self) -> None:
+        """Raise ``FEATURE_DISABLED`` if memory stores are turned off for this workspace."""
+        _raise_if_feature_disabled(self._api_client_provider.get().list_memory_stores)
+
     def ensure(self, display_name: str) -> tuple[dict, bool]:
         """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
         try:
@@ -188,6 +206,10 @@ class SessionStoreClient:
         return list(
             _iter_stores(self._api_client_provider.get().list_session_stores, "session_stores")
         )
+
+    def check_enabled(self) -> None:
+        """Raise ``FEATURE_DISABLED`` if session stores are turned off for this workspace."""
+        _raise_if_feature_disabled(self._api_client_provider.get().list_session_stores)
 
     def ensure(self, name: str) -> tuple[dict, bool]:
         """Create the session store, or resolve it if it already exists. Returns (store, created)."""

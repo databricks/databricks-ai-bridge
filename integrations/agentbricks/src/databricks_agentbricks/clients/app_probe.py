@@ -20,7 +20,7 @@ BOOTING_STATUSES = frozenset({502, 503, 504})
 _UNAUTHORIZED_STATUSES = frozenset({401, 403})
 _PROBE_TIMEOUT_S = 5.0
 
-ProbeOutcome = Literal["answered", "booting", "unverifiable"]
+ProbeOutcome = Literal["answered", "booting", "unverifiable", "unreachable"]
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,7 @@ class ProbeResult:
 
     outcome: ProbeOutcome
     detail: Optional[str] = None
+    http_status: int | None = None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -74,9 +75,9 @@ class AppProbe:
             status = exc.code
             exc.close()
         except OSError as exc:  # URLError, timeouts, and refused connections
-            return ProbeResult("booting", str(getattr(exc, "reason", exc)))
+            return ProbeResult("unreachable", str(getattr(exc, "reason", exc)))
         if status in BOOTING_STATUSES:
-            return ProbeResult("booting", f"HTTP {status}")
+            return ProbeResult("booting", f"HTTP {status}", status)
         if status in _UNAUTHORIZED_STATUSES:
-            return ProbeResult("unverifiable", f"HTTP {status}")
-        return ProbeResult("answered", f"HTTP {status}")
+            return ProbeResult("unverifiable", f"HTTP {status}", status)
+        return ProbeResult("answered", f"HTTP {status}", status)
