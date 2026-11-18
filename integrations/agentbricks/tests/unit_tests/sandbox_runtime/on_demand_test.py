@@ -135,7 +135,7 @@ def test_app_startup_does_not_access_or_claim_a_sandbox(tmp_path, monkeypatch):
         ("Registry", registry),
         ("Lakebox", lakebox),
         ("ControlStore", control),
-        ("RunManager", runs),
+        ("AppInvocationDispatcher", runs),
         ("EnvironmentStore", MagicMock()),
     ]:
         monkeypatch.setattr(module, name, lambda *a, _mock=mock, **kw: _mock)
