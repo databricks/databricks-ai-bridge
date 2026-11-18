@@ -14,13 +14,10 @@ from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_USERNAME_ENV,
 )
+from databricks_agentkit.sandbox.session_lifecycle import ExecutionIdentityConflict
 
 
 class SessionBusy(RuntimeError):
-    pass
-
-
-class ExecutionIdentityConflict(ValueError):
     pass
 
 

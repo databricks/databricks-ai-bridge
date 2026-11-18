@@ -9,7 +9,11 @@ from databricks_agentkit.sandbox.bundle import Bundle
 from databricks_agentkit.sandbox.control import RUNTIME_POLL_SECONDS, scoped_session
 
 
-class RunManager:
+class AppInvocationDispatcher:
+    """The App owns claims and heartbeats; the sandbox worker is an execution target."""
+
+    execution_owner = "orchestrator"
+
     def __init__(self, control, orchestrator):
         self.control, self.orchestrator = control, orchestrator
         self.runtime = Runtime.from_store(
@@ -71,3 +75,6 @@ class RunManager:
         result["session_id"] = request["session_id"]
         result["agent_id"] = agent["id"]
         return result
+
+
+RunManager = AppInvocationDispatcher
