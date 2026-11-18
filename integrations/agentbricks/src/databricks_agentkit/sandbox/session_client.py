@@ -4,15 +4,22 @@ import hashlib
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from urllib.parse import quote
 
-from databricks.sdk.errors import Cancelled
-
-from databricks_agentkit.sandbox.store import ExecutionIdentityConflict, SessionBusy
-
-
-class RevisionConflict(ValueError):
-    pass
+from databricks_agentkit.sandbox._apps_lifecycle import (
+    LakeboxProvider,
+    RegistryBindings,
+    allocation,
+    blocking,
+    run_sync,
+)
+from databricks_agentkit.sandbox.session_lifecycle import (
+    AgentRevision,
+    ExecutionIdentityConflict,
+    SandboxAllocation,
+    SessionSandboxManager,
+    SessionScope,
+)
+from databricks_agentkit.sandbox.session_lifecycle import RevisionConflict as RevisionConflict
 
 
 @contextmanager
@@ -59,16 +66,21 @@ class SessionSandboxClient:
         self.warm_pool = None
         self.capacity = None
 
-    @contextmanager
-    def _reserve_compute(self, session, source_hash, sandbox_id, status, revision):
-        # Persist the reservation before releasing the deployment lock. The
-        # platform create/start and readiness wait run outside this lock.
-        guard = self.capacity.slot("allocation", 1) if self.capacity else nullcontext()
-        with guard:
-            if self.capacity:
-                self.capacity.check_sandboxes(self.lakebox, existing_id=sandbox_id)
-            self._save(session, source_hash, sandbox_id, status, revision)
-        yield
+    async def _reserve_compute(self, reservation, binding):
+        def reserve():
+            guard = self.capacity.slot("allocation", 1) if self.capacity else nullcontext()
+            with guard:
+                if self.capacity:
+                    self.capacity.check_sandboxes(self.lakebox, existing_id=binding.sandbox_id)
+                self._save(
+                    reservation.record,
+                    binding.source_hash,
+                    binding.sandbox_id,
+                    binding.status,
+                    binding.revision,
+                )
+
+        await blocking(reserve)
 
     def execution_principal(self):
         if self._principal is None:
@@ -81,25 +93,18 @@ class SessionSandboxClient:
         with self.registry.session("invocation:" + session_id):
             yield
 
-    @contextmanager
     def _allocation(self, session_id):
-        # A second get_or_create waits for the first allocation and reads its result.
-        # This lock is not held while installing source or running the agent.
-        deadline = time.monotonic() + 240
-        while True:
-            lock = self.registry.session(session_id)
-            try:
-                session = lock.__enter__()
-            except SessionBusy:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.05)
-            else:
-                break
-        try:
-            yield session
-        finally:
-            lock.__exit__(None, None, None)
+        return allocation(self.registry, session_id)
+
+    def _manager(self, provider):
+        return SessionSandboxManager(
+            RegistryBindings(self.registry, self.namespace),
+            provider,
+            reserve_compute=self._reserve_compute,
+            sandbox_name=lambda scope, key: (
+                f"ab-proto-{hashlib.sha256(scope.namespace.encode()).hexdigest()[:8]}-{key[:16]}"
+            ),
+        )
 
     def get_or_create(
         self,
@@ -113,100 +118,50 @@ class SessionSandboxClient:
         use_pool=True,
     ):
         metrics = metrics if metrics is not None else {}
-        report = progress or (lambda stage: None)
-        started = time.perf_counter()
-        with self._allocation(session_id) as session:
-            metrics["registry_connect_and_lock"] = round((time.perf_counter() - started) * 1000, 2)
-            row = session.get()
-            if row and row["source_hash"] and row["source_hash"] != source_hash:
-                raise RevisionConflict(
-                    "Agent source changed; use a new session ID for this revision"
+        provider = LakeboxProvider(self.lakebox)
+        prepared = None
+
+        async def claim_prepared(reservation, row):
+            nonlocal prepared
+            if not use_pool or not self.warm_pool or (row and row.status != "pending"):
+                return None
+            with timed(metrics, "pool_claim"):
+                prepared = await blocking(
+                    self.warm_pool.claim, reservation.record, source_hash, source_revision
                 )
-            if not row or row.get("execution_principal") != self.execution_principal():
-                session.bind_owner(self.execution_principal())
-            pool_hit = False
-            if (
-                use_pool
-                and allow_create
-                and not (row or {}).get("sandbox_id")
-                and (not row or row["status"] == "pending")
-                and self.warm_pool
-            ):
-                with timed(metrics, "pool_claim"):
-                    prepared = self.warm_pool.claim(session, source_hash, source_revision)
-                pool_hit = bool(prepared)
-                if pool_hit:
-                    row = session.get()
-                    report("Using prepared sandbox from warm pool")
-                    return SessionSandbox(
-                        prepared.sandbox,
-                        False,
-                        False,
-                        "ready",
-                        row["bootstrap_metrics"]["worker_state_key"],
-                        pool_hit=True,
-                        prepared=prepared,
-                    )
-            sandbox_id = row["sandbox_id"] if row else None
-            with timed(metrics, "sandbox_lookup"):
-                sandbox = self.lakebox.get(sandbox_id) if sandbox_id else None
-            replaced, created = bool(sandbox_id and sandbox is None), False
-            if sandbox is None:
-                if not allow_create:
-                    raise RuntimeError(
-                        "Prepared sandbox is missing; prepare a new environment before invoking"
-                    )
-                report("Creating sandbox")
-                label = f"ab-proto-{hashlib.sha256(self.namespace.encode()).hexdigest()[:8]}-{session.key[:16]}"
-                with timed(metrics, "sandbox_create_or_reconcile"):
-                    sandbox = self.lakebox.find_named(label)
-                    if sandbox is None:
-                        if row and row["status"] == "creating" and not sandbox_id:
-                            raise RevisionConflict(
-                                "An earlier create had an ambiguous outcome; inspect the named sandbox before retrying"
-                            )
-                        with self._reserve_compute(
-                            session, source_hash, None, "creating", source_revision
-                        ):
-                            sandbox = self.lakebox.create(label)
-                        created = True
-                    sandbox_id = sandbox["sandboxId"]
-                    self._save(session, source_hash, sandbox_id, "bootstrapping", source_revision)
-            self.lakebox.set_idle_timeout(sandbox_id)
-            resuming = sandbox.get("status", "").lower() != "running"
-            with timed(metrics, "sandbox_resume"):
-                if sandbox.get("status", "").lower() != "running":
-                    report("Resuming sandbox")
-                    with self._reserve_compute(
-                        session, source_hash, sandbox_id, "resuming", source_revision
-                    ):
-                        sandbox = self.lakebox.start(sandbox_id)
-                    if sandbox is None:
-                        raise RuntimeError("Sandbox disappeared while starting")
-                if self.capacity and resuming:
-                    self._save(
-                        session,
-                        source_hash,
-                        sandbox_id,
-                        (row or {}).get("status") or "bootstrapping",
-                        source_revision,
-                    )
-                deadline = time.monotonic() + 240
-                while sandbox.get("status", "").lower() != "running":
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("Sandbox did not reach running state")
-                    time.sleep(1)
-                    sandbox = self.lakebox.get(sandbox_id)
-                    if sandbox is None:
-                        raise RuntimeError("Sandbox disappeared while starting")
-            return SessionSandbox(
-                sandbox,
-                created,
-                replaced,
-                row["status"] if row else "creating",
-                ((row or {}).get("bootstrap_metrics") or {}).get("worker_state_key"),
-                pool_hit,
+            if prepared:
+                binding = await reservation.read()
+                if progress:
+                    progress("Using prepared sandbox from warm pool")
+                return SandboxAllocation(
+                    provider.capture(prepared.sandbox),
+                    False,
+                    False,
+                    "ready",
+                    binding.worker_state_key,
+                    prepared=True,
+                )
+            return None
+
+        result = run_sync(
+            self._manager(provider).get_or_create(
+                SessionScope(self.namespace, session_id, self.execution_principal()),
+                AgentRevision(source_hash, source_revision),
+                allow_create=allow_create,
+                progress=progress,
+                metrics=metrics,
+                claim_prepared=claim_prepared,
             )
+        )
+        return SessionSandbox(
+            provider.snapshots[result.sandbox.id],
+            result.created,
+            result.replaced,
+            result.installation_status,
+            result.worker_state_key,
+            pool_hit=result.prepared,
+            prepared=prepared,
+        )
 
     @staticmethod
     def _save(session, digest, sandbox_id, status, revision=None, metrics=None):
@@ -241,46 +196,19 @@ class SessionSandboxClient:
         return {**runtime, "sandbox_id": sandbox_id, "status": status}
 
     def stop(self, session_id):
-        started, metrics = time.perf_counter(), {}
-        with self.invocation(session_id), self._allocation(session_id) as session:
-            row = session.get()
-            if not row or not row["sandbox_id"]:
-                raise KeyError("Session has no sandbox")
-            session.bind_owner(self.execution_principal())
-            metrics["registry_connect_and_lock"] = round((time.perf_counter() - started) * 1000, 2)
-            sandbox_id = row["sandbox_id"]
-            with timed(metrics, "sandbox_lookup"):
-                result = self.lakebox.get(sandbox_id)
-            if result is None:
-                raise KeyError("Session sandbox no longer exists")
-            with timed(metrics, "stop_request"):
-                if result.get("status", "").lower() not in {"stopped", "terminated"}:
-                    try:
-                        result = self.lakebox.api(
-                            "POST",
-                            f"/sandboxes/{quote(sandbox_id, safe='')}/stop",
-                            {"sandbox_id": sandbox_id},
-                        )
-                    except Cancelled:
-                        result = self.lakebox.get(sandbox_id)
-                        if not result or result.get("status", "").lower() not in {
-                            "stopping",
-                            "stopped",
-                            "terminated",
-                        }:
-                            raise
-            with timed(metrics, "wait_until_stopped"):
-                deadline = time.monotonic() + 180
-                while not result or result.get("status", "").lower() not in {
-                    "stopped",
-                    "terminated",
-                }:
-                    if time.monotonic() > deadline:
-                        raise TimeoutError("Sandbox is still stopping")
-                    time.sleep(1)
-                    result = self.lakebox.get(sandbox_id)
-                    if result is None:
-                        raise KeyError("Sandbox disappeared before shutdown was confirmed")
-            self._save(session, row["source_hash"], sandbox_id, "stopped")
+        started = time.perf_counter()
+        metrics = {}
+        provider = LakeboxProvider(self.lakebox)
+        with self.invocation(session_id):
+            result = run_sync(
+                self._manager(provider).stop(
+                    SessionScope(self.namespace, session_id, self.execution_principal()),
+                    metrics=metrics,
+                )
+            )
         metrics["total"] = round((time.perf_counter() - started) * 1000, 2)
-        return {"sandbox_id": sandbox_id, "status": "stopped", "timings_ms": metrics}
+        return {
+            "sandbox_id": result.id,
+            "status": "stopped",
+            "timings_ms": metrics,
+        }
