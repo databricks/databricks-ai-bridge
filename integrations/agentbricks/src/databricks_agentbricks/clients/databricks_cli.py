@@ -9,16 +9,16 @@ share it without importing each other.
 
 from __future__ import annotations
 
-import os
-import stat
 import subprocess
 import sys
-import time
 from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.clients import terminal_relay
-from databricks_agentbricks.clients.output_tail import OutputTail, StreamRelay
+from databricks_agentbricks.clients.output_tail import (  # noqa: F401 - compatibility export
+    OutputTail,
+    StreamRelay,
+)
 from databricks_agentbricks.errors import AgentCliError
 
 # Seconds between readiness probes while a long-running command starts up.
@@ -141,68 +141,14 @@ def _run_until_ready(
     on_exit: Optional[Callable[[int], None]] = None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with its output streamed, calling ``on_ready`` once ``probe`` first succeeds."""
-    stdout_target = None if os.isatty(1) else subprocess.PIPE
-    stderr_target = None if os.isatty(2) else subprocess.PIPE
-    if stdout_target is not None and stderr_target is not None:
-        try:
-            out, err = os.fstat(1), os.fstat(2)
-            if out.st_ino and os.path.samestat(out, err):
-                if stat.S_ISREG(out.st_mode):
-                    # File identity cannot distinguish independent opens from a shared offset.
-                    stdout_target = stderr_target = None
-                else:
-                    # A single pipe preserves write ordering into a shared stream.
-                    stderr_target = subprocess.STDOUT
-        except OSError:
-            pass
-    with subprocess.Popen(
+    from databricks_agentbricks.clients.process_runner import run_until_ready
+
+    return run_until_ready(
         cmd,
-        stdout=stdout_target,
-        stderr=stderr_target,
-        bufsize=0,
         cwd=cwd,
         env=env,
-    ) as proc:
-        # Preserve terminal buffering and prompts when only one stream is redirected.
-        stdout = StreamRelay(proc.stdout, 1) if proc.stdout is not None else None
-        stderr = StreamRelay(proc.stderr, 2) if proc.stderr is not None else None
-        drain_output = False
-        try:
-            while proc.poll() is None:
-                if probe():
-                    if on_ready is not None:
-                        on_ready()
-                    proc.wait()
-                    break
-                time.sleep(_READY_POLL_S)
-            drain_output = True
-        except KeyboardInterrupt:
-            # Ctrl-C reaches the child too; give it a moment to exit cleanly, as `subprocess.run`
-            # does, then make sure it is gone.
-            try:
-                proc.wait(timeout=_SIGINT_WAIT_S)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            raise
-        except BaseException:
-            proc.kill()
-            raise
-        finally:
-            try:
-                proc.wait()
-                if on_exit is not None:
-                    on_exit(proc.returncode)
-                if drain_output:
-                    for relay in (stdout, stderr):
-                        if relay is not None:
-                            relay.finish()
-            finally:
-                for relay in (stdout, stderr):
-                    if relay is not None:
-                        relay.cancel()
-    return subprocess.CompletedProcess(
-        cmd,
-        proc.returncode,
-        stdout=stdout.tail.text() if stdout is not None else "",
-        stderr=stderr.tail.text() if stderr is not None else "",
+        probe=probe,
+        on_ready=on_ready,
+        on_exit=on_exit,
+        poll_seconds=_READY_POLL_S,
     )

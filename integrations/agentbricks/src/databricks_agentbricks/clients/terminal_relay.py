@@ -64,6 +64,7 @@ def run(
     on_ready: Optional[Callable[[], None]],
     quiet_status: Callable[[float], str],
     on_exit: Optional[Callable[[int], None]] = None,
+    isolated: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` on a pseudo-terminal, relaying its output to ours unchanged.
 
@@ -80,7 +81,14 @@ def run(
     try:
         # stdin stays the real terminal, so typed input (e.g. at a debugger prompt) still reaches
         # the app; the process group is unchanged, so Ctrl+C reaches it as before.
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=slave, stderr=slave)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=isolated and os.name == "posix",
+        )
     except BaseException:
         os.close(master)
         os.close(slave)
@@ -129,6 +137,10 @@ def run(
     finally:
         signal.signal(signal.SIGWINCH, previous_winch)
         os.close(master)
+        if isolated:
+            from databricks_agentbricks.clients.process_runner import stop_process
+
+            stop_process(proc, isolated=True)
         proc.wait()
         if on_exit is not None:
             on_exit(proc.returncode)
