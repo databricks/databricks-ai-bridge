@@ -1,11 +1,4 @@
-"""`agentbricks dev` — run a scaffolded agent locally, wrapping `databricks apps run-local`.
-
-Runs the app from its ``app.yaml`` exactly as the Databricks Apps runtime would locally: reads the
-manifest's command + env, and (with ``--prepare-environment``) builds the venv via uv. This is the
-local counterpart to ``agentbricks deploy`` — same source dir, same manifest — so what runs here matches
-what ships. Delegating to ``apps run-local`` means agentbricks inherits the Apps team's local-run behavior
-rather than re-implementing it.
-"""
+"""Run the local agent loop and chat UI independently of the deployed execution host."""
 
 from __future__ import annotations
 
@@ -13,10 +6,10 @@ from typing import Optional
 
 import click
 
-from databricks_agentbricks.clients.apps_client import AppsClient
-from databricks_agentbricks.clients.databricks_cli import _databricks
-from databricks_agentbricks.clients.local_ports import free_port, port_in_use
+from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.local_process_client import LocalProcessClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.clients.process_runner import run_process as _run_process
 from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
@@ -33,7 +26,6 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
     DevService,
-    _dev_entry_point,  # noqa: F401 - compatibility re-export for existing callers
 )
 
 
@@ -44,10 +36,9 @@ def build_dev_service(obj) -> DevService:
     diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
+        local_process=LocalProcessClient(obj.profile, runner=_run_process, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
-        free_port=free_port,
         diagnostics=diagnostics,
     )
 
@@ -57,7 +48,7 @@ def build_dev_service(obj) -> DevService:
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory to run (containing app.yaml). Defaults to the current directory.",
+    help="Local source directory to run (containing agent.toml or app.yaml). Defaults to the current directory.",
 )
 @click.option(
     "--prepare-environment/--no-prepare-environment",
@@ -82,10 +73,11 @@ def dev(
     Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
 
-    Under the hood this wraps `databricks apps run-local`: it reads the command + env from
-    `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
-    deployment. The environment is built on the first run and reused after; pass
-    `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
+    Runs [dev].command from agent.toml directly; existing projects can keep their app.yaml
+    command and env. No Databricks Apps CLI or deployed runtime is needed. Python dependencies
+    are installed into the project's .venv on the first run and reused after; pass
+    --prepare-environment to update them after dependency changes. Custom commands must honor
+    HOST and PORT to use the selected local address and port.
 
     Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks
     workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.agentbricks/`)
@@ -123,6 +115,6 @@ def dev(
                 quiet_status=starting_status,
             )
         except AgentCliError:
-            # Separate the error from the run-local logs it follows.
+            # Separate the error from the agent logs it follows.
             render.console().print()
             raise

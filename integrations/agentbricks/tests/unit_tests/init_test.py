@@ -137,6 +137,7 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
         manifest = tomli.load(manifest_file)
     token = _default_store_token(manifest)
     assert manifest == {
+        "dev": {"command": ["uv", "run", "start-server"]},
         "schema_version": 1,
         "agent": {"framework": "langgraph", "server": "agentbricks", "deployment_name": "proj"},
         "memory_store": {"name": f"proj-{token}-memory"},
@@ -160,6 +161,7 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
     assert manifest == {
+        "dev": {"command": ["uv", "run", "start-server"]},
         "schema_version": 1,
         "agent": {"framework": framework, "server": "custom", "deployment_name": "proj"},
     }
@@ -179,6 +181,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         manifest = tomli.load(manifest_file)
     token = _default_store_token(manifest)
     assert manifest == {
+        "dev": {"command": ["uv", "run", "start-server"]},
         "schema_version": 1,
         "agent": {"framework": "openai", "server": "agentbricks", "deployment_name": "proj"},
         "memory_store": {"name": f"proj-{token}-memory"},

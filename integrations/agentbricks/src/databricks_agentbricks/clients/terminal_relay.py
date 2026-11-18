@@ -1,7 +1,6 @@
 """Relay a command's output through a pseudo-terminal, with a status line in the quiet gaps.
 
-``agentbricks dev`` runs ``databricks apps run-local``, which builds the environment and then starts
-the agent's server. Between the last install line and the server answering there can be a long,
+Between the last install line and the agent server answering there can be a long,
 silent stretch (the agent importing its libraries) where the terminal shows only a static cursor.
 Drawing a spinner there without it overwriting the logs means knowing when the output goes quiet, so
 the output has to pass through us. A pseudo-terminal keeps that invisible to the tools: they still

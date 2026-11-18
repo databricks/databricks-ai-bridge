@@ -22,4 +22,4 @@ app.recover(recover)
 
 
 def main() -> None:
-    uvicorn.run("runtime.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run("runtime.main:app", host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))

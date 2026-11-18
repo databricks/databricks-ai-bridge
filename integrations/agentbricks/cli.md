@@ -187,7 +187,7 @@ Starts the agent on a local server - by default http://localhost:8000 - and, onc
 
 Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
 
-Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
+Runs `[dev].command` from `agent.toml` directly; existing projects can keep their `app.yaml` command and env. No Databricks Apps CLI or deployed runtime is needed. Python dependencies are installed into the project’s `.venv` on the first run and reused after; pass `--prepare-environment` to update them after dependency changes. Custom commands must honor `HOST` and `PORT` to use the selected local address and port.
 
 Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under the existing `.agentbricks/` state directory) so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them (`agentbricks tracing unbind` doesn't affect dev; it only stops the deployed agent's tracing). Long-term memory is off and conversation history is in-process (not durable): the memory/session stores bound with `agentbricks memory/sessions bind` are created and used only when you `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make; that all happens at `agentbricks deploy` time.
 
@@ -200,9 +200,25 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
+| `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing agent.toml or app.yaml). Defaults to the current directory. |
 | `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
 | `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
+
+Local command configuration (written by `init`):
+
+```toml
+[dev]
+command = ["uv", "run", "start-server"]
+
+[dev.env]
+MY_SETTING = "local-value"
+```
+
+When `[dev]` is present, it supplies the command and environment instead of `app.yaml`.
+Shell variables and the project's `.env` provide local credentials; literal manifest values override
+both. For legacy `app.yaml` entries using `valueFrom`, supply the variable locally in `.env` or
+your shell. Dev never resolves deployed Apps resources. Tracing always uses the local tracking
+server. Projects with only `requirements.txt` are also supported.
 
 ### `agentbricks memory`
 

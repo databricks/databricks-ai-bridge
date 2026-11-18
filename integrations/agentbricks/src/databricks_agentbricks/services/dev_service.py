@@ -1,10 +1,4 @@
-"""The framework-agnostic workflow behind ``agentbricks dev``.
-
-``DevService`` prepares a temporary, local-only Apps manifest and hands the resulting plan to
-the CLI for presentation and execution.  The service deliberately has no Click or presentation
-dependencies: local tracing and the Apps command are clients supplied by the command composition.
-In particular, preparing a project never resolves a workspace client or provisions a resource.
-"""
+"""Prepare a local agent process and local tracing without Apps or workspace provisioning."""
 
 from __future__ import annotations
 
@@ -14,12 +8,12 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.local_process_client import LocalProcessClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
+from databricks_agentbricks.projects.local_run import load_local_run
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
@@ -30,22 +24,18 @@ from databricks_agentkit.runtime.tool_manifest import (
     SESSION_STORE_ENV,
 )
 
-# Default local port; run-local's proxy listens here unless ``--app-port`` overrides it.
 _DEFAULT_APP_PORT = 8000
-_LOCAL_APP_YAML = "app.agentbricksdev.yaml"
-
-# Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
-# ``agentbricks deploy``).  They point at an index the deploying environment can reach, which is
-# not necessarily reachable from the local dev machine, so local ``uv`` builds must ignore them.
 _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
-
-# Workspace-managed resource env written by ``agentbricks deploy``.  A dev run creates no workspace
-# resources: tracing is local, memory is off, and sessions are in-process.  Remove these entries so
-# a previous deployment cannot silently pull a local run onto workspace resources.
-_DEPLOY_TRACING_ENVS = frozenset(
-    {"MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID", "MLFLOW_TRACING_DESTINATION"}
+_DEPLOY_RESOURCE_ENVS = frozenset(
+    {
+        "MLFLOW_TRACKING_URI",
+        "MLFLOW_EXPERIMENT_ID",
+        "MLFLOW_EXPERIMENT_NAME",
+        "MLFLOW_TRACING_DESTINATION",
+        MEMORY_STORE_ENV,
+        SESSION_STORE_ENV,
+    }
 )
-_DEPLOY_RESOURCE_ENVS = _DEPLOY_TRACING_ENVS | {MEMORY_STORE_ENV, SESSION_STORE_ENV}
 
 
 @dataclass(frozen=True)
@@ -76,132 +66,91 @@ class DevPreview:
 
 @dataclass(frozen=True)
 class DevPlan:
-    """The prepared local manifest and execution options for one run."""
-
     preview: DevPreview
-    entry_point: pathlib.Path
+    command: tuple[str, ...]
+    environment: dict[str, str | None]
     prepare_environment: bool
-    app_port: int
 
 
 class DevService:
-    """Prepare and run an Agent Bricks project locally.
-
-    The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
-    It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, and
-    ``free_port`` picks one for the app behind run-local's proxy, so tests need no real sockets.
-    """
-
     def __init__(
         self,
         project_resolver: ProjectResolver,
-        apps_client: AppsClient,
+        local_process: LocalProcessClient,
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
-        free_port: Callable[[], int],
         diagnostics: CommandDiagnostics | None = None,
     ) -> None:
         self._project_resolver = project_resolver
-        self._apps_client = apps_client
+        self._local_process = local_process
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
-        self._free_port = free_port
         self._diagnostics = diagnostics or CommandDiagnostics()
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
-        """Prepare a local run and clean up its temporary resources on context exit.
-
-        The yielded plan is valid while the context is open.  In particular, the temporary
-        ``app.agentbricksdev.yaml`` remains in place while presentation and ``run`` execute, then
-        is removed along with the local tracing process even when either of those operations fails.
-        """
         with self._diagnostics.phase(FailureStage.PROJECT):
             source_dir = pathlib.Path(request.source)
-            app_yaml = source_dir / "app.yaml"
-            if not app_yaml.exists():
-                raise AgentCliError(
-                    f"No app.yaml found at {app_yaml}.",
-                    hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
-                    error_category="ERROR_CATEGORY_CONFIGURATION",
-                )
-
             project = self._project_resolver.load(source_dir)
+            local = load_local_run(source_dir)
             if project is not None and project.tools:
                 require_managed_tool_support(source_dir)
-
-            # Fail before starting tracing or writing the local manifest: `apps run-local` does not
-            # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
-            port = request.app_port or _DEFAULT_APP_PORT
+            port = _DEFAULT_APP_PORT if request.app_port is None else request.app_port
+            if not 1 <= port <= 65535:
+                raise AgentCliError(
+                    "Port must be between 1 and 65535.",
+                    error_category="ERROR_CATEGORY_CONFIGURATION",
+                )
             if self._port_in_use(port):
                 raise AgentCliError(
                     f"Port {port} is already in use (possibly a previous agentbricks dev run).",
                     hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
                     error_category="ERROR_CATEGORY_CONFIGURATION",
                 )
-
-            # Resource bindings are read only for the preview/presentation.  Dev is fully local and
-            # deliberately does not provision, fetch, or otherwise contact any workspace resource.
             memory_store, session_store, trace_experiment = (
                 self._project_resolver.resource_bindings(source_dir)
             )
+            prepare_environment = request.prepare_environment
+            if prepare_environment is None:
+                prepare_environment = not (source_dir / ".venv").exists()
+            self._diagnostics.prepare_environment = prepare_environment
 
         with self._diagnostics.phase(FailureStage.TRACING):
             tracing = self._local_tracing.start_dev(source_dir)
-        tracing_server, tracing_env = tracing.server, tracing.environment
-        entry_point: pathlib.Path | None = None
         try:
-            with self._diagnostics.phase(FailureStage.PROJECT):
-                # Repeat runs reuse an existing environment; an explicit request overrides that
-                # auto-detection exactly as the old Click command did.
-                prepare_environment = request.prepare_environment
-                if prepare_environment is None:
-                    prepare_environment = not (source_dir / ".venv").exists()
-                self._diagnostics.prepare_environment = prepare_environment
-
-                local_env = dict(tracing_env)
-                if memory_store:
-                    # Display-only: lets the chat app say the bound store connects on deploy. Memory
-                    # itself stays off locally; nothing resolves a store from this.
-                    local_env[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
-                entry_point = _dev_entry_point(
-                    app_yaml,
-                    local_env or None,
-                    allowed_origins=project.allowed_origins if project is not None else None,
-                )
-                preview = DevPreview(
-                    source_dir=source_dir,
-                    port=port,
-                    server=project.server if project else None,
-                    tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
-                    local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
-                    tracing_warning=tracing.warning,
-                    tracing_help=tracing.help,
-                    memory_store=memory_store,
-                    session_store=session_store,
-                    trace_experiment=trace_experiment,
-                    has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
-                )
-                app_port = self._free_port()
-            yield DevPlan(
-                preview=preview,
-                entry_point=entry_point,
-                prepare_environment=prepare_environment,
-                # The user-facing port is run-local's proxy; the app gets a free port behind it so
-                # concurrent runs don't collide on run-local's default app or proxy port.
-                app_port=app_port,
+            environment = {
+                key: value
+                for key, value in local.environment.items()
+                if key not in _BUILD_INDEX_ENVS | _DEPLOY_RESOURCE_ENVS
+            }
+            # Empty overrides prevent a template's load_dotenv from restoring deployed bindings.
+            environment.update(
+                {key: "" for key in _DEPLOY_RESOURCE_ENVS - {MEMORY_STORE_ENV, SESSION_STORE_ENV}}
             )
+            environment.update(tracing.environment)
+            environment[RUNTIME_STORE_LOCAL_ENV] = "true"
+            if memory_store:
+                environment[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
+            if project is not None:
+                environment[CORS_ALLOWED_ORIGINS_ENV] = json.dumps(list(project.allowed_origins))
+            preview = DevPreview(
+                source_dir=source_dir,
+                port=port,
+                server=project.server if project else None,
+                tracing_uri=tracing.environment.get("MLFLOW_TRACKING_URI"),
+                local_experiment_name=tracing.environment.get("MLFLOW_EXPERIMENT_NAME"),
+                tracing_warning=tracing.warning,
+                tracing_help=tracing.help,
+                memory_store=memory_store,
+                session_store=session_store,
+                trace_experiment=trace_experiment,
+                has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
+            )
+            yield DevPlan(preview, local.command, environment, prepare_environment)
         finally:
-            # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
-            # process, and a setup/run/presentation exception must not leave either resource behind.
             with self._diagnostics.phase(FailureStage.CLEANUP):
-                try:
-                    if entry_point is not None:
-                        entry_point.unlink(missing_ok=True)
-                finally:
-                    if tracing_server is not None:
-                        self._local_tracing.stop(tracing_server)
+                if tracing.server is not None:
+                    self._local_tracing.stop(tracing.server)
 
     def run(
         self,
@@ -209,71 +158,13 @@ class DevService:
         on_ready: Callable[[], None] | None = None,
         quiet_status: Callable[[float], str] | None = None,
     ) -> None:
-        """Run a prepared plan through the injected Apps local-run client.
-
-        ``on_ready`` is called once the agent answers on its port, not when the command starts.
-        ``quiet_status`` gives the line to show while run-local's output is quiet before then.
-        """
         with self._diagnostics.phase(FailureStage.RUN_LOCAL):
-            self._apps_client.run_local(
+            self._local_process.run(
                 plan.preview.source_dir,
-                plan.entry_point.name,
+                plan.command,
+                plan.environment,
                 prepare_environment=plan.prepare_environment,
                 port=plan.preview.port,
-                app_port=plan.app_port,
                 on_ready=on_ready,
                 quiet_status=quiet_status,
             )
-
-
-def _dev_entry_point(
-    app_yaml: pathlib.Path,
-    extra_env: dict[str, str] | None = None,
-    *,
-    allowed_origins: tuple[str, ...] | None = None,
-) -> pathlib.Path:
-    """Write the local-only manifest consumed by ``apps run-local``.
-
-    The deployable ``app.yaml`` is never mutated.  This copy forces the Runtime Store into local
-    mode, removes deploy-only package-index overrides and workspace resource env, and merges local
-    tracing settings supplied by the adapter.
-    """
-    manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
-    env = manifest.raw_env()
-    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
-    filtered = [
-        e
-        for e in filtered
-        if not (isinstance(e, dict) and e.get("name") == RUNTIME_STORE_LOCAL_ENV)
-    ]
-    filtered = [
-        e for e in filtered if not (isinstance(e, dict) and e.get("name") in _DEPLOY_RESOURCE_ENVS)
-    ]
-    for name, value in (extra_env or {}).items():
-        filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
-        filtered.append({"name": name, "value": value})
-    if allowed_origins is not None:
-        filtered = [
-            e
-            for e in filtered
-            if not (isinstance(e, dict) and e.get("name") == CORS_ALLOWED_ORIGINS_ENV)
-        ]
-        if allowed_origins:
-            filtered.append(
-                {"name": CORS_ALLOWED_ORIGINS_ENV, "value": json.dumps(allowed_origins)}
-            )
-    filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
-    manifest.set_env(filtered)
-
-    # The Apps CLI rejects hidden or hyphenated entry-point filenames.
-    dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
-    try:
-        # Overwritten on purpose: the name is dev's own, and a run stopped by a signal (an IDE stop
-        # button, `kill`) exits without its cleanup and leaves the file behind.
-        with dev_yaml.open("w") as output:
-            output.write(manifest.to_yaml())
-    except OSError as exc:
-        # Don't leave a partial manifest for `apps run-local` to pick up.
-        dev_yaml.unlink(missing_ok=True)
-        raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
-    return dev_yaml

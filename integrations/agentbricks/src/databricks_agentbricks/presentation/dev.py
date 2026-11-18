@@ -44,7 +44,7 @@ def announce_bound_resources(preview: DevPreview) -> None:
 def announce_starting() -> None:
     """Say the agent is starting, in a neutral style: success is shown only once it answers.
 
-    Blank lines set it apart from the setup notes above and the run-local logs that follow.
+    Blank lines set it apart from the setup notes above and the agent logs that follow.
     """
     con = render.console()
     con.print()

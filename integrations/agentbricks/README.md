@@ -37,8 +37,8 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
   out the app. `agentbricks deployments` covers the lifecycle (list, get, wait, logs, start, stop, delete).
-- **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
-  matches what ships.
+- **`agentbricks dev`** - runs the agent and chat UI directly on your machine, independently of
+  the deployed execution host.
 
 **Runtime**
 
@@ -201,8 +201,11 @@ agentbricks dev                 # optional: develop and test locally
 agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 ```
 
-`agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
-local runtime so local behavior matches a deployment.
+`agentbricks dev` runs the agent and chat UI directly on `http://localhost:8000`. New projects
+declare `[dev].command` in `agent.toml`; existing projects fall back to their `app.yaml` command
+and env. No Databricks Apps CLI or deployed runtime is needed. Dev builds the project’s `.venv`
+once, then reuses it; pass `--prepare-environment` after changing dependencies. Custom commands
+should honor `HOST` and `PORT`. See [local command configuration](cli.md#agentbricks-dev).
 
 Memory and session stores are off by default in `agentbricks dev`, even when a store is bound in
 `agent.toml`: the chat app shows "Not connected" for memory, and conversation state stays in
