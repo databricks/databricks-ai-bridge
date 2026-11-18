@@ -1490,3 +1490,23 @@ def test_read_command_failure_keeps_outcome_unspecified(monkeypatch, command):
     assert uuid.UUID(log["invocation_id"]).version == 4
     assert log["details_link_emitted"] is False
     assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def test_browser_profile_rejection_never_constructs_telemetry_client(
+    tmp_path, monkeypatch, write_databrickscfg
+):
+    from databricks_agentkit import _api_client
+
+    write_databrickscfg("[browser]\nhost = https://ws.example\nauth_type = external-browser\n")
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "0")
+    construct = mock.Mock(side_effect=AssertionError("browser auth must not start"))
+    monkeypatch.setattr(_api_client, "_workspace_client", construct)
+
+    result = CliRunner().invoke(
+        cli.agentbricks, ["--profile", "browser", "dev", "--source", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "auth login browser" in result.output
+    construct.assert_not_called()

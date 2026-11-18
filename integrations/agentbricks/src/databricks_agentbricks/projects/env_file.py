@@ -5,17 +5,10 @@ from __future__ import annotations
 import io
 import os
 import pathlib
-import re
 import tempfile
 
 from dotenv import dotenv_values
-
-# Every line form dotenv reads as this key (optional `export`, optionally single-quoted key), so a
-# rewrite can't leave an older value that dotenv would still pick up.
-_PROFILE_LINE = re.compile(
-    r"\s*(export\s+)?(DATABRICKS_CONFIG_PROFILE|'DATABRICKS_CONFIG_PROFILE')\s*="
-)
-
+from dotenv.parser import parse_stream
 
 _BOM = "\ufeff"
 
@@ -23,12 +16,6 @@ _BOM = "\ufeff"
 def _read_text(path: pathlib.Path) -> str:
     # surrogateescape keeps bytes that aren't UTF-8 (e.g. in a secret) intact through a rewrite.
     return path.read_text(encoding="utf-8", errors="surrogateescape")
-
-
-def _lines(text: str) -> list[str]:
-    # Split on newlines only: str.splitlines() also breaks on control characters inside values.
-    lines = [line.removesuffix("\r") for line in text.removeprefix(_BOM).split("\n")]
-    return lines[:-1] if lines and lines[-1] == "" else lines
 
 
 def _write_text_atomically(path: pathlib.Path, text: str) -> None:
@@ -60,21 +47,27 @@ def _parse_env(text: str, *, interpolate: bool = True) -> dict[str, str]:
     return {key: value for key, value in values.items() if value is not None}
 
 
-def _with_profile_line(lines: list[str], profile: str) -> list[str]:
-    """`lines` with the DATABRICKS_CONFIG_PROFILE entry set to `profile` (inserted when absent)."""
-    updated, replaced = [], False
-    for line in lines:
-        if _PROFILE_LINE.match(line):
-            if replaced:
-                # Drop later duplicates so the reader can't pick up an old value.
-                continue
-            updated.append(f"DATABRICKS_CONFIG_PROFILE={profile}")
-            replaced = True
-        else:
-            updated.append(line)
+def _with_profile_binding(text: str, profile: str) -> str:
+    """Rewrite parsed profile bindings while preserving all unrelated dotenv text verbatim."""
+    bom = _BOM if text.startswith(_BOM) else ""
+    body = text.removeprefix(_BOM)
+    updated: list[str] = []
+    replaced = False
+    for binding in parse_stream(io.StringIO(body)):
+        original = binding.original.string
+        if not binding.error and binding.key == "DATABRICKS_CONFIG_PROFILE":
+            if not replaced:
+                ending = (
+                    "\r\n" if original.endswith("\r\n") else "\n" if original.endswith("\n") else ""
+                )
+                updated.append(f"DATABRICKS_CONFIG_PROFILE={profile}{ending}")
+                replaced = True
+            continue
+        updated.append(original)
     if not replaced:
-        updated.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}")
-    return updated
+        ending = "\r\n" if "\r\n" in body else "\n"
+        updated.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}{ending}")
+    return bom + "".join(updated)
 
 
 def write_env(dest: pathlib.Path, profile: str) -> bool:
@@ -88,8 +81,9 @@ def write_env(dest: pathlib.Path, profile: str) -> bool:
     if env_path.exists():
         return False
     example = dest / ".env.example"
-    base = _lines(_read_text(example)) if example.exists() else []
-    _write_text_atomically(env_path, "\n".join(_with_profile_line(base, profile)) + "\n")
+    base = _read_text(example) if example.exists() else ""
+    updated = _with_profile_binding(base, profile)
+    _write_text_atomically(env_path, updated if updated.endswith("\n") else updated + "\n")
     return True
 
 
@@ -103,12 +97,8 @@ def update_env_profile(dest: pathlib.Path, profile: str) -> bool:
     if not env_path.exists():
         return write_env(dest, profile)
     before = _read_text(env_path)
-    if _parse_env(before, interpolate=False).get("DATABRICKS_CONFIG_PROFILE") == profile:
-        # Compare the parsed profile, not the file text: a lone CRLF or trailing-newline
-        # difference must not count as a change. The literal value is compared, not the
-        # interpolated one: `${VAR}` resolves to something else when the agent loads it.
+    after = _with_profile_binding(before, profile)
+    if after == before:
         return False
-    bom = _BOM if before.startswith(_BOM) else ""
-    lines = _with_profile_line(_lines(before), profile)
-    _write_text_atomically(env_path, bom + "\n".join(lines) + "\n")
+    _write_text_atomically(env_path, after)
     return True

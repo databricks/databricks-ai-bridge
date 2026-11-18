@@ -15,13 +15,26 @@ from collections.abc import Callable
 from unittest import mock
 
 import pytest
+from databricks.sdk.core import Config
 
 from databricks_agentbricks.agent_hint import AGENT_ENV_MARKERS, AGENT_ENV_VALUES
 from databricks_agentbricks.cli import auth
 from databricks_agentbricks.clients import databricks_cli
 from databricks_agentbricks.services import workspace_auth
 
-_AMBIENT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN", "CI")
+_AMBIENT_ENV = {
+    "DATABRICKS_CONFIG_PROFILE",
+    "DATABRICKS_HOST",
+    "DATABRICKS_AZURE_RESOURCE_ID",
+    "CI",
+    *(
+        name
+        for attr in Config.attributes()
+        if attr.auth
+        for name in (attr.env, *attr.env_aliases)
+        if name
+    ),
+}
 
 
 @pytest.fixture(autouse=True)

@@ -39,15 +39,16 @@ interactive terminal. Use `--profile` / `-p` to override the choice for one comm
 
 Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`) every
 command uses that project's `.env` profile, and so does a command run from any folder inside it (the
-nearest parent with `.agentbricks/project.toml`). Agent Bricks saves no separate default profile
-outside the project. The profile is resolved in this order, most to least specific:
+nearest parent with `.agentbricks/project.toml`). The profile is resolved in this order, most to
+least specific:
 
 1. `--profile` / `-p`
 2. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` — only inside an Agent Bricks project; `dev` and
    `deploy` resolve against their `--source` directory so the CLI and the locally running agent
    (which reads the same `.env`) use one profile
-3. the `DATABRICKS_CONFIG_PROFILE` environment variable
-4. none — the Databricks SDK's default authentication resolution, including environment
+3. a default previously saved with `agentbricks login` (until `agentbricks logout` clears it)
+4. the `DATABRICKS_CONFIG_PROFILE` environment variable
+5. none — the Databricks SDK's default authentication resolution, including environment
    credentials and the default set with `databricks auth switch`, then `[DEFAULT]`
 
 Selecting a profile preserves the SDK's precedence for exported credential fields such as
@@ -56,7 +57,7 @@ host. An `auth_type = external-browser` profile must sign in with `agentbricks a
 
 `dev` also passes the resolved profile to the agent (unless `.env` sets
 `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`, in which case the agent
-uses those credentials). Every command that reaches the workspace prints one line to stderr naming
+uses those credentials and clears any inherited shell profile). Every command that reaches the workspace prints one line to stderr naming
 the profile, where it came from, and its host, e.g.
 `Using profile 'ml' (from .env) · https://my-workspace.cloud.databricks.com` (text output only). See
 [Authentication](README.md#authentication) for details.
@@ -97,6 +98,8 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 | --- | --- |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
 | [`auth`](#agentbricks-auth) | Choose and sign in to a Databricks profile |
+| [`login`](#agentbricks-login) | Validate and save a default profile (legacy) |
+| [`logout`](#agentbricks-logout) | Forget the saved default profile (legacy) |
 | [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
@@ -161,11 +164,31 @@ _Options_
 | `--name <NAME>` | string | - | no | Deployment name, recorded in agent.toml as [agent].deployment_name. Deploys as agent-bricks-<name>, so it can be up to 17 lowercase letters, digits, and hyphens. Also names the default stores and tracing experiment (default: derived from the directory, shortened to fit). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
 
+### `agentbricks login`
+
+Validate and save a default profile for commands without `-p` (legacy command). If the profile
+needs sign-in, run this in an interactive terminal. A project's `.env` profile takes precedence;
+use `agentbricks auth switch` to pin that project directly. JSON output contains `profile`, `user`,
+and `host`.
+
+```
+agentbricks login [--profile PROFILE]
+```
+
+### `agentbricks logout`
+
+Forget the profile saved by `agentbricks login` without deleting its Databricks credentials. JSON
+output contains `logged_out`.
+
+```
+agentbricks logout
+```
+
 ### `agentbricks auth`
 
 Choose, inspect, and sign in to the Databricks profile a project uses.
 
-A project records its profile in its `.env`, and every command run inside the project uses it (the global `-p` overrides it). Outside a project the DATABRICKS_CONFIG_PROFILE environment variable applies, then the Databricks SDK's default authentication. `login` does not save anything: `switch` is what changes the project's profile (unlike `databricks auth switch`, it writes the project's `.env`, not a global default).
+A project records its profile in its `.env`, and every command run inside the project uses it (the global `-p` overrides it). Outside a project a default saved by the legacy `agentbricks login` command applies before DATABRICKS_CONFIG_PROFILE, then the Databricks SDK's default authentication. `auth login` does not save anything: `auth switch` changes the project's profile.
 
 | Subcommand | Description |
 | --- | --- |
@@ -201,7 +224,7 @@ With `-o json`: `{"directory", "env_profile", "changed", "workspace_host", "sign
 
 Show the profile the CLI would use in a directory, and where it came from.
 
-Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), the DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default authentication. Read-only; no workspace calls are made. The output shows the profile (or `none (Databricks SDK default)`), its source, the workspace host (for the SDK default: `DATABRICKS_HOST`, else the default chosen with `databricks auth switch`, then `[DEFAULT]`), and the project directory.
+Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), a saved `agentbricks login` default, the DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default authentication. Read-only; no workspace calls are made. The output shows the profile (or `none (Databricks SDK default)`), its source, the workspace host (for the SDK default: `DATABRICKS_HOST`, else the default chosen with `databricks auth switch`, then `[DEFAULT]`), and the project directory.
 
 ```
 agentbricks auth describe [options]

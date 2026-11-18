@@ -11,6 +11,7 @@ import click
 
 from databricks_agentbricks.clients.databricks_cli import run_databricks_login
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.profile import (
     announce_login,
     show_databricks_login_result,
@@ -24,12 +25,16 @@ from databricks_agentbricks.projects.config import find_project_root
 from databricks_agentbricks.projects.env_file import read_env, update_env_profile
 from databricks_agentbricks.projects.profiles import (
     SOURCE_FLAG,
+    SOURCE_LEGACY_DEFAULT,
     ProfileInfo,
     auth_login_command,
     auth_switch_command,
+    clear_legacy_default_profile,
+    legacy_default_profile,
     login_target,
     profile_host,
     resolve_profile,
+    save_legacy_default_profile,
     workspace_for_profile,
 )
 from databricks_agentbricks.services.workspace_auth import authenticate_profile
@@ -92,7 +97,8 @@ def auth_group() -> None:
 
     A project records its profile in its `.env`, and every command run inside the project uses it
     (the global `-p` overrides it). Outside a project the DATABRICKS_CONFIG_PROFILE environment
-    variable applies, then the Databricks SDK's default authentication. `login` does not save
+    variable applies after any saved `agentbricks login` default, then the Databricks SDK's default
+    authentication. `auth login` does not save
     anything: `switch` is what changes the project's profile (unlike `databricks auth switch`, it
     writes the project's `.env`, not a global default).
     """
@@ -133,7 +139,7 @@ def auth_describe(obj, source: str) -> None:
     """Show the profile the CLI would use in a directory, and where it came from.
 
     Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), the
-    DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default
+    saved `agentbricks login` default, DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default
     authentication. Read-only; no workspace calls are made.
     """
     directory = pathlib.Path(source).resolve()
@@ -189,3 +195,44 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
     announce_login(obj, chosen, origin)
     client, user = authenticate_profile(chosen, origin, interactive=can_prompt_login())
     show_login_result(chosen, origin, user, client.host, env_profile, obj.output)
+
+
+@click.command("login")
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    help="Name of a saved Databricks workspace sign-in to use by default.",
+)
+@click.pass_obj
+def legacy_login(obj, profile: Optional[str]) -> None:
+    """Validate and save a default profile for commands without -p (legacy command)."""
+    chosen = profile or obj.global_profile or legacy_default_profile()
+    if not chosen:
+        raise AgentCliError(
+            "No profile to save.",
+            hint="Pass one to remember, e.g. `agentbricks login --profile <profile>`.",
+        )
+    client, user = authenticate_profile(
+        chosen, SOURCE_LEGACY_DEFAULT, interactive=can_prompt_login()
+    )
+    save_legacy_default_profile(chosen)
+    if obj.output == "json":
+        render.emit_json({"profile": chosen, "user": user, "host": client.host})
+        return
+    render.success(
+        f"Logged in as {user}",
+        fields={"Profile": chosen, "Host": client.host},
+        next_steps=[("agentbricks init my-agent", "Scaffold a new agent project")],
+    )
+
+
+@click.command("logout")
+@click.pass_obj
+def legacy_logout(obj) -> None:
+    """Forget the saved default profile without deleting its credentials (legacy command)."""
+    existed = clear_legacy_default_profile()
+    if obj.output == "json":
+        render.emit_json({"logged_out": existed})
+        return
+    render.success("Logged out" if existed else "No saved login to clear")

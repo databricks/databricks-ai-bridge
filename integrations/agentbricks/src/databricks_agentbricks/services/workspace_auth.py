@@ -82,6 +82,11 @@ def _not_signed_in_error(profile: Optional[str], source: str) -> AgentCliError:
     )
 
 
+def _other_validation_error(profile: Optional[str], source: str, error: Exception) -> AgentCliError:
+    target = _profile_label(profile, source) if profile else "Databricks SDK default authentication"
+    return AgentCliError(f"Could not validate {target}: {error}")
+
+
 def _unreachable_error(profile: Optional[str], source: str, error: Exception) -> AgentCliError:
     target = f"profile {profile!r} (from {source})" if profile else "the default auth"
     if isinstance(error, TimeoutError):
@@ -162,8 +167,11 @@ class WorkspaceAuthService:
         if client_and_user is not None:
             return client_and_user[0]
         assert error is not None
-        if _classify_validation_error(error) is _ValidationFailure.UNREACHABLE:
+        failure = _classify_validation_error(error)
+        if failure is _ValidationFailure.UNREACHABLE:
             raise _unreachable_error(profile, source, error) from error
+        if failure is _ValidationFailure.OTHER:
+            raise _other_validation_error(profile, source, error) from error
         raise _not_signed_in_error(profile, source) from error
 
     def authenticate_profile(
@@ -184,7 +192,7 @@ class WorkspaceAuthService:
             if failure is _ValidationFailure.UNREACHABLE:
                 raise _unreachable_error(profile, source, error) from error
             if failure is _ValidationFailure.OTHER:
-                raise AgentCliError(f"Could not validate {label}: {error}") from error
+                raise _other_validation_error(profile, source, error) from error
         if not interactive:
             detail = (
                 "external-browser auth needs an interactive login" if error is None else str(error)

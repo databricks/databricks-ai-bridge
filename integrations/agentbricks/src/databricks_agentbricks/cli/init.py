@@ -44,6 +44,7 @@ from databricks_agentbricks.projects.profiles import (
     SOURCE_CONFIG_DEFAULT,
     SOURCE_ENV_VAR,
     SOURCE_FLAG,
+    SOURCE_LEGACY_DEFAULT,
     auth_login_command,
     auth_switch_command,
     configured_profiles,
@@ -174,8 +175,8 @@ def _report_already_initialized(obj, dest: pathlib.Path) -> None:
 
 def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, str]]:
     """(profile, source) to pin in a new project's `.env`: `--profile`, the global `-p`, the
-    DATABRICKS_CONFIG_PROFILE env var, else None when env-var auth is configured (DATABRICKS_HOST,
-    DATABRICKS_TOKEN, or DATABRICKS_CLIENT_ID), else the default chosen with `databricks auth
+    saved legacy default, the DATABRICKS_CONFIG_PROFILE env var, else None when env-var auth is
+    configured, else the default chosen with `databricks auth
     switch`, else `DEFAULT` (the order the SDK itself falls back in).
 
     Never the cwd project's `.env` — `init` may run inside another project, and the new project
@@ -187,6 +188,8 @@ def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, st
         return flag_profile, SOURCE_FLAG
     if obj.profile_info.source == SOURCE_FLAG and obj.profile:
         return obj.profile, SOURCE_FLAG
+    if obj.profile_info.source == SOURCE_LEGACY_DEFAULT and obj.profile:
+        return obj.profile, SOURCE_LEGACY_DEFAULT
     env_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
     if env_profile:
         return env_profile, SOURCE_ENV_VAR

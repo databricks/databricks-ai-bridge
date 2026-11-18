@@ -10,6 +10,7 @@ from unittest import mock
 import pytest
 import yaml
 from click.testing import CliRunner
+from databricks.sdk.errors import Unauthenticated
 
 from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.cli import telemetry
@@ -837,10 +838,11 @@ def _write_project(source: pathlib.Path, env_file: str) -> None:
 
 
 def _run_dev(source: pathlib.Path, monkeypatch, env_file: str, profile=None):
-    """Run `dev` on a fresh project; returns (result, run-local profiles, local-manifest env)."""
+    """Run `dev` on a fresh project; return the result, profile, manifest env, and runner env."""
     _write_project(source, env_file)
     profiles: list = []
     manifest_env: dict[str, str] = {}
+    runner_env: dict[str, str] = {}
 
     def _fake_databricks(cmd, profile, **kwargs):
         profiles.append(profile)
@@ -848,11 +850,12 @@ def _run_dev(source: pathlib.Path, monkeypatch, env_file: str, profile=None):
             (pathlib.Path(kwargs["cwd"]) / "app.agentbricksdev.yaml").read_text()
         )
         manifest_env.update({e["name"]: e["value"] for e in manifest["env"]})
+        runner_env.update(kwargs["env"])
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
     result = CliRunner().invoke(dev_mod.dev, ["--source", str(source)], obj=_Ctx(profile=profile))
-    return result, profiles, manifest_env
+    return result, profiles, manifest_env, runner_env
 
 
 @pytest.mark.parametrize(
@@ -866,7 +869,7 @@ def test_dev_runs_with_resolved_profile(
     tmp_path, monkeypatch, validated_profile, write_databrickscfg, flag_profile, expected, note
 ):
     write_databrickscfg("[proj]\nhost = https://proj.example\n")
-    result, profiles, manifest_env = _run_dev(
+    result, profiles, manifest_env, _ = _run_dev(
         tmp_path, monkeypatch, "DATABRICKS_CONFIG_PROFILE=proj\n", profile=flag_profile
     )
 
@@ -889,11 +892,13 @@ def test_dev_runs_with_resolved_profile(
 def test_dev_env_credentials_replace_the_profile_only_when_complete(
     tmp_path, monkeypatch, validated_profile, credentials, uses_profile
 ):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "shell")
     env_file = f"DATABRICKS_CONFIG_PROFILE=proj\n{credentials}"
-    result, _, manifest_env = _run_dev(tmp_path, monkeypatch, env_file)
+    result, _, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, env_file)
 
     assert result.exit_code == 0, result.output
-    assert manifest_env.get("DATABRICKS_CONFIG_PROFILE") == ("proj" if uses_profile else None)
+    assert manifest_env.get("DATABRICKS_CONFIG_PROFILE") == ("proj" if uses_profile else "")
+    assert "DATABRICKS_CONFIG_PROFILE" not in runner_env
     assert validated_profile.call_args_list == ([mock.call("proj")] if uses_profile else [])
 
 
@@ -901,7 +906,7 @@ def test_dev_unauthenticated_profile_fails_before_run_local(
     tmp_path: pathlib.Path, monkeypatch, fail_validation
 ):
     _write_project(tmp_path, "DATABRICKS_CONFIG_PROFILE=proj\n")
-    fail_validation(RuntimeError("expired"))
+    fail_validation(Unauthenticated("expired"))
     run_local = mock.Mock()
     monkeypatch.setattr(dev_mod, "_databricks", run_local)
 

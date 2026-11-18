@@ -348,6 +348,21 @@ def test_init_with_databricks_host_and_no_profile_writes_no_env(
     validated_profile.assert_not_called()  # interactive, but host env auth never signs in
 
 
+def test_init_with_azure_resource_id_auth_writes_no_env(
+    tmp_path: pathlib.Path, monkeypatch, validated_profile, interactive_terminal
+):
+    monkeypatch.setenv("DATABRICKS_AZURE_RESOURCE_ID", "/subscriptions/test/workspaces/ws")
+    monkeypatch.setenv("ARM_USE_MSI", "true")
+    dest = tmp_path / "proj"
+
+    result = _init(dest, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / ".env").exists()
+    assert json.loads(result.output)["env_profile"] is None
+    validated_profile.assert_not_called()
+
+
 def test_init_signs_in_when_interactive(
     tmp_path: pathlib.Path, validated_profile, interactive_terminal
 ):

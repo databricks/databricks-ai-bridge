@@ -74,3 +74,12 @@ def test_update_env_profile_same_value_leaves_file_untouched(tmp_path: pathlib.P
     assert update_env_profile(tmp_path, "ml") is False
 
     assert (tmp_path / ".env").read_bytes() == body
+
+
+def test_update_env_profile_preserves_multiline_binding(tmp_path: pathlib.Path):
+    body = 'NOTE="first\nDATABRICKS_CONFIG_PROFILE=embedded\nlast"\nDATABRICKS_CONFIG_PROFILE=old\n'
+    (tmp_path / ".env").write_text(body)
+
+    assert update_env_profile(tmp_path, "new") is True
+    assert (tmp_path / ".env").read_text() == body.replace("=old\n", "=new\n")
+    assert read_env(tmp_path / ".env")["DATABRICKS_CONFIG_PROFILE"] == "new"

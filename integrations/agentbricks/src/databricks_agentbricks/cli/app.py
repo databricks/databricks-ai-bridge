@@ -14,7 +14,7 @@ from typing import Any, Optional
 import click
 
 from databricks_agentbricks import errors
-from databricks_agentbricks.cli.auth import auth_group
+from databricks_agentbricks.cli.auth import auth_group, legacy_login, legacy_logout
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
@@ -34,11 +34,8 @@ from databricks_agentbricks.presentation.profile import (
 from databricks_agentbricks.projects.config import find_project_root, is_agentbricks_project
 from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.profiles import (
-    SOURCE_SDK_DEFAULT,
+    SOURCE_LEGACY_DEFAULT,
     ProfileInfo,
-    auth_login_command,
-    auth_switch_command,
-    legacy_default_profile,
     resolve_profile,
 )
 from databricks_agentkit._api_client import _AgentBricksApiClient
@@ -114,10 +111,8 @@ class CliContext:
                 output=self.output,
                 resolved_host=resolved_host,
             )
-            # Before profiles moved into `.env`, this case used the profile `agentbricks login` saved.
-            legacy_profile = legacy_default_profile()
-            if legacy_profile and self.profile_info.source == SOURCE_SDK_DEFAULT:
-                warn_legacy_default_profile(legacy_profile, self.output)
+            if self.profile_info.source == SOURCE_LEGACY_DEFAULT and self.profile:
+                warn_legacy_default_profile(self.profile, self.output)
 
     def client(self) -> _AgentBricksApiClient:
         """Compatibility accessor for commands not yet migrated to ``api_client_provider``."""
@@ -156,8 +151,8 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     authenticates with a Databricks profile: sign in with `agentbricks auth login <profile>`,
     then run `agentbricks init <dir> --profile <profile>` to record it in the project's .env.
     Inside a project, its .env profile is used (change it with `agentbricks auth switch`);
-    --profile / -p overrides it, and outside a project DATABRICKS_CONFIG_PROFILE applies (without
-    any of these, the Databricks SDK's default authentication is used).
+    --profile / -p overrides it. Outside a project, a profile saved by `agentbricks login` takes
+    precedence over DATABRICKS_CONFIG_PROFILE; without either, SDK default authentication is used.
 
     Agents built with Agent Bricks combine the platform's capabilities:
 
@@ -183,26 +178,6 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
         # Every command run inside a project (including its subfolders) uses its `.env` profile, so
         # e.g. `endpoint invoke` targets the same workspace that `deploy` just used.
         ctx.obj.cwd_project = project
-
-
-_REMOVED_COMMANDS = {
-    "login": f"Sign in with `{auth_login_command(None)}`, and pick a project's profile with "
-    f"`{auth_switch_command(None)}`.",
-    "logout": f"Profiles are now chosen per project in its .env (`{auth_switch_command(None)}`); "
-    "there is no saved default to clear.",
-}
-
-
-def _removed_command(name: str, hint: str) -> click.Command:
-    @click.command(
-        name,
-        hidden=True,
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )
-    def removed() -> None:
-        raise errors.AgentCliError(f"`agentbricks {name}` was removed.", hint=hint)
-
-    return removed
 
 
 def _apply_subcommand_profile(
@@ -265,6 +240,8 @@ def _select_profile_before_running(command: click.Command, *, use_source: bool) 
 
 agentbricks.add_command(init)
 agentbricks.add_command(auth_group)
+agentbricks.add_command(legacy_login)
+agentbricks.add_command(legacy_logout)
 agentbricks.add_command(doctor)
 agentbricks.add_command(dev)
 agentbricks.add_command(memory)
@@ -275,8 +252,6 @@ agentbricks.add_command(deployments)
 agentbricks.add_command(endpoint)
 agentbricks.add_command(tools)
 agentbricks.add_command(experimental)
-for _name, _hint in _REMOVED_COMMANDS.items():
-    agentbricks.add_command(_removed_command(_name, _hint))
 # `auth` commands resolve their own `--source` directory and must not move the session to it.
 for _command in agentbricks.commands.values():
     _accept_profile_anywhere(_command, source_profile=_command is not auth_group)

@@ -12,7 +12,7 @@ import threading
 from unittest import mock
 
 import pytest
-from databricks.sdk.errors import Unauthenticated
+from databricks.sdk.errors import PermissionDenied, Unauthenticated
 
 from databricks_agentbricks.cli import auth
 from databricks_agentbricks.errors import AgentCliError
@@ -146,6 +146,26 @@ def test_preflight_timeout_reports_an_unresponsive_workspace_not_a_sign_in(fail_
 
     assert "didn't respond within 20s" in str(raised.value)
     assert "auth login" not in str(raised.value.hint or "")
+
+
+def test_preflight_permission_denied_keeps_the_original_diagnostic(fail_validation):
+    fail_validation(PermissionDenied("IP access denied"))
+
+    with pytest.raises(AgentCliError) as raised:
+        workspace_auth.preflight_auth("prof", ".env")
+
+    assert "IP access denied" in str(raised.value)
+    assert "auth login" not in str(raised.value.hint or "")
+
+
+def test_azure_resource_id_skips_default_browser_profile(write_databrickscfg, monkeypatch):
+    write_databrickscfg("[DEFAULT]\nauth_type = external-browser\n")
+    monkeypatch.setenv("DATABRICKS_AZURE_RESOURCE_ID", "/subscriptions/test/workspaces/ws")
+    monkeypatch.setenv("ARM_USE_MSI", "true")
+
+    assert profiles.env_auth_configured()
+    assert profiles.sdk_auth_type(None) is None
+    assert not workspace_auth._needs_browser_login(None)
 
 
 def test_validate_bounded_gives_up_after_the_timeout(monkeypatch):

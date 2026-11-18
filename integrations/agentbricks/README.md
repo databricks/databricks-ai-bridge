@@ -120,20 +120,21 @@ that choice, run `agentbricks auth switch <profile>` in the project. An interact
 also signs in if needed.
 
 Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`), every
-command uses the profile in the project's `.env`. Outside a project, pass the global `--profile/-p`
-option before a command, for example `agentbricks --profile <profile> tools list`, or set
-`DATABRICKS_CONFIG_PROFILE`. `-p` can go before or after the command —
+command uses the profile in the project's `.env`. A default saved with the legacy `agentbricks
+login -p <profile>` command remains in use until `agentbricks logout` clears it. Outside a
+project, pass the global `--profile/-p` option before a command, for example
+`agentbricks --profile <profile> tools list`, or set `DATABRICKS_CONFIG_PROFILE`. `-p` can go before or after the command —
 `agentbricks tools list -p <profile>` works too (the trailing form goes after the full subcommand).
 Use `--output json` before or after the command for scripting.
 
 The profile is resolved in this order, most to least specific: the `--profile/-p` flag, the project
 `.env`'s `DATABRICKS_CONFIG_PROFILE` (inside an Agent Bricks project; `dev` and `deploy` resolve
-against their source directory so the CLI and the locally running agent use one profile), the
-`DATABRICKS_CONFIG_PROFILE` environment variable, and finally the Databricks SDK's default
+against their source directory so the CLI and the locally running agent use one profile), a
+default saved by `agentbricks login`, the `DATABRICKS_CONFIG_PROFILE` environment variable, and finally the Databricks SDK's default
 authentication resolution — which also covers `DATABRICKS_HOST`/`DATABRICKS_TOKEN` environment
 authentication, not only `[DEFAULT]` in `~/.databrickscfg`. `dev` passes the resolved profile to
 the agent (unless `.env` sets `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/
-`DATABRICKS_CLIENT_SECRET`). Every command that reaches the workspace prints one stderr line naming
+`DATABRICKS_CLIENT_SECRET`, which clears an inherited shell profile). Every command that reaches the workspace prints one stderr line naming
 the profile, where it came from, and its host, so the target workspace is never implicit.
 
 Selecting a profile preserves the SDK's precedence for exported credential fields such as

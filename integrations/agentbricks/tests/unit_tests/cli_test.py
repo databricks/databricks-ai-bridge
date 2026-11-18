@@ -44,8 +44,7 @@ def test_root_registers_supported_commands():
         "endpoint",
         "tools",
     } <= names
-    # Removed commands stay only as hidden pointers to their replacements.
-    assert all(cli.agentbricks.commands[name].hidden for name in ("login", "logout"))
+    assert all(not cli.agentbricks.commands[name].hidden for name in ("login", "logout"))
     assert "eval" not in names
     assert "mcp" not in names
     assert "pipeline" not in names

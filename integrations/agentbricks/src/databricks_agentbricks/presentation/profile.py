@@ -171,14 +171,13 @@ def warn_sign_in_failed(profile: str, exc: Exception, obj) -> None:
 
 
 def warn_legacy_default_profile(profile: str, output: str) -> None:
-    """Point users of the removed `agentbricks login` at the profile it saved, which is now unused."""
+    """Point users of the saved default to a project-local choice without changing their target."""
     if output != "text":
         return
     click.echo(
         click.style(
-            f"The default profile '{profile}' saved by the old `agentbricks login` is no longer "
-            f"used. Pass `-p {profile}`, or run `{auth_switch_command(profile)}` in the project "
-            "(delete ~/.agentbricks/config.json to hide this).",
+            f"Using the default profile '{profile}' saved by `agentbricks login`. "
+            f"Run `{auth_switch_command(profile)}` in a project to pin its workspace there.",
             dim=True,
         ),
         err=True,

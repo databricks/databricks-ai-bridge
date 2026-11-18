@@ -383,3 +383,40 @@ def test_login_leaves_project_env_file_alone(env_project, validated_profile):
 
     assert result.exit_code == 0, result.output
     assert read_env(env_project / ".env").get("DATABRICKS_CONFIG_PROFILE") == "proj"
+
+
+def test_legacy_login_preserves_saved_default_and_logout_clears_it(
+    outside_project, validated_profile, monkeypatch
+):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "ambient")
+    runner = CliRunner()
+
+    logged_in = runner.invoke(cli.agentbricks, ["-o", "json", "login", "-p", "saved"])
+    assert logged_in.exit_code == 0, logged_in.output
+    assert json.loads(logged_in.output)["profile"] == "saved"
+    selected = _get_json(["auth", "describe"])
+    assert (selected["profile"], selected["source"]) == ("saved", "agentbricks login")
+
+    logged_out = runner.invoke(cli.agentbricks, ["-o", "json", "logout"])
+    assert logged_out.exit_code == 0, logged_out.output
+    assert json.loads(logged_out.output) == {"logged_out": True}
+    selected = _get_json(["auth", "describe"])
+    assert (selected["profile"], selected["source"]) == (
+        "ambient",
+        "DATABRICKS_CONFIG_PROFILE",
+    )
+
+
+def test_saved_default_targets_the_workspace_client_in_json_mode(
+    outside_project, fake_api_client, monkeypatch
+):
+    config = pathlib.Path.home() / ".agentbricks" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"profile": "saved"}))
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "other")
+
+    ctx = _ctx(output="json")
+    ctx.client()
+
+    assert ctx.profile_info == ProfileInfo("saved", "agentbricks login")
+    fake_api_client.assert_called_once_with("saved")

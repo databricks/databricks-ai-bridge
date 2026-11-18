@@ -118,11 +118,14 @@ def dev(
     # locally running agent reads the same file, which dev also consults for explicit credentials.
     env_file = obj.project_env(pathlib.Path(source))
     env_credential = _env_credential(env_file)
-    # Explicit `.env` credentials authenticate the agent directly, so the profile needs neither
-    # validation nor a place in the dev manifest (a bare DATABRICKS_HOST is not a credential).
+    # Explicit `.env` credentials authenticate the agent directly, so the profile needs no
+    # validation. Clear an inherited profile in the manifest so load_dotenv(override=False)
+    # cannot retain the shell's selection in the local agent.
     uses_env_credentials = bool(obj.profile and env_credential)
     local_env: dict[str, str] = {}
-    if obj.profile and not uses_env_credentials:
+    if env_credential:
+        local_env["DATABRICKS_CONFIG_PROFILE"] = ""
+    elif obj.profile:
         # Landing the profile in the dev manifest puts it in the agent's process env, where it
         # beats `.env` because the template loads dotenv with override=False.
         local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile

@@ -18,14 +18,12 @@ from databricks_agentbricks.projects.env_file import read_env
 SOURCE_FLAG = "--profile"
 SOURCE_ENV_FILE = ".env"
 SOURCE_ENV_VAR = "DATABRICKS_CONFIG_PROFILE"
+SOURCE_LEGACY_DEFAULT = "agentbricks login"
 SOURCE_SDK_DEFAULT = "Databricks SDK default"
 SOURCE_SETTINGS_DEFAULT = "databricks auth switch"
 SOURCE_CONFIG_DEFAULT = "default"
 
 _SETTINGS_SECTION = "__settings__"
-# Any of these without a profile means the SDK authenticates from env vars and never reads the
-# config file.
-_ENV_AUTH_VARS = ("DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_CLIENT_ID")
 
 
 def auth_login_command(profile: Optional[str]) -> str:
@@ -54,8 +52,9 @@ def resolve_profile(
     1. the `-p/--profile` flag,
     2. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` (only when `project_dir` is given, so the CLI
        and the locally running agent, which reads the same `.env`, agree on one profile),
-    3. the `DATABRICKS_CONFIG_PROFILE` environment variable,
-    4. none — the Databricks SDK's own default authentication.
+    3. the profile saved by the legacy `agentbricks login`, when present,
+    4. the `DATABRICKS_CONFIG_PROFILE` environment variable,
+    5. none — the Databricks SDK's own default authentication.
 
     ``env_values`` lets a caller that already parsed ``<project_dir>/.env`` pass it in instead of
     having it read again.
@@ -68,6 +67,9 @@ def resolve_profile(
         file_profile = env_values.get("DATABRICKS_CONFIG_PROFILE")
         if file_profile:
             return ProfileInfo(file_profile, SOURCE_ENV_FILE)
+    saved_profile = legacy_default_profile()
+    if saved_profile:
+        return ProfileInfo(saved_profile, SOURCE_LEGACY_DEFAULT)
     env_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
     if env_profile:
         return ProfileInfo(env_profile, SOURCE_ENV_VAR)
@@ -166,7 +168,19 @@ def settings_default_profile() -> Optional[str]:
 
 def env_auth_configured() -> bool:
     """Whether env-var auth is set, so without a profile the SDK never reads the config file."""
-    return any(os.environ.get(name) for name in _ENV_AUTH_VARS)
+    from databricks.sdk.core import Config
+
+    # Follow the SDK's own auth attributes and config-file bypass rule, including Azure resource
+    # IDs and newer credential sources, without constructing a client or contacting a workspace.
+    return bool(
+        os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_AZURE_RESOURCE_ID")
+    ) or any(
+        os.environ.get(name)
+        for attr in Config.attributes()
+        if attr.auth
+        for name in (attr.env, *attr.env_aliases)
+        if name
+    )
 
 
 def sdk_default_profile() -> tuple[str, str]:
@@ -202,14 +216,31 @@ def workspace_for_profile(profile: Optional[str]) -> tuple[Optional[str], Option
     return None, "none configured"
 
 
-def legacy_default_profile() -> Optional[str]:
-    """The default profile the removed `agentbricks login` saved, if its file is still around."""
+def legacy_config_path() -> pathlib.Path:
+    """The profile selection file used by `agentbricks login` and `logout`."""
     base = os.environ.get("AGENTBRICKS_CONFIG_HOME")
-    path = (pathlib.Path(base) if base else pathlib.Path.home() / ".agentbricks") / "config.json"
+    return (pathlib.Path(base) if base else pathlib.Path.home() / ".agentbricks") / "config.json"
+
+
+def legacy_default_profile() -> Optional[str]:
+    """The default profile saved by `agentbricks login`, if its file is still around."""
     try:
-        return json.loads(path.read_text()).get("profile") or None
+        return json.loads(legacy_config_path().read_text()).get("profile") or None
     except (OSError, ValueError, AttributeError):
         return None
+
+
+def save_legacy_default_profile(profile: str) -> None:
+    path = legacy_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"profile": profile}, indent=2) + "\n")
+
+
+def clear_legacy_default_profile() -> bool:
+    path = legacy_config_path()
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    return existed
 
 
 def sdk_auth_type(profile: Optional[str]) -> Optional[str]:

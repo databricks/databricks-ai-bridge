@@ -16,7 +16,7 @@ CommandPath = tuple[str, ...]
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.AgentBricksGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SETUP", ("init", "auth", "doctor")),
+    ("SETUP", ("init", "auth", "login", "logout", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
     ("EXPERIMENTAL", ("experimental",)),
@@ -49,6 +49,8 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "prepare a coding-agent migration bundle for an existing agent",
         ),
     ),
+    ("login",): (("agentbricks login -p <profile>", "save a default profile"),),
+    ("logout",): (("agentbricks logout", "clear the saved default profile"),),
     ("auth",): (
         ("agentbricks auth login <profile>", "sign in to a Databricks profile"),
         ("agentbricks auth switch <profile>", "use that profile for the current project"),
