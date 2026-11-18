@@ -78,6 +78,12 @@ this unpublished prototype, install both editable projects explicitly (`uv sync`
 from this directory also resolves the SDK through `tool.uv.sources`). A worker
 can depend directly on `databricks-agentkit-runtime[langgraph]` or `[openai]`;
 ordinary templates retain `databricks-agentbricks[FRAMEWORK]` and management APIs.
+Release stamping updates both versions and the CLI's exact SDK dependency.
+Publishing both artifacts still requires paired release-workflow wiring; automated
+publishing remains disabled. The suite harness builds and vendors both wheels;
+when supplying `--wheel`, keep its matching SDK beside it or pass `--runtime-wheel`.
+Published CLI installs stage the matching SDK from the configured package index
+for sandbox deployment. Editable installs build paired source snapshots instead.
 
 ## Testing SDK / runtime changes in a scaffold
 

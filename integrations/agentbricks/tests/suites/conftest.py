@@ -52,6 +52,7 @@ from harness.target import (
     require_workspace,
 )
 from harness.workspace import Workspace
+from packaging.utils import parse_wheel_filename
 from tool_definitions import TOOL_DEFINITIONS, Tool
 from uc_objects import UcFunction, create_uc_function
 
@@ -91,6 +92,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--wheel",
         type=pathlib.Path,
         help="Prebuilt databricks-agentbricks wheel (default: build one from this checkout).",
+    )
+    group.addoption(
+        "--runtime-wheel",
+        type=pathlib.Path,
+        help="Paired databricks-agentkit-runtime wheel (default: beside --wheel or built locally).",
     )
     group.addoption(
         "--bridge-wheel",
@@ -168,6 +174,7 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
         model=option("model"),
         wheel=option("wheel"),
         bridge_wheel=option("bridge_wheel"),
+        runtime_wheel=option("runtime_wheel"),
     )
     config.stash[_RUN_KEY] = run
     return run
@@ -186,23 +193,35 @@ def run_config(request: pytest.FixtureRequest) -> RunConfig:
     run = _base_run_config(request.config)
     run.output.mkdir(parents=True, exist_ok=True)
     log(f"Agent Bricks E2E output: {run.output} (run {run.run_id})")
-    if run.wheel:
-        return run
     # A directory per process: xdist workers build at the same time and must not share an output.
     dist = run.output / "dist" / os.environ.get("PYTEST_XDIST_WORKER", "main")
-    return dataclasses.replace(run, wheel=_build_wheel(dist))
+    wheel = run.wheel or _build_wheel(dist)
+    runtime_wheel = run.runtime_wheel
+    if runtime_wheel is None:
+        candidates = list(wheel.parent.glob("databricks_agentkit_runtime-*.whl"))
+        if len(candidates) != 1:
+            raise E2EError(
+                "Provide --runtime-wheel matching --wheel, or build both wheels together."
+            )
+        runtime_wheel = candidates[0]
+    if parse_wheel_filename(wheel.name)[1] != parse_wheel_filename(runtime_wheel.name)[1]:
+        raise E2EError("CLI and runtime wheel versions must match.")
+    return dataclasses.replace(run, wheel=wheel, runtime_wheel=runtime_wheel)
 
 
 def _build_wheel(dist: pathlib.Path) -> pathlib.Path:
-    """Build this checkout's wheel, which every generated project installs instead of PyPI's."""
-    argv = ["uv", "build", "--wheel", "--out-dir", str(dist)]
-    log_command(argv, PACKAGE_DIR)
-    result = subprocess.run(
-        argv, cwd=PACKAGE_DIR, text=True, capture_output=True, timeout=600, check=False
-    )
-    if result.returncode != 0:
-        raise E2EError(f"uv build failed ({result.returncode}):\n{result.stderr or result.stdout}")
-    wheels = sorted(dist.glob("*.whl"))
+    """Build paired SDK and CLI artifacts for each generated project."""
+    for project in (PACKAGE_DIR / "src", PACKAGE_DIR):
+        argv = ["uv", "build", "--wheel", "--out-dir", str(dist.resolve()), str(project)]
+        log_command(argv, PACKAGE_DIR)
+        result = subprocess.run(
+            argv, cwd=PACKAGE_DIR, text=True, capture_output=True, timeout=600, check=False
+        )
+        if result.returncode != 0:
+            raise E2EError(
+                f"uv build failed ({result.returncode}):\n{result.stderr or result.stdout}"
+            )
+    wheels = sorted(dist.glob("databricks_agentbricks-*.whl"))
     if not wheels:
         raise E2EError("uv build produced no wheel")
     return wheels[-1]

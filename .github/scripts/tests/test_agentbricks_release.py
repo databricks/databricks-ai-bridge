@@ -118,6 +118,29 @@ class StampTest(unittest.TestCase):
             self.assertIn('version = "0.1.0"', path.read_text())
             self.assertIn('"rich>=13.7"', path.read_text())
 
+    def test_paired_sdk_and_cli_stamp_release_and_development_together(self) -> None:
+        runtime = self.root / release.RUNTIME_PATH
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text('[project]\nname="databricks-agentkit-runtime"\nversion="0.3.0"\n')
+        self.package.write_text(
+            self.package.read_text().replace(
+                "dependencies = [", 'dependencies = ["databricks-agentkit-runtime==0.3.0", '
+            )
+        )
+        for version, templates in (("0.4.0", True), ("0.5.0.dev0", False)):
+            release.stamp_release(self.root, version, templates=templates)
+            self.assertIn(f'version="{version}"', runtime.read_text())
+            self.assertIn(f'"databricks-agentkit-runtime=={version}"', self.package.read_text())
+
+    def test_missing_runtime_pair_fails_without_modifying_either_package(self) -> None:
+        runtime = self.root / release.RUNTIME_PATH
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text('[project]\nversion="0.3.0"\n')
+        previous = {path: path.read_bytes() for path in (self.package, runtime)}
+        with self.assertRaisesRegex(ValueError, "paired AgentKit runtime dependency"):
+            release.stamp_release(self.root, "0.4.0", templates=True)
+        self.assertEqual(previous, {path: path.read_bytes() for path in previous})
+
     def test_repeated_stamp_keeps_exact_content(self) -> None:
         release.stamp_release(self.root, "0.4.0", templates=True)
         expected = {path: path.read_bytes() for path in (self.package, *self.templates)}

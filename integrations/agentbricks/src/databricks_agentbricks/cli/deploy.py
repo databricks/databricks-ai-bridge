@@ -370,8 +370,9 @@ def deploy(
     --sandbox-idle-timeout sets Lakebox idle shutdown in seconds (default 900). Reuse --sandbox
     on redeploy. --sandbox-warm-pool-size keeps up to N unassigned prepared sandboxes
     in the background (default 0, disabled); assigned sessions remain dedicated.
-    --git-revision optionally selects committed source. This prototype mode
-    requires an editable installation with the sandbox extra and does not support --no-wait.
+    --git-revision optionally selects committed source. This prototype mode requires the
+    sandbox extra and does not support --no-wait. Published installations stage the matching
+    AgentKit SDK version from the package index; editable installations build local wheels.
     """
     telemetry.begin_deployment(background_child=background_child)
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()

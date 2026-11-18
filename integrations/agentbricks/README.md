@@ -1638,7 +1638,7 @@ Sandbox invocations use the existing `/api/invocations` request/status contract,
 session preparation. Capacity defaults and hidden operator overrides are in the
 [deploy reference](cli.md).
 
-On the lean-worker branch the SDK is a separate `databricks-agentkit-runtime` wheel,
+The SDK is a separate `databricks-agentkit-runtime` wheel,
 built from `src/pyproject.toml`. The CLI keeps its package name and depends on it;
 ordinary installs retain the CLI's management dependencies. See the
 [local development instructions](CONTRIBUTING.md) for the unpublished paired install.

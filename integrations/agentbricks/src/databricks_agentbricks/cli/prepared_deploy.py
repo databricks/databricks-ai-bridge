@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from importlib.metadata import version
 from pathlib import Path
 from uuid import uuid4
 
@@ -50,65 +51,8 @@ def stage_runtime(
     sandbox_warm_pool_size=0,
     limits=None,
 ):
-    """Bundle the installed editable SDK; never read the local agent project."""
-    package = Path(__file__).resolve().parents[3]
-    if not (package / "pyproject.toml").exists():
-        raise AgentCliError(
-            "This prototype requires an editable Agent Bricks installation to package the runtime."
-        )
-    # Apps can reuse an installed package when its version is unchanged, even
-    # after the wheel at the same Workspace path has been overwritten. Build a
-    # snapshot with a content-derived local version; leave the checkout intact.
-    with tempfile.TemporaryDirectory(prefix="agentbricks-runtime-build-") as directory:
-        project = Path(directory)
-        shutil.copytree(
-            package / "src", project / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
-        )
-        for name in ("pyproject.toml", "README.md", "NOTICE"):
-            if (package / name).is_file():
-                shutil.copyfile(package / name, project / name)
-        digest = hashlib.sha256()
-        for file in sorted(project.rglob("*")):
-            if file.is_file():
-                digest.update(file.relative_to(project).as_posix().encode() + b"\0")
-                digest.update(file.read_bytes() + b"\0")
-        metadata = tomlkit.parse((project / "pyproject.toml").read_text())
-        base_version = str(metadata["project"]["version"]).split("+", 1)[0]
-        metadata["project"]["version"] = f"{base_version}+sandbox.{digest.hexdigest()[:16]}"
-        (project / "pyproject.toml").write_text(tomlkit.dumps(metadata))
-        sdk_metadata = project / "src/pyproject.toml"
-        sdk = tomlkit.parse(sdk_metadata.read_text())
-        sdk["project"]["version"] = metadata["project"]["version"]
-        sdk_metadata.write_text(tomlkit.dumps(sdk))
-        subprocess.run(
-            [
-                "uv",
-                "build",
-                "--wheel",
-                "--no-sources",
-                "--out-dir",
-                str(target.resolve()),
-                str(project / "src"),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        subprocess.run(
-            [
-                "uv",
-                "build",
-                "--wheel",
-                "--no-sources",
-                "--out-dir",
-                str(target.resolve()),
-                str(project),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    cli_wheel = next(target.glob("databricks_agentbricks-*.whl"))
-    sdk_wheel = next(target.glob("databricks_agentkit_runtime-*.whl"))
-    (target / "requirements.txt").write_text(f"./{sdk_wheel.name}\n./{cli_wheel.name}[sandbox]\n")
+    """Stage the paired runtime from the index or an editable development checkout."""
+    _stage_runtime_requirements(target)
     (target / "environment.json").write_text(json.dumps(manifest, indent=2))
     environment = {
         RUNTIME_ENVIRONMENT_ENV: SANDBOX,
@@ -152,6 +96,81 @@ def stage_runtime(
             indent=2,
         )
     )
+
+
+def _stage_runtime_requirements(target):
+    package = Path(__file__).resolve().parents[3]
+    if not (package / "pyproject.toml").is_file():
+        cli_version = version("databricks-agentbricks")
+        sdk_version = version("databricks-agentkit-runtime")
+        if cli_version != sdk_version:
+            raise AgentCliError(
+                "Agent Bricks and AgentKit runtime versions must match.",
+                hint="Reinstall the matching CLI and runtime packages before deploying.",
+            )
+        (target / "requirements.txt").write_text(
+            f"databricks-agentkit-runtime[sandbox]=={sdk_version}\n"
+        )
+        return
+    # Apps can reuse an installed package when its version is unchanged, even
+    # after the wheel at the same Workspace path has been overwritten. Build a
+    # snapshot with a content-derived local version; leave the checkout intact.
+    with tempfile.TemporaryDirectory(prefix="agentbricks-runtime-build-") as directory:
+        project = Path(directory)
+        shutil.copytree(
+            package / "src", project / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+        )
+        for name in ("pyproject.toml", "README.md", "NOTICE"):
+            if (package / name).is_file():
+                shutil.copyfile(package / name, project / name)
+        digest = hashlib.sha256()
+        for file in sorted(project.rglob("*")):
+            if file.is_file():
+                digest.update(file.relative_to(project).as_posix().encode() + b"\0")
+                digest.update(file.read_bytes() + b"\0")
+        metadata = tomlkit.parse((project / "pyproject.toml").read_text())
+        base_version = str(metadata["project"]["version"]).split("+", 1)[0]
+        metadata["project"]["version"] = f"{base_version}+sandbox.{digest.hexdigest()[:16]}"
+        metadata["project"]["dependencies"] = [
+            f"databricks-agentkit-runtime=={metadata['project']['version']}"
+            if dependency.startswith("databricks-agentkit-runtime==")
+            else dependency
+            for dependency in metadata["project"]["dependencies"]
+        ]
+        (project / "pyproject.toml").write_text(tomlkit.dumps(metadata))
+        sdk_metadata = project / "src/pyproject.toml"
+        sdk = tomlkit.parse(sdk_metadata.read_text())
+        sdk["project"]["version"] = metadata["project"]["version"]
+        sdk_metadata.write_text(tomlkit.dumps(sdk))
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--wheel",
+                "--no-sources",
+                "--out-dir",
+                str(target.resolve()),
+                str(project / "src"),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--wheel",
+                "--no-sources",
+                "--out-dir",
+                str(target.resolve()),
+                str(project),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+    cli_wheel = next(target.glob("databricks_agentbricks-*.whl"))
+    sdk_wheel = next(target.glob("databricks_agentkit_runtime-*.whl"))
+    (target / "requirements.txt").write_text(f"./{sdk_wheel.name}\n./{cli_wheel.name}[sandbox]\n")
 
 
 def deploy_prepared(
