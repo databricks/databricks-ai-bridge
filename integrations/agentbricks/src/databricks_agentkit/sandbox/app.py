@@ -18,8 +18,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from databricks_agentkit.runtime.app import DurableAgentServer, _InvocationRequest
 from databricks_agentkit.runtime.environment import SANDBOX
+from databricks_agentkit.runtime.http import (
+    InvocationRequest,
+    accepted_payload,
+    failure_response,
+    state_payload,
+)
 from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
 from databricks_agentkit.runtime.store import RUNTIME_STORE_USERNAME_ENV
 from databricks_agentkit.runtime.types import InvocationConflictError, InvocationFailedError
@@ -35,7 +40,7 @@ from databricks_agentkit.sandbox.environments import (
     validate_name,
 )
 from databricks_agentkit.sandbox.features import source_features
-from databricks_agentkit.sandbox.jobs import RunManager
+from databricks_agentkit.sandbox.jobs import AppInvocationDispatcher
 from databricks_agentkit.sandbox.lakebox import Lakebox
 from databricks_agentkit.sandbox.limits import Capacity, CapacityExceeded, RuntimeLimits
 from databricks_agentkit.sandbox.orchestrator import Orchestrator, RevisionConflict
@@ -119,7 +124,7 @@ async def lifespan(app):
     app.state.orchestrator.sandboxes.capacity = app.state.capacity
     app.state.control.capacity = app.state.capacity
     app.state.reconciler = SandboxReconciler(app.state.control, app.state.orchestrator)
-    app.state.runs = RunManager(
+    app.state.runs = AppInvocationDispatcher(
         app.state.control,
         app.state.orchestrator,
         capacity=app.state.capacity,
@@ -472,7 +477,7 @@ def overloaded(request, exc):
 
 @app.post("/api/invocations")
 def launch_agent(
-    request: _InvocationRequest,
+    request: InvocationRequest,
     agent_id: str | None = None,
     view: Literal["workbench"] | None = Query(None, include_in_schema=False),
 ):
@@ -492,9 +497,7 @@ def launch_agent(
         return JSONResponse(jsonable_encoder(chat_snapshot(row)), status_code=202)
     state = app.state.control._state(row["id"])
     if request.background:
-        return JSONResponse(
-            DurableAgentServer._accepted_payload(state, stream=request.stream), status_code=202
-        )
+        return JSONResponse(accepted_payload(state, stream=request.stream), status_code=202)
     if request.stream:
         return run_events(row["id"], view=None)
     try:
@@ -502,7 +505,7 @@ def launch_agent(
         return JSONResponse({"id": row["id"], "status": "completed", "output": output})
     except InvocationFailedError:
         state = app.state.control._state(row["id"])
-        error, status, _ = DurableAgentServer._failure_response(state)
+        error, status, _ = failure_response(state)
         return JSONResponse(
             {"id": row["id"], "status": "failed", "error": error}, status_code=status
         )
@@ -514,7 +517,7 @@ def run_status(
 ):
     if view == "workbench":
         return chat_snapshot(app.state.control.run(run_id))
-    return DurableAgentServer._state_payload(app.state.control._state(run_id))
+    return state_payload(app.state.control._state(run_id))
 
 
 @app.get("/api/invocations/{run_id}/events")

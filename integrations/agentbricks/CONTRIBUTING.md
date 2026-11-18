@@ -30,6 +30,15 @@ packages. Tracing's workspace MLflow reads and local server lifecycle live in `c
 experiment naming rule is shared from `projects/`. Services should not import Click or CLI
 presentation code.
 
+The shared sandbox compute policy lives in `databricks_agentkit.sandbox.session_lifecycle`.
+Its async `SessionSandboxManager` accepts a `SessionBindingStore` and `SandboxProvider`;
+hosts supply an authorized, tenant-scoped `SessionScope` and a stable sandbox name.
+Apps uses `_apps_lifecycle` for blocking Workspace/Lakebase adapters. Compute acceptance,
+running compute and a prepared agent worker are separate states. The Apps invocation
+dispatcher owns claims and heartbeats; this lifecycle manager never claims or replays work.
+Other hosts can use native async adapters without importing Apps, SQL or framework modules.
+The public HTTP model and serializers live in `databricks_agentkit.runtime.http`.
+
 ## Three kinds of change, and how each is sourced
 
 There are three layers a contributor edits. Knowing which one you're changing tells you what to
