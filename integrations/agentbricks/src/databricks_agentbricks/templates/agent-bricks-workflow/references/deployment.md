@@ -5,7 +5,10 @@
 For an end-to-end deployment request, scaffold or inspect the project, make the requested changes,
 run relevant offline checks, then deploy and validate the deployed behavior. Running
 `agentbricks dev` first is optional. For local iteration, run dev and use the local endpoint or chat
-UI; do not deploy just to test a local edit.
+UI; do not deploy just to test a local edit. Dev runs `[dev].command` from `agent.toml` directly
+in the project’s `.venv`, falling back to `app.yaml` for existing projects. It needs neither
+the Databricks Apps CLI nor a deployed runtime. Pass `--prepare-environment` after dependency
+changes; custom commands must honor `HOST` and `PORT`.
 
 `agentbricks doctor <directory>` checks onboarding statically and offline. It does not verify
 runtime behavior, workspace permissions, deployed resources, or model/tool calls. Run relevant

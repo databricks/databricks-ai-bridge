@@ -1,18 +1,14 @@
-"""Unit coverage for the framework-agnostic local development service."""
+"""Local development workflow boundaries, resource isolation, and cleanup."""
 
 from __future__ import annotations
 
 import json
-import pathlib
-import subprocess
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import Mock
 
 import pytest
-import yaml
 
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.local_process_client import LocalProcessClient
 from databricks_agentbricks.clients.local_tracing_client import (
     LocalTracingClient,
     LocalTracingStart,
@@ -20,362 +16,168 @@ from databricks_agentbricks.clients.local_tracing_client import (
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.services import dev_service as dev_service_module
+from databricks_agentbricks.services import dev_service as module
 from databricks_agentbricks.services.dev_service import DevRequest, DevService
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 
 
 @pytest.fixture
-def service_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
-    """Build a local service with all external ports replaced by test doubles."""
+def setup(tmp_path):
     (tmp_path / "app.yaml").write_text(
-        """command: [python, app.py]
-env:
-  - name: KEEP
-    value: original
-  - name: PIP_INDEX_URL
-    value: https://deployed.example/simple/
-  - name: MLFLOW_EXPERIMENT_ID
-    value: stale-workspace-id
-  - name: AGENT_MEMORY_STORE
-    value: stale-memory
-"""
+        "command: [python, app.py]\nenv:\n"
+        "  - {name: KEEP, value: original}\n"
+        "  - {name: PIP_INDEX_URL, value: 'https://deployed.example/simple/'}\n"
+        "  - {name: MLFLOW_EXPERIMENT_ID, value: stale-workspace-id}\n"
+        "  - {name: AGENT_MEMORY_STORE, value: stale-memory}\n"
     )
     project = SimpleNamespace(server=AgentServer.AGENTBRICKS, tools=[], allowed_origins=())
-
     resolver = Mock(spec=ProjectResolver)
     resolver.load.return_value = project
     resolver.resource_bindings.return_value = ("memory", "sessions", "/Shared/traces")
-
-    apps = Mock(spec=AppsClient)
+    process = Mock(spec=LocalProcessClient)
     tracing = Mock(spec=LocalTracingClient)
-    tracing_server = cast(subprocess.Popen, Mock(spec=subprocess.Popen))
     tracing.start_dev.return_value = LocalTracingStart(
-        tracing_server,
+        Mock(),
         "http://127.0.0.1:5599",
         environment={
             "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
             "MLFLOW_EXPERIMENT_NAME": "local-agent",
         },
     )
-
-    port_in_use = Mock(return_value=False)
-    free_port = Mock(return_value=54321)
-
-    service = DevService(
-        project_resolver=resolver,
-        apps_client=apps,
-        local_tracing=tracing,
-        port_in_use=port_in_use,
-        free_port=free_port,
-    )
+    port = Mock(return_value=False)
+    service = DevService(resolver, process, tracing, port)
     return SimpleNamespace(
-        apps=apps,
-        free_port=free_port,
-        port_in_use=port_in_use,
+        service=service,
         project=project,
         resolver=resolver,
-        service=service,
+        process=process,
         tracing=tracing,
-        tracing_server=tracing_server,
+        port=port,
     )
-
-
-def _manifest_env(path: pathlib.Path) -> dict[str, str]:
-    return {entry["name"]: entry["value"] for entry in yaml.safe_load(path.read_text())["env"]}
 
 
 @pytest.mark.parametrize("origins", [("https://chat.example.com",), ()])
-def test_dev_manifest_uses_current_origins_and_overrides_stale_deploy_env(
-    service_fixture,
-    tmp_path,
-    origins,
+def test_local_environment_keeps_tracing_local_and_drops_deployed_bindings(
+    setup, tmp_path, origins
 ):
-    app_yaml = tmp_path / "app.yaml"
-    text = app_yaml.read_text() + (
-        f"  - name: {CORS_ALLOWED_ORIGINS_ENV}\n    value: '[\"https://stale.example.com\"]'\n"
-    )
-    app_yaml.write_text(text)
-    service_fixture.project.allowed_origins = origins
-    with service_fixture.service.prepare(
-        DevRequest(
-            source=str(tmp_path),
-            prepare_environment=False,
-            app_port=9000,
-        )
-    ) as plan:
-        env = _manifest_env(plan.entry_point)
-        if origins:
-            assert json.loads(env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
-        else:
-            assert CORS_ALLOWED_ORIGINS_ENV not in env
-    assert app_yaml.read_text() == text
-
-
-def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    """Preparation resolves metadata once and keeps the temporary manifest alive through run."""
-    app_yaml = tmp_path / "app.yaml"
-    original_app_yaml = app_yaml.read_text()
-
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=9000)
-    ) as plan:
-        assert plan.preview.source_dir == tmp_path
+    original = (tmp_path / "app.yaml").read_text()
+    setup.project.allowed_origins = origins
+    with setup.service.prepare(DevRequest(str(tmp_path), None, 9000)) as plan:
+        assert plan.command == ("python", "app.py")
+        assert plan.environment["KEEP"] == "original"
+        assert plan.environment["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+        assert plan.environment["MLFLOW_EXPERIMENT_ID"] == ""
+        assert plan.environment["MLFLOW_EXPERIMENT_NAME"] == "local-agent"
+        assert plan.environment["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL"] == "true"
+        assert plan.environment["AGENTBRICKS_DEV_BOUND_MEMORY_STORE"] == "memory"
+        assert "AGENT_MEMORY_STORE" not in plan.environment
+        assert "AGENT_SESSION_STORE" not in plan.environment
+        assert "PIP_INDEX_URL" not in plan.environment
+        assert json.loads(plan.environment[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
         assert plan.preview.port == 9000
-        assert plan.preview.server is AgentServer.AGENTBRICKS
-        assert plan.preview.tracing_uri == "http://127.0.0.1:5599"
-        assert plan.preview.local_experiment_name == "local-agent"
-        assert plan.preview.tracing_warning is None
-        assert plan.preview.tracing_help is None
         assert plan.preview.memory_store == "memory"
         assert plan.preview.session_store == "sessions"
         assert plan.preview.trace_experiment == "/Shared/traces"
-        assert plan.preview.has_chat_ui is False
-        assert plan.prepare_environment is True  # no .venv: auto-prepare
-        assert plan.app_port == 54321
-        assert plan.entry_point.name == "app.agentbricksdev.yaml"
-        assert plan.entry_point.exists()
-        assert _manifest_env(plan.entry_point) == {
-            "KEEP": "original",
-            "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
-            "MLFLOW_EXPERIMENT_NAME": "local-agent",
-            # Display-only, so the chat app can say the bound store connects on deploy.
-            "AGENTBRICKS_DEV_BOUND_MEMORY_STORE": "memory",
-            "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL": "true",
-        }
-        # Memory itself stays off: the store setting the runtime reads is not set locally.
-        assert "AGENT_MEMORY_STORE" not in _manifest_env(plan.entry_point)
-
-        service_fixture.service.run(plan)
-
+    assert (tmp_path / "app.yaml").read_text() == original
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    assert app_yaml.read_text() == original_app_yaml
-    service_fixture.resolver.load.assert_called_once_with(tmp_path)
-    service_fixture.resolver.resource_bindings.assert_called_once_with(tmp_path)
-    service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-    service_fixture.apps.run_local.assert_called_once_with(
-        tmp_path,
-        "app.agentbricksdev.yaml",
-        prepare_environment=True,
-        port=9000,
-        app_port=54321,
-        on_ready=None,
-        quiet_status=None,
-    )
+    setup.tracing.stop.assert_called_once_with(setup.tracing.start_dev.return_value.server)
 
 
-def test_prepare_honors_explicit_environment_flag_and_default_port(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    (tmp_path / ".venv").mkdir()
-
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
-    ) as plan:
-        assert plan.prepare_environment is False
+@pytest.mark.parametrize(
+    "existing,requested,expected",
+    [(False, None, True), (True, None, False), (True, True, True), (False, False, False)],
+)
+def test_environment_preparation_and_readiness_callbacks(
+    setup, tmp_path, existing, requested, expected
+):
+    if existing:
+        (tmp_path / ".venv").mkdir()
+    on_ready, status = Mock(), Mock()
+    with setup.service.prepare(DevRequest(str(tmp_path), requested, None)) as plan:
+        assert plan.prepare_environment is expected
         assert plan.preview.port == 8000
-        assert plan.app_port == 54321
-        service_fixture.service.run(plan)
+        setup.service.run(plan, on_ready=on_ready, quiet_status=status)
+        setup.process.run.assert_called_once_with(
+            tmp_path,
+            plan.command,
+            plan.environment,
+            prepare_environment=expected,
+            port=8000,
+            on_ready=on_ready,
+            quiet_status=status,
+        )
 
-    service_fixture.apps.run_local.assert_called_once_with(
-        tmp_path,
-        "app.agentbricksdev.yaml",
-        prepare_environment=False,
-        port=8000,
-        app_port=54321,
-        on_ready=None,
-        quiet_status=None,
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_invalid_port_fails_before_starting_tracing(setup, tmp_path, port):
+    with pytest.raises(AgentCliError, match="Port must be between"):
+        with setup.service.prepare(DevRequest(str(tmp_path), None, port)):
+            pytest.fail("invalid port accepted")
+    setup.tracing.start_dev.assert_not_called()
+    setup.process.run.assert_not_called()
+
+
+def test_busy_port_fails_before_starting_tracing(setup, tmp_path):
+    setup.port.return_value = True
+    with pytest.raises(AgentCliError, match="Port 9000 is already in use"):
+        with setup.service.prepare(DevRequest(str(tmp_path), None, 9000)):
+            pytest.fail("busy port accepted")
+    setup.tracing.start_dev.assert_not_called()
+
+
+@pytest.mark.parametrize("configuration", [None, "command: [python, app.py]\nenv: not-a-list\n"])
+def test_missing_or_invalid_start_configuration_fails_before_tracing(
+    setup, tmp_path, configuration
+):
+    if configuration is None:
+        (tmp_path / "app.yaml").unlink()
+    else:
+        (tmp_path / "app.yaml").write_text(configuration)
+    with pytest.raises(AgentCliError):
+        with setup.service.prepare(DevRequest(str(tmp_path), None, None)):
+            pytest.fail("invalid configuration accepted")
+    setup.tracing.start_dev.assert_not_called()
+    setup.process.run.assert_not_called()
+
+
+def test_tool_preflight_fails_before_local_resources(setup, tmp_path, monkeypatch):
+    setup.project.tools = [object()]
+    monkeypatch.setattr(
+        module, "require_managed_tool_support", Mock(side_effect=AgentCliError("unsupported tools"))
     )
+    with pytest.raises(AgentCliError, match="unsupported tools"):
+        with setup.service.prepare(DevRequest(str(tmp_path), None, None)):
+            pytest.fail("unsupported tools accepted")
+    setup.tracing.start_dev.assert_not_called()
 
 
-def test_missing_app_yaml_fails_before_loading_project_or_starting_tracing(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    (tmp_path / "app.yaml").unlink()
-
-    with pytest.raises(AgentCliError, match="No app.yaml found"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
-        ):
-            pytest.fail("prepare should fail before yielding a plan")
-
-    service_fixture.resolver.load.assert_not_called()
-    service_fixture.resolver.resource_bindings.assert_not_called()
-    service_fixture.tracing.start_dev.assert_not_called()
-    service_fixture.apps.run_local.assert_not_called()
+@pytest.mark.parametrize("failure", [RuntimeError("agent failed"), KeyboardInterrupt()])
+def test_run_failure_and_interrupt_still_stop_tracing(setup, tmp_path, failure):
+    setup.process.run.side_effect = failure
+    with pytest.raises(type(failure)):
+        with setup.service.prepare(DevRequest(str(tmp_path), False, None)) as plan:
+            setup.service.run(plan)
+    setup.tracing.stop.assert_called_once_with(setup.tracing.start_dev.return_value.server)
 
 
-def test_managed_tool_preflight_fails_before_local_resources(
-    service_fixture: SimpleNamespace,
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service_fixture.project.tools = [object()]
-    require_support = Mock(side_effect=AgentCliError("managed tools are unsupported"))
-    monkeypatch.setattr(dev_service_module, "require_managed_tool_support", require_support)
-
-    with pytest.raises(AgentCliError, match="managed tools are unsupported"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
-        ):
-            pytest.fail("managed-tool preflight should fail before yielding a plan")
-
-    require_support.assert_called_once_with(tmp_path)
-    service_fixture.resolver.resource_bindings.assert_not_called()
-    service_fixture.tracing.start_dev.assert_not_called()
-    service_fixture.apps.run_local.assert_not_called()
+def test_setup_failure_still_stops_tracing(setup, tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DevPreview", Mock(side_effect=RuntimeError("setup failed")))
+    with pytest.raises(RuntimeError, match="setup failed"):
+        with setup.service.prepare(DevRequest(str(tmp_path), False, None)):
+            pytest.fail("setup error ignored")
+    setup.tracing.stop.assert_called_once_with(setup.tracing.start_dev.return_value.server)
 
 
-def test_run_failure_still_removes_manifest_and_stops_tracing(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    service_fixture.apps.run_local.side_effect = RuntimeError("run-local failed")
-
-    with pytest.raises(RuntimeError, match="run-local failed"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8123)
-        ) as plan:
-            service_fixture.service.run(plan)
-
-    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-
-
-def test_manifest_setup_failure_still_stops_started_tracing(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    (tmp_path / "app.yaml").write_text("env: not-a-list\n")
-
-    with pytest.raises(AgentCliError, match="env must be a list"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
-        ):
-            pytest.fail("malformed app.yaml should fail while preparing the manifest")
-
-    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    service_fixture.apps.run_local.assert_not_called()
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-
-
-def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
-    service_fixture: SimpleNamespace,
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    real_open = pathlib.Path.open
-
-    def failing_open(path: pathlib.Path, mode: str = "r", *args, **kwargs):
-        output = real_open(path, mode, *args, **kwargs)
-        if path.name != "app.agentbricksdev.yaml" or mode != "w":
-            return output
-
-        class FailingOutput:
-            def __enter__(self):
-                output.__enter__()
-                return self
-
-            def __exit__(self, *exit_args):
-                return output.__exit__(*exit_args)
-
-            def write(self, value: str) -> int:
-                output.write("partial")
-                output.flush()
-                raise OSError("disk full")
-
-        return FailingOutput()
-
-    monkeypatch.setattr(pathlib.Path, "open", failing_open)
-    app_yaml = tmp_path / "app.yaml"
-    original_app_yaml = app_yaml.read_text()
-
-    with pytest.raises(AgentCliError, match="Could not write .*disk full"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
-        ):
-            pytest.fail("prepare should fail when the local manifest cannot be written")
-
-    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    assert app_yaml.read_text() == original_app_yaml
-    service_fixture.apps.run_local.assert_not_called()
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-
-
-def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    service_fixture.tracing.start_dev.return_value = LocalTracingStart(
-        None, None, warning="local tracing unavailable", help="install uv"
+def test_tracing_failure_is_reported_but_does_not_block_the_agent(setup, tmp_path):
+    setup.resolver.resource_bindings.return_value = (None, None, None)
+    setup.tracing.start_dev.return_value = LocalTracingStart(
+        None, None, warning="tracing unavailable", help="install uv"
     )
-
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8123)
-    ) as plan:
-        assert plan.preview.tracing_uri is None
-        assert plan.preview.local_experiment_name is None
-        assert plan.preview.tracing_warning == "local tracing unavailable"
+    with setup.service.prepare(DevRequest(str(tmp_path), False, None)) as plan:
+        assert plan.preview.tracing_warning == "tracing unavailable"
         assert plan.preview.tracing_help == "install uv"
-        assert plan.entry_point.exists()
-        service_fixture.service.run(plan)
-
-    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    service_fixture.tracing.stop.assert_not_called()
-    service_fixture.apps.run_local.assert_called_once_with(
-        tmp_path,
-        "app.agentbricksdev.yaml",
-        prepare_environment=False,
-        port=8123,
-        app_port=54321,
-        on_ready=None,
-        quiet_status=None,
-    )
-
-
-@pytest.mark.parametrize(("app_port", "expected_port"), [(None, 8000), (9100, 9100)])
-def test_busy_port_fails_before_tracing_or_local_manifest(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path, app_port, expected_port
-) -> None:
-    service_fixture.port_in_use.return_value = True
-
-    with pytest.raises(AgentCliError) as raised:
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=app_port)
-        ):
-            pytest.fail("a busy port must not yield a plan")
-
-    assert raised.value.message == (
-        f"Port {expected_port} is already in use (possibly a previous agentbricks dev run)."
-    )
-    assert raised.value.hint == (
-        "Stop that process, or run `agentbricks dev --app-port <port>` with a free port."
-    )
-    service_fixture.port_in_use.assert_called_once_with(expected_port)
-    service_fixture.tracing.start_dev.assert_not_called()
-    service_fixture.tracing.stop.assert_not_called()
-    service_fixture.apps.run_local.assert_not_called()
-    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-
-
-def test_free_port_is_checked_and_run_proceeds(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=9100)
-    ) as plan:
-        service_fixture.service.run(plan)
-
-    service_fixture.port_in_use.assert_called_once_with(9100)
-    service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
-    service_fixture.apps.run_local.assert_called_once()
-
-
-def test_prepare_omits_the_bound_memory_store_note_when_none_is_bound(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    service_fixture.resolver.resource_bindings.return_value = (None, None, None)
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
-    ) as plan:
-        assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in _manifest_env(plan.entry_point)
+        assert plan.environment["MLFLOW_TRACKING_URI"] == ""
+        assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in plan.environment
+        setup.service.run(plan)
+    setup.process.run.assert_called_once()
+    setup.tracing.stop.assert_not_called()

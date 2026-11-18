@@ -691,6 +691,18 @@ class AgentProject:
             project.bind_tracing(experiment_name)
         return project
 
+    def set_dev_command(self, command: Sequence[str]) -> None:
+        """Record the local startup command without changing deployment configuration."""
+        if (
+            not command
+            or isinstance(command, str)
+            or any(not isinstance(part, str) or not part for part in command)
+        ):
+            raise AgentCliError("The local start command must be a non-empty array of strings.")
+        if "dev" not in self._document:
+            self._document.add("dev", tomlkit.table())
+        self._document["dev"]["command"] = list(command)
+
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""
         name = _required_string(name, "[agent] deployment_name")

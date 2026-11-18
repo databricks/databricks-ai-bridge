@@ -290,6 +290,7 @@ def _prepare_migration(
             memory_store=memory_store or default_store_name(resource_name, "memory", token),
             session_store=session_store or default_store_name(resource_name, "sessions", token),
         )
+        reference_project.set_dev_command(["uv", "run", "start-server"])
         reference_project.set_deployment_name(deployment_name)
         reference_project.write()
         write_project_metadata(reference, framework=framework, template=template.agentbricks_server)
@@ -525,6 +526,7 @@ def init(
             session_store=session_store,
             experiment_name=experiment_name,
         )
+        project.set_dev_command(["uv", "run", "start-server"])
         # Record a name that fits the Apps limit so a bare `agentbricks deploy` works.
         project.set_deployment_name(deployment_name)
         project.write()

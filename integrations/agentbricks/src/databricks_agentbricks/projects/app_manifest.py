@@ -1,23 +1,7 @@
-"""Shared `app.yaml` parse/serialize contract for `agentbricks deploy` and `agentbricks dev`.
+"""Read Apps deployment manifests and provide the legacy local startup configuration.
 
-`AppManifest` centralizes the plumbing both commands need to read and write an app's
-`app.yaml`: loading the YAML document, giving callers the raw `env` list, and re-serializing
-the document. Each caller keeps its own env policy on top of this - `deploy` upserts/removes
-named env entries when reconciling a deployment, while `dev` filters and rewrites the env
-list to build a local-only manifest. `dev`'s policy lives with `dev`; `deploy`'s lives here,
-as `AppManifest.upsert_env_file`, because it is the same merge `AppManifest.upsert_env`
-implements, one level up (read the file, apply, write back) - and splitting the two halves across
-modules only hid that. `AppManifest.require_deployable` is deploy's preflight: deploy never writes a
-new `app.yaml`, so it refuses a source without a usable one before touching the workspace.
-
-Two divergences between the callers are preserved rather than unified:
-
-- Parsing strictness: `deploy` parses leniently via `parse_lenient` (a non-dict top level
-  silently becomes an empty document); `dev` parses strictly via `parse` (invalid YAML, a
-  non-dict top level, or a non-list `env` all raise `AgentCliError`).
-- Env entry shape: `deploy`'s `upsert_env` drops any non-dict entries from `env` before
-  upserting; `dev` reads the raw env list via `raw_env` and applies its own filters, which
-  preserve non-dict entries untouched.
+Deployment updates resource bindings in app.yaml; local development only reads it when
+agent.toml does not declare a dev command. Local environment policy lives in DevService.
 """
 
 from __future__ import annotations
@@ -101,6 +85,11 @@ class AppManifest:
         """The document's ``env`` list, or ``[]`` if absent or not a list."""
         raw = self._doc.get("env")
         return raw if isinstance(raw, list) else []
+
+    @property
+    def command(self) -> object:
+        """Return the declared command for local execution or deployment validation."""
+        return self._doc.get("command")
 
     def upsert_env(
         self,
