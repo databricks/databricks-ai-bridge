@@ -895,9 +895,10 @@ def test_dev_env_credentials_replace_the_profile_only_when_complete(
 ):
     monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "shell")
     env_file = f"DATABRICKS_CONFIG_PROFILE=proj\n{credentials}"
-    result, _, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, env_file)
+    result, runner_profiles, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, env_file)
 
     assert result.exit_code == 0, result.output
+    assert runner_profiles == ["proj" if uses_profile else None]
     assert manifest_env.get("DATABRICKS_CONFIG_PROFILE") == ("proj" if uses_profile else "")
     assert "DATABRICKS_CONFIG_PROFILE" not in runner_env
     assert validated_profile.call_args_list == ([mock.call("proj")] if uses_profile else [])
@@ -925,6 +926,7 @@ def test_dev_default_browser_auth_still_fails_before_run_local(
     tmp_path: pathlib.Path, monkeypatch, write_databrickscfg, validated_profile
 ):
     _write_project(tmp_path, "")
+    write_project_metadata(tmp_path, framework="openai", template="agent-openai")
     write_databrickscfg("[DEFAULT]\nhost = https://ws.example\nauth_type = external-browser\n")
     run_local = mock.Mock()
     monkeypatch.setattr(dev_mod, "_databricks", run_local)
@@ -935,6 +937,20 @@ def test_dev_default_browser_auth_still_fails_before_run_local(
     assert "agentbricks auth login" in result.output
     validated_profile.assert_not_called()
     run_local.assert_not_called()
+
+
+def test_dev_local_only_project_ignores_unrelated_ambient_profile(
+    tmp_path: pathlib.Path, monkeypatch, fail_validation
+):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "signed-out")
+    fail_validation(Unauthenticated("expired"))
+
+    result, runner_profiles, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, "")
+
+    assert result.exit_code == 0, result.output
+    assert runner_profiles == [None]
+    assert "DATABRICKS_CONFIG_PROFILE" not in manifest_env
+    assert "DATABRICKS_CONFIG_PROFILE" not in runner_env
 
 
 def test_dev_busy_port_renders_error_and_hint(tmp_path: pathlib.Path, monkeypatch):

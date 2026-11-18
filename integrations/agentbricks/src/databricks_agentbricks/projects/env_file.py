@@ -11,6 +11,8 @@ import tempfile
 from dotenv import dotenv_values
 from dotenv.parser import parse_stream
 
+from databricks_agentbricks.errors import AgentCliError
+
 _BOM = "\ufeff"
 _BARE_PROFILE = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -50,6 +52,11 @@ def _parse_env(text: str, *, interpolate: bool = True) -> dict[str, str]:
 
 
 def _profile_value(profile: str) -> str:
+    if "${" in profile:
+        raise AgentCliError(
+            f"Profile {profile!r} cannot be saved in a project .env.",
+            hint="Choose a profile name without dotenv interpolation syntax (${...}).",
+        )
     if _BARE_PROFILE.fullmatch(profile):
         return profile
     escaped = (
@@ -83,7 +90,10 @@ def _with_profile_binding(text: str, profile: str) -> str:
     if not replaced:
         ending = "\r\n" if "\r\n" in body else "\n"
         updated.insert(0, f"{assignment}{ending}")
-    return bom + "".join(updated)
+    result = bom + "".join(updated)
+    if _parse_env(result).get("DATABRICKS_CONFIG_PROFILE") != profile:
+        raise AgentCliError(f"Profile {profile!r} cannot round-trip through a project .env.")
+    return result
 
 
 def write_env(dest: pathlib.Path, profile: str) -> bool:

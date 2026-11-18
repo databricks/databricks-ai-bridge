@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.env_file import read_env, update_env_profile, write_env
 
 
@@ -83,3 +86,13 @@ def test_update_env_profile_preserves_multiline_binding(tmp_path: pathlib.Path):
     assert update_env_profile(tmp_path, "new") is True
     assert (tmp_path / ".env").read_text() == body.replace("=old\n", "=new\n")
     assert read_env(tmp_path / ".env")["DATABRICKS_CONFIG_PROFILE"] == "new"
+
+
+def test_update_env_profile_rejects_interpolation_in_literal_name(tmp_path: pathlib.Path):
+    body = "SUFFIX=dev\nDATABRICKS_CONFIG_PROFILE=old\n"
+    (tmp_path / ".env").write_text(body)
+
+    with pytest.raises(AgentCliError, match="cannot be saved"):
+        update_env_profile(tmp_path, "team${SUFFIX}")
+
+    assert (tmp_path / ".env").read_text() == body

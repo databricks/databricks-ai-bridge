@@ -48,8 +48,10 @@ def databrickscfg_path(
     for name in _AMBIENT_ENV:
         monkeypatch.delenv(name, raising=False)
     path = tmp_path_factory.mktemp("databricks-config") / ".databrickscfg"
+    home = tmp_path_factory.mktemp("agentbricks-home")
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(path))
-    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("agentbricks-home")))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(home / ".agentbricks"))
     monkeypatch.setattr(auth, "_is_interactive", lambda: False)
     return path
 

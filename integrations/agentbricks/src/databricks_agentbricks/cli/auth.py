@@ -214,7 +214,10 @@ def legacy_login(obj, profile: Optional[str]) -> None:
             hint="Pass one to remember, e.g. `agentbricks login --profile <profile>`.",
         )
     client, user = authenticate_profile(
-        chosen, SOURCE_LEGACY_DEFAULT, interactive=can_prompt_login()
+        chosen,
+        SOURCE_LEGACY_DEFAULT,
+        interactive=can_prompt_login(),
+        probe_browser_cache=True,
     )
     save_legacy_default_profile(chosen)
     if obj.output == "json":

@@ -226,8 +226,9 @@ To move an existing project to a different workspace later, run `agentbricks aut
 its directory. Rerunning `agentbricks init` on a project it scaffolded changes nothing. (`--existing`
 is different: it prepares a migration for a project Agent Bricks didn't generate.)
 
-`deploy` validates the resolved profile's authentication up front. `dev` does the same when a
-profile or workspace authentication is configured, while a local-only project can run offline.
+`deploy` validates the resolved profile's authentication up front. `dev` does the same for a
+scaffolded agent or an explicitly selected project profile, while a local-only project can run
+offline even if the shell has an unrelated default profile.
 An unauthenticated external-browser profile fails fast with the `agentbricks auth login` command
 to run instead of hanging on a browser login.
 

@@ -31,11 +31,7 @@ from databricks_agentbricks.presentation.dev import (
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
-from databricks_agentbricks.projects.profiles import (
-    env_auth_configured,
-    sdk_auth_type,
-    workspace_for_profile,
-)
+from databricks_agentbricks.projects.profiles import SOURCE_FLAG
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
@@ -59,14 +55,14 @@ def _env_credential(env_file: dict[str, str]) -> Optional[str]:
     return None
 
 
-def build_dev_service(obj) -> DevService:
+def build_dev_service(obj, runner_profile: Optional[str]) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
     obj.diagnostics = diagnostics
     diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
+        apps_client=AppsClient(runner_profile, runner=_databricks, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
@@ -123,6 +119,15 @@ def dev(
     # locally running agent reads the same file, which dev also consults for explicit credentials.
     env_file = obj.project_env(pathlib.Path(source))
     env_credential = _env_credential(env_file)
+    project_profile = env_file.get("DATABRICKS_CONFIG_PROFILE")
+    # A scaffolded agent uses workspace model serving. An explicit flag or project profile also
+    # chooses a workspace for this run; ambient SDK configuration alone need not affect local code.
+    has_workspace_target = not env_credential and bool(
+        obj.profile_info.source == SOURCE_FLAG
+        or project_profile
+        or (pathlib.Path(source) / ".agentbricks" / "project.toml").is_file()
+    )
+    runner_profile = obj.profile if has_workspace_target else None
     # Explicit `.env` credentials authenticate the agent directly, so the profile needs no
     # validation. Clear an inherited profile in the manifest so load_dotenv(override=False)
     # cannot retain the shell's selection in the local agent.
@@ -130,22 +135,14 @@ def dev(
     local_env: dict[str, str] = {}
     if env_credential:
         local_env["DATABRICKS_CONFIG_PROFILE"] = ""
-    elif obj.profile:
+    elif runner_profile:
         # Landing the profile in the dev manifest puts it in the agent's process env, where it
         # beats `.env` because the template loads dotenv with override=False.
-        local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
+        local_env["DATABRICKS_CONFIG_PROFILE"] = runner_profile
 
-    service = build_dev_service(obj)
+    service = build_dev_service(obj, runner_profile)
     with obj.diagnostics.phase(FailureStage.PROJECT):
         service.check_project(source)
-    # A local-only project can run without workspace credentials. A selected or configured
-    # workspace still needs a bounded check before the agent can start browser authentication.
-    has_workspace_target = not env_credential and bool(
-        obj.profile
-        or env_auth_configured()
-        or sdk_auth_type(None)
-        or workspace_for_profile(None)[0]
-    )
     if has_workspace_target:
         try:
             validated = preflight_auth(obj.profile, obj.profile_info.source)
@@ -153,7 +150,7 @@ def dev(
             obj.announce_workspace()
             raise
         obj.announce_workspace(validated.host)
-    elif not uses_env_credentials:
+    elif env_credential and not uses_env_credentials:
         obj.announce_workspace()
     with service.prepare(
         DevRequest(
@@ -169,7 +166,7 @@ def dev(
             )
         announce_bound_resources(plan.preview)
         announce_agent_profile(
-            obj.profile,
+            runner_profile,
             obj.profile_info.source,
             env_file.get("DATABRICKS_CONFIG_PROFILE"),
             env_credential=env_credential if uses_env_credentials else None,

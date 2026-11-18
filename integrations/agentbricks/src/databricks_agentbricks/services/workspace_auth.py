@@ -175,12 +175,15 @@ class WorkspaceAuthService:
         raise _not_signed_in_error(profile, source) from error
 
     def authenticate_profile(
-        self, profile: str, source: str, *, interactive: bool
+        self, profile: str, source: str, *, interactive: bool, probe_browser_cache: bool = False
     ) -> tuple[_AgentBricksApiClient, str]:
-        """Validate credentials, signing in once when a person can complete login."""
+        """Validate credentials, signing in once when a person can complete login.
+
+        Legacy login probes browser auth too, preserving use of cached SDK credentials.
+        """
         label = _profile_label(profile, source)
         error: Optional[Exception]
-        if self._needs_browser_login(profile):
+        if self._needs_browser_login(profile) and not probe_browser_cache:
             # Validation would start a browser flow that only the login command should host.
             error = None
         else:
@@ -220,7 +223,9 @@ def preflight_auth(profile: Optional[str], source: str) -> _AgentBricksApiClient
 
 
 def authenticate_profile(
-    profile: str, source: str, *, interactive: bool
+    profile: str, source: str, *, interactive: bool, probe_browser_cache: bool = False
 ) -> tuple[_AgentBricksApiClient, str]:
     """Validate a profile and offer interactive login when credentials are missing."""
-    return _service().authenticate_profile(profile, source, interactive=interactive)
+    return _service().authenticate_profile(
+        profile, source, interactive=interactive, probe_browser_cache=probe_browser_cache
+    )

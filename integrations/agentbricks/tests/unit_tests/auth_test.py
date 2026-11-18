@@ -300,6 +300,17 @@ def test_switch_round_trips_profile_name_with_comment_character(project, write_d
     assert described["workspace_host"] == "https://special.example"
 
 
+def test_switch_rejects_interpolated_profile_name_without_changing_env(project):
+    body = "SUFFIX=dev\nDATABRICKS_CONFIG_PROFILE=old\n"
+    (project / ".env").write_text(body)
+
+    result = _invoke_profile(["switch", "team${SUFFIX}"])
+
+    assert result.exit_code != 0
+    assert "cannot be saved" in _flat(result.output)
+    assert (project / ".env").read_text() == body
+
+
 def test_set_rewrites_profile_line_and_keeps_other_lines(project):
     (project / ".env").write_text("OTHER=1\nDATABRICKS_CONFIG_PROFILE=old\nLAST=2\n")
 
@@ -417,6 +428,19 @@ def test_legacy_login_preserves_saved_default_and_logout_clears_it(
         "ambient",
         "DATABRICKS_CONFIG_PROFILE",
     )
+
+
+def test_legacy_login_accepts_cached_external_browser_profile_noninteractive(
+    outside_project, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[browser]\nhost = https://ws.example\nauth_type = external-browser\n")
+
+    result = CliRunner().invoke(cli.agentbricks, ["-o", "json", "login", "-p", "browser"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["profile"] == "browser"
+    validated_profile.assert_called_once_with("browser")
+    assert _get_json(["auth", "describe"])["profile"] == "browser"
 
 
 def test_saved_default_targets_the_workspace_client_in_json_mode(
