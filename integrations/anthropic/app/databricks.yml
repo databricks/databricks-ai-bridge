@@ -44,6 +44,9 @@ variables:
       as memory_* tools. Off ("0") by default because it needs the Agent Memory Sessions preview in the workspace
       and the memory tools declared on the agent (memory_custom_tools())
     default: "0"
+  connector_version:
+    description: The connector's version for the User-Agent; deploy.sh sets it from pyproject.toml
+    default: 0.0.0
   scope_manager:
     description: The principal allowed to manage the secret scope (MANAGE); the App only gets READ on its keys
     default: ${workspace.current_user.userName}
@@ -88,11 +91,11 @@ resources:
           - name: DATABRICKS_SDK_UPSTREAM
             value: ClaudeManagedAgents-DatabricksSandbox
           - name: DATABRICKS_SDK_UPSTREAM_VERSION
-            value: 0.1.0
+            value: ${var.connector_version}
           - name: DATABRICKS_CLI_UPSTREAM
             value: ClaudeManagedAgents-DatabricksSandbox
           - name: DATABRICKS_CLI_UPSTREAM_VERSION
-            value: 0.1.0
+            value: ${var.connector_version}
           - name: ANTHROPIC_ENVIRONMENT_ID
             value: ${var.environment_id}
           - name: ANTHROPIC_ENVIRONMENT_KEY

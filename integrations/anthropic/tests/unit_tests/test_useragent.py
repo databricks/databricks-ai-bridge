@@ -112,6 +112,9 @@ def test_worker_memory_calls_carry_the_connector(sent, monkeypatch):
 
     monkeypatch.setenv("DATABRICKS_HOST", "https://example.cloud.databricks.com")
     monkeypatch.setenv("DATABRICKS_TOKEN", "t")
+    monkeypatch.setenv(
+        "CMA_PRODUCT_VERSION", _useragent.PRODUCT_VERSION
+    )  # what the launcher passes
     worker = _load_worker()
     store = worker._MemoryStore(
         worker._workspace_client(), "cma-memory-abc", "databricks-user:1", "1"

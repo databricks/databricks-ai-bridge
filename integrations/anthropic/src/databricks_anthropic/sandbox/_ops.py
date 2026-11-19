@@ -163,11 +163,26 @@ def _client_for(w: WorkspaceClient, timeout_s: int) -> WorkspaceClient:
             pass
     if needed not in by_timeout:
         cfg = w.config.copy()  # shares the credential provider; keeps the User-Agent info
-        # Config.copy() is shallow: attribute values live in a shared dict, so setting the timeout on the
-        # copy would change the caller's config too. Give the copy its own.
-        if isinstance(getattr(cfg, "_inner", None), dict):
-            cfg._inner = dict(cfg._inner)
+        # Assumption (databricks-sdk 0.157-0.159): Config.copy() is shallow and the attribute values live in the
+        # private dict `_inner`, shared with the original. Setting the timeout on the copy would change the
+        # caller's config too, so the copy gets its own dict. If a future SDK drops `_inner`, fail loudly rather
+        # than silently lengthening the caller's timeout.
+        inner = getattr(cfg, "_inner", None)
+        if not isinstance(inner, dict):
+            from databricks.sdk.version import __version__ as sdk_version
+
+            raise RuntimeError(
+                f"databricks-sdk {sdk_version}: Config has no `_inner` dict, so a long-timeout copy of the client "
+                "can't be made safely; pin databricks-sdk to a tested version"
+            )
+        cfg._inner = dict(inner)
         cfg.http_timeout_seconds = needed
+        if (
+            w.config.http_timeout_seconds == needed
+        ):  # the copy must never write through to the caller
+            raise RuntimeError(
+                "could not copy the client config without changing the caller's timeout"
+            )
         by_timeout[needed] = WorkspaceClient(config=cfg)
     return by_timeout[needed]
 

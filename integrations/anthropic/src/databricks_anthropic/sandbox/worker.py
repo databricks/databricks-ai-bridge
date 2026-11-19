@@ -38,6 +38,7 @@ Environment (set by the launcher under ``env -i`` with an allowlist; no secrets)
                             sandbox's built-in credential (the sandbox creator's identity)
   CMA_MCP_TIMEOUT_SECONDS   per-call MCP read timeout
   CMA_GENIE_WAIT_TIMEOUT    seconds genie_ask_and_wait polls before giving up (default 300)
+  CMA_PRODUCT_VERSION       the connector's version, for the User-Agent (set by the launcher; default "0.0.0")
   CMA_MEMORY_STORE          optional Databricks managed memory store (/api/2.0/agents/memory-stores) for this
   CMA_MEMORY_ACTOR          sandbox's identity, its actor_id, and that identity's Databricks user id. The worker
   CMA_MEMORY_OWNER          serves memory_search / memory_list / memory_save / memory_delete with the sandbox
@@ -71,9 +72,11 @@ log = logging.getLogger("databricks_anthropic.worker")
 # Display-name marker on a sandbox kept because its export failed; must equal dispatcher.KEPT_MARKER.
 KEPT_MARKER = "[export failed, kept]"
 
-# Partner attribution, fixed by the connector; must equal databricks_anthropic._useragent.
+# Partner attribution, fixed by the connector; the name must equal databricks_anthropic._useragent.PRODUCT_NAME. The
+# version comes from the launcher (CMA_PRODUCT_VERSION, the installed package's version): this file runs without the
+# package installed.
 PRODUCT_NAME = "ClaudeManagedAgents-DatabricksSandbox"
-PRODUCT_VERSION = "0.1.0"
+PRODUCT_VERSION = os.environ.get("CMA_PRODUCT_VERSION") or "0.0.0"  # semver, as the SDK requires
 UPSTREAM_ENV = {
     "DATABRICKS_SDK_UPSTREAM": PRODUCT_NAME,
     "DATABRICKS_SDK_UPSTREAM_VERSION": PRODUCT_VERSION,

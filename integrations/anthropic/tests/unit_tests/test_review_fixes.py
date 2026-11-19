@@ -476,6 +476,27 @@ def test_long_commands_use_a_client_whose_http_timeout_outlasts_them(offline_con
     assert long.config.user_agent == w.config.user_agent
 
 
+def test_long_timeout_copy_fails_loudly_if_the_sdk_config_changes_shape(
+    offline_config, monkeypatch
+):
+    """If a future databricks-sdk drops Config._inner, refuse instead of lengthening the caller's own timeout."""
+    from databricks.sdk.core import Config
+
+    w = _real_client()
+    original_copy = Config.copy
+
+    def copy_without_inner(self):
+        cfg = original_copy(self)
+        cfg.__dict__.pop("_inner", None)
+        return cfg
+
+    monkeypatch.setattr(Config, "copy", copy_without_inner)
+    before = w.config.http_timeout_seconds
+    with pytest.raises(RuntimeError, match="_inner"):
+        _ops._client_for(w, 600)
+    assert w.config.http_timeout_seconds == before
+
+
 def test_run_routes_by_timeout(monkeypatch):
     seen = []
     monkeypatch.setattr(
@@ -581,3 +602,55 @@ def test_permanent_error_is_not_retried(monkeypatch):
 def test_persistent_transient_error_stops_after_the_retries(monkeypatch):
     d, fake, calls = _run_dispatcher(monkeypatch, [TimeoutError("slow")])
     assert len(calls) == 3 and fake.stopped == ["sesn_A"] and d.status.failed == 1
+
+
+def test_a_worker_not_ready_by_the_start_timeout_is_not_a_normal_success(ops, monkeypatch):
+    """Still starting after start_timeout_s: left running, but ready=False so the dispatcher counts a slow start."""
+    monkeypatch.setattr(_ops, "worker_progress", lambda *a, **k: (True, False, ""))
+    lc = make_launcher(start_timeout_s=0)
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
+    result = lc.launch(work())
+    assert result.ready is False and result.launched is True
+    assert "delete_quietly" not in ops  # the slow worker is left running
+
+
+def test_a_ready_worker_is_a_normal_success(ops):
+    lc = make_launcher()
+    cast(MagicMock, lc.workspace_client).sandbox.get_sandbox.side_effect = NotFound("x")
+    assert lc.launch(work()).ready is True
+
+
+@pytest.mark.asyncio
+async def test_status_counts_slow_starts_and_deferred_items_apart_from_launches(monkeypatch):
+    from databricks_anthropic.sandbox.launcher import LaunchResult
+
+    results = {
+        "sesn_ok": LaunchResult("sandboxes/a", 1, True, 1.0),
+        "sesn_slow": LaunchResult("sandboxes/b", 2, True, 1.0, ready=False),
+        "sesn_link": SimpleNamespace(sandbox_name=None, reused=False, launched=False),
+    }
+    lc = make_launcher()
+    monkeypatch.setattr(lc, "launch", lambda w: results[w.data.id])
+    d = DatabricksSandboxDispatcher(lc, drain=True)
+
+    class Client:
+        def __init__(self):
+            self.beta = SimpleNamespace(
+                environments=SimpleNamespace(work=SimpleNamespace(poller=self.poller))
+            )
+
+        async def poller(self, **kwargs):
+            for sid in results:
+                yield SimpleNamespace(id=sid, data=SimpleNamespace(id=sid, type="session"))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(d, "_client", lambda: Client())
+    await d.run()
+    s = d.status
+    assert (s.launched, s.slow_starts, s.deferred, s.reused) == (2, 1, 1, 0)
+    assert s.last_error == "WorkerNotReady"

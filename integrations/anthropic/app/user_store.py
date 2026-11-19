@@ -3,9 +3,11 @@
 Two implementations behind one small interface:
 
 - :class:`LakebaseStore` (production): Lakebase Postgres, reached as the App's service principal. The App owns
-  schema ``cma_dispatcher`` (created on first use, never ``public``). This code only INSERTs and SELECTs: it
-  never UPDATEs or DELETEs anything, so the audit trail is append-only. A sign-in code is single-use because
-  redeeming it inserts its hash into ``connect_uses`` (primary key): a second redeem finds the row taken.
+  schema ``cma_dispatcher`` (created on first use, never ``public``). Bindings and the audit trail are
+  append-only: nothing here updates or deletes them. The only deletes purge sign-in codes (and their use rows) a
+  day after the code expired; an expired code can't be redeemed, so purging it can't make a code usable again. A
+  sign-in code is single-use because redeeming it inserts its hash into ``connect_uses`` (primary key): a second
+  redeem finds the row taken.
 - :class:`MemoryStore` (tests and local runs): the same behaviour in a dict.
 
 Nothing here stores a forwarded user token or a secret value; sign-in codes are stored as SHA-256 hashes.
@@ -73,6 +75,10 @@ class Binding:
     created_at: str = ""
 
 
+# Sign-in codes are purged a day after they expire (an hourly sweep in user_mode.py).
+PURGE_GRACE_S = 24 * 3600.0
+
+
 class Store(Protocol):
     def ensure_schema(self) -> None: ...
 
@@ -93,6 +99,8 @@ class Store(Protocol):
     def peek_code(self, code_hash: str) -> str | None: ...
 
     def use_code(self, code_hash: str, principal_id: str) -> str | None: ...
+
+    def purge_expired_codes(self, grace_s: float = PURGE_GRACE_S) -> int: ...
 
 
 class MemoryStore:
@@ -155,6 +163,16 @@ class MemoryStore:
             self._uses[code_hash] = principal_id
             return hit[0]
 
+    def purge_expired_codes(self, grace_s: float = PURGE_GRACE_S) -> int:
+        """Drop codes that expired more than ``grace_s`` ago, and their use rows. Returns codes dropped."""
+        with self._lock:
+            cutoff = self._clock() - grace_s
+            gone = [h for h, (_, expires) in self._codes.items() if expires < cutoff]
+            for h in gone:
+                del self._codes[h]
+                self._uses.pop(h, None)
+            return len(gone)
+
 
 class UnavailableStore:
     """Stands in when Lakebase isn't attached: every call raises StoreUnavailable, so user routes answer 503."""
@@ -166,7 +184,7 @@ class UnavailableStore:
         raise StoreUnavailable(self.reason)
 
     bind = binding = bindings_for = count_for = audit = ensure_schema = _fail
-    add_code = peek_code = use_code = _fail
+    add_code = peek_code = use_code = purge_expired_codes = _fail
 
 
 class LakebaseStore:
@@ -311,7 +329,7 @@ class LakebaseStore:
     def audit(
         self, principal_id: str, session_id: str | None, action: str, detail: str = ""
     ) -> None:
-        # Insert-only: this module never issues UPDATE or DELETE (a unit test checks the SQL).
+        # Append-only: the audit trail is never updated or deleted (a unit test checks the SQL).
         self._run(
             lambda conn: conn.execute(
                 f"INSERT INTO {SCHEMA}.audit (principal_id, session_id, action, detail) "
@@ -358,6 +376,26 @@ class LakebaseStore:
             return rows[0][0] if taken else None
 
         return self._run(redeem)
+
+    def purge_expired_codes(self, grace_s: float = PURGE_GRACE_S) -> int:
+        """Delete sign-in codes that expired more than ``grace_s`` ago, then use rows whose code is gone.
+
+        The only deletes in this store. Bindings and the audit trail are never deleted or changed.
+        """
+
+        def purge(conn: Any) -> int:
+            gone = conn.execute(
+                f"DELETE FROM {SCHEMA}.connect_codes "
+                "WHERE expires_at < now() - make_interval(secs => %s) RETURNING code_hash",
+                (float(grace_s),),
+            ).fetchall()
+            conn.execute(
+                f"DELETE FROM {SCHEMA}.connect_uses u "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {SCHEMA}.connect_codes c WHERE c.code_hash = u.code_hash)"
+            )
+            return len(gone)
+
+        return self._run(purge)
 
 
 def _binding(row: tuple) -> Binding:

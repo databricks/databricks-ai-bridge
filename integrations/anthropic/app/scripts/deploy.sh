@@ -26,10 +26,16 @@ fi
 [ "${1:-}" = "--" ] && shift
 extra=("$@")
 here="$(cd "$(dirname "$0")/.." && pwd)"
-export DATABRICKS_CLI_UPSTREAM=ClaudeManagedAgents-DatabricksSandbox DATABRICKS_CLI_UPSTREAM_VERSION=0.1.0
-export DATABRICKS_SDK_UPSTREAM=ClaudeManagedAgents-DatabricksSandbox DATABRICKS_SDK_UPSTREAM_VERSION=0.1.0
+# The connector's version, from the package's pyproject.toml (one source of truth; nothing to edit per release).
+# The SDK's User-Agent needs a semantic version: 0.1.0.dev0 becomes 0.1.0-dev0.
+version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$here/../pyproject.toml" | head -1 \
+  | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)[.-]?([A-Za-z0-9]+)$/\1-\2/')
+version=${version:-0.0.0}
+export DATABRICKS_CLI_UPSTREAM=ClaudeManagedAgents-DatabricksSandbox DATABRICKS_CLI_UPSTREAM_VERSION="$version"
+export DATABRICKS_SDK_UPSTREAM=ClaudeManagedAgents-DatabricksSandbox DATABRICKS_SDK_UPSTREAM_VERSION="$version"
 cd "$here"
-bundle=(-t "$target" --profile "$profile" --var "environment_id=$environment_id" ${extra[@]+"${extra[@]}"})
+bundle=(-t "$target" --profile "$profile" --var "environment_id=$environment_id" --var "connector_version=$version"
+  ${extra[@]+"${extra[@]}"})
 
 # The bundle rewrites the secret scope's ACL (MANAGE for the manager only) before it updates the App, and the App's
 # READ comes back only with a successful App update. If the deploy fails in between, grant the App's READ again so

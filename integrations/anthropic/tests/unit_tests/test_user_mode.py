@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import pathlib
 import re
 import sys
 from pathlib import Path
@@ -80,7 +81,11 @@ def idle_service():
 
 
 class FakeIdentity:
-    def resolve(self, token):
+    def __init__(self):
+        self.fresh_calls = 0
+
+    def resolve(self, token, *, fresh=False):
+        self.fresh_calls += bool(fresh)
         if token not in TOKENS:
             raise PermissionError("token rejected by the workspace: " + token[:4])
         return TOKENS[token], MagicMock(name="user-client")
@@ -207,7 +212,9 @@ def test_user_routes_absent_without_user_mode(monkeypatch):
     with TestClient(create_app(make_service=idle_service), base_url=HOST) as client:
         assert client.get("/connect").status_code == 404
         assert client.get("/connect.js").status_code == 404
-        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code == 404
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).status_code == 404
+        )
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code in (
             404,
             405,
@@ -271,15 +278,21 @@ def test_extra_fields_and_bad_codes_are_rejected(user_env):
         assert (
             client.post("/api/connect", json={"code": "short"}, headers=auth()).status_code == 422
         )
-        assert client.get("/api/connect?code=short", headers=auth()).status_code == 422
+        assert (
+            client.post("/api/connect/info", json={"code": "short"}, headers=auth()).status_code
+            == 422
+        )
 
 
 def test_missing_or_rejected_token_is_401(user_env):
     with make_client() as client:
-        assert client.get(f"/api/connect?code={CODE}").status_code == 401
         assert (
-            client.get(f"/api/connect?code={CODE}", headers=auth(token="tok-nobody")).status_code
+            client.post("/api/connect/info", json={"code": CODE}, headers=GOOD_ORIGIN).status_code
             == 401
+        )
+        nobody = auth(token="tok-nobody")
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=nobody).status_code == 401
         )
 
 
@@ -291,7 +304,9 @@ def test_store_unavailable_is_503(user_env):
     with_code(store)
     with make_client(store=store) as client:
         store.down = True
-        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code == 503
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).status_code == 503
+        )
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code == 503
 
 
@@ -302,16 +317,15 @@ def test_token_and_code_never_appear_in_any_response(user_env):
     with make_client(store=store) as client:
         responses.append(client.get("/connect", headers=auth()))
         responses.append(client.get("/connect.js", headers=auth()))
-        responses.append(client.get(f"/api/connect?code={CODE}", headers=auth()))
+        responses.append(client.post("/api/connect/info", json={"code": CODE}, headers=auth()))
         responses.append(client.post("/api/connect", json={"code": CODE}, headers=auth()))
         responses.append(
-            client.get(f"/api/connect?code={CODE}", headers=auth(token="tok-bob-SECRET"))
-        )
-        responses.append(
-            client.get(
-                f"/api/connect?code={CODE}", headers={"x-forwarded-access-token": "nope-SECRET"}
+            client.post(
+                "/api/connect/info", json={"code": CODE}, headers=auth(token="tok-bob-SECRET")
             )
         )
+        bad = {"x-forwarded-access-token": "nope-SECRET", **GOOD_ORIGIN}
+        responses.append(client.post("/api/connect/info", json={"code": CODE}, headers=bad))
     secrets = [
         "tok-alice-SECRET",
         "tok-bob-SECRET",
@@ -337,7 +351,7 @@ def test_connect_script_never_uses_innerhtml():
 def test_connect_page_has_the_strict_csp(user_env):
     with make_client() as client:
         page, script = client.get("/connect"), client.get("/connect.js")
-        api = client.get(f"/api/connect?code={CODE}", headers=auth())
+        api = client.post("/api/connect/info", json={"code": CODE}, headers=auth())
     assert page.status_code == 200 and "/connect.js" in page.text and "your" in page.text
     assert page.headers["content-security-policy"] == um.PAGE_CSP
     assert "script-src 'self'" in um.PAGE_CSP and "frame-ancestors 'none'" in um.PAGE_CSP
@@ -356,7 +370,7 @@ def test_connect_binds_a_console_session_to_whoever_confirms_and_works_once(user
     store, tickets = FakeStore(), RecordingTickets()
     sid = with_code(store)
     with make_client(store=store, tickets=tickets) as client:
-        info = client.get(f"/api/connect?code={CODE}", headers=auth())
+        info = client.post("/api/connect/info", json={"code": CODE}, headers=auth())
         assert info.status_code == 200, info.text
         assert info.json() == {
             "session_id": sid,
@@ -371,7 +385,9 @@ def test_connect_binds_a_console_session_to_whoever_confirms_and_works_once(user
         assert "reply 'done'" in r.json()["note"]
         again = client.post("/api/connect", json={"code": CODE}, headers=auth())
         assert again.status_code == 404
-        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code == 404
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).status_code == 404
+        )
     binding = store.binding(sid)
     assert (binding.principal_id, binding.agent_id) == (ALICE.principal_id, AGENT_ONE)
     ((ticket_sid, principal, _c, ttl),) = tickets.put_calls
@@ -388,7 +404,9 @@ def test_connect_never_takes_over_another_users_session(user_env):
     sid = with_code(store)
     store.bind(us.Binding(sid, BOB.principal_id, BOB.user_name, AGENT_ONE))
     with make_client(store=store, tickets=tickets) as client:
-        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code == 404
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).status_code == 404
+        )
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code == 404
         # The owner can still use it.
         assert (
@@ -408,7 +426,10 @@ def test_owner_reconnects_a_bound_session_without_a_new_binding(user_env):
     store.bind(us.Binding(sid, ALICE.principal_id, ALICE.user_name, AGENT_ONE))
     with make_client(store=store, tickets=tickets) as client:
         assert (
-            client.get(f"/api/connect?code={CODE}", headers=auth()).json()["already_yours"] is True
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).json()[
+                "already_yours"
+            ]
+            is True
         )
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code == 200
     assert store.count_for(ALICE.principal_id) == 1 and len(tickets.put_calls) == 1
@@ -434,7 +455,12 @@ def test_connect_refuses_sessions_user_mode_cannot_run(user_env, session, proble
     anth.sessions["sesn_console"] = session
     sid = with_code(store)
     with make_client(store=store, anth=anth, tickets=tickets) as client:
-        assert problem in client.get(f"/api/connect?code={CODE}", headers=auth()).json()["problem"]
+        assert (
+            problem
+            in client.post("/api/connect/info", json={"code": CODE}, headers=auth()).json()[
+                "problem"
+            ]
+        )
         r = client.post("/api/connect", json={"code": CODE}, headers=auth())
     assert r.status_code == 403 and problem in r.json()["detail"]
     assert store.binding(sid) is None and tickets.put_calls == []
@@ -457,7 +483,10 @@ def test_connect_rejects_expired_codes_missing_headers_and_the_session_cap(user_
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code == 429
         now[0] += 61
         assert client.post("/api/connect", json={"code": CODE}, headers=auth()).status_code == 404
-        assert client.get(f"/api/connect?code={'y' * 40}", headers=auth()).status_code == 404
+        assert (
+            client.post("/api/connect/info", json={"code": "y" * 40}, headers=auth()).status_code
+            == 404
+        )
 
 
 # ---------------------------------------------------------------- the env-U watcher's routing launcher
@@ -491,6 +520,23 @@ class ScriptedSessions:
         self.sent.extend(events)
 
 
+class InlineExecutor:
+    """Runs a submitted call at once, so tests see the link answered when launch() returns."""
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as e:  # noqa: BLE001 - surfaced through the future, as a real pool would
+            future.set_exception(e)
+        return future
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        pass
+
+
 def routing(store, sessions, *, tickets=None, launches=None, app_url=HOST, fail=None):
     launched = launches if launches is not None else []
     principals: list[str] = []
@@ -519,6 +565,7 @@ def routing(store, sessions, *, tickets=None, launches=None, app_url=HOST, fail=
         session_client_for=lambda token: (sessions.tokens.append(token), sessions)[1],
         sleep=lambda s: None,
         poll_s=0,
+        link_executor=cast(Any, InlineExecutor()),
     )
     return rl, launched, work_api
 
@@ -596,10 +643,12 @@ def test_watcher_answers_tool_calls_with_a_one_time_link_when_no_ticket_waits():
     )
     assert all(e["is_error"] for e in sessions.sent)
     text = sessions.sent[0]["content"][0]["text"]
-    found = re.search(r"/connect\?code=([\w-]+)", text)
+    found = re.search(r"/connect#code=([\w-]+)", text)
     assert found
     code = found.group(1)
-    assert text.count(f"{HOST}/connect?code=") == 1 and "reply 'done'" in text
+    assert (
+        text.count(f"{HOST}/connect#code=") == 1 and "reply 'done'" in text
+    )  # fragment: never sent to a server
     assert store.peek_code(signin.code_hash(code)) == "sesn_c"  # stored hashed, redeemable
     assert code not in str(store.audit_rows) and store.audit_rows[-1][2] == "signin-link"
     assert sessions.tokens == [
@@ -910,18 +959,19 @@ def test_unattached_lakebase_answers_503_not_a_startup_failure(user_env, monkeyp
     cast(Any, user).start = lambda: None
     app = create_app(make_service=idle_service, make_user_mode=lambda service: user)
     with TestClient(app, base_url=HOST) as client:
-        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code == 503
+        assert (
+            client.post("/api/connect/info", json={"code": CODE}, headers=auth()).status_code == 503
+        )
         assert client.get("/connect").status_code == 200  # the page itself doesn't need the store
 
 
-def test_store_source_has_no_update_or_delete_statements():
+def test_store_source_only_deletes_expired_sign_in_codes():
+    """No UPDATE, TRUNCATE, DROP or ALTER anywhere; the only DELETEs are the two sign-in-code purges."""
     source = (Path(__file__).resolve().parents[2] / "app" / "user_store.py").read_text()
-    # No SQL statement in the store starts with a mutating keyword other than the audit INSERT (docstrings may
-    # mention them).
-    assert not re.search(r"[\"'](\s*)(UPDATE|DELETE|TRUNCATE|DROP|ALTER)\b", source)
-    assert "UPDATE" not in re.findall(
-        r"\b(UPDATE|DELETE)\b", source.replace("UPDATE or DELETE", "")
-    )
+    assert not re.search(r"[\"'](\s*)(UPDATE|TRUNCATE|DROP|ALTER)\b", source)
+    deletes = re.findall(r"DELETE FROM \{SCHEMA\}\.(\w+)", source)
+    assert deletes == ["connect_codes", "connect_uses"]
+    assert len(re.findall(r"[\"'](\s*)DELETE\b", source)) == 2
 
 
 def test_watcher_releases_an_item_without_a_sessions_token():
@@ -931,3 +981,107 @@ def test_watcher_releases_an_item_without_a_sessions_token():
     assert rl.launch(item(secret="")).action == "refused"
     assert sessions.sent == [] and sessions.tokens == []
     work_api.beta.environments.work.stop.assert_called_once()
+
+
+def test_sign_in_link_answers_run_off_the_launch_slots():
+    """A session waiting for a sign-in is answered on the link pool: launch() returns at once, so the dispatcher's
+    launch slot is free for real sandbox launches."""
+    import threading
+
+    store = us.MemoryStore()
+    gate, started = threading.Event(), threading.Event()
+    rl, _, _ = routing(store, ScriptedSessions([[]]))
+    rl._links = __import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=1)
+
+    def slow_answer(work, binding):
+        started.set()
+        gate.wait(5)
+        return signin.Deferred(work.data.id, "signin-link")
+
+    setattr(rl, "_answer_with_link", slow_answer)  # noqa: B010 - replace the bound method for this test
+    result = rl.launch(item("sesn_wait"))
+    assert result.action == "answering" and result.launched is False  # returned without waiting
+    assert started.wait(5)
+    gate.set()
+    rl.close()
+
+
+def test_the_link_wait_is_capped_at_two_minutes():
+    assert signin.LINK_ITEM_MAX_S == 120.0 and signin.LINK_WORKERS == 4
+
+
+def test_confirm_always_rechecks_the_token_but_the_page_lookup_may_use_the_cache():
+    """POST /api/connect (the state change) resolves the caller with fresh=True; the info lookup doesn't."""
+    clock = [0.0]
+    calls = []
+
+    class Client:
+        def __init__(self, token):
+            me = SimpleNamespace(id="u1", user_name="a@x")
+            self.current_user = SimpleNamespace(me=lambda: calls.append(token) or me)
+
+    identity = um.Identity(
+        HOST, ttl_s=60, clock=lambda: clock[0], client_factory=lambda host, token: Client(token)
+    )
+    identity.resolve("tok-1")
+    identity.resolve("tok-1")
+    assert len(calls) == 1  # cached for the page lookup
+    identity.resolve("tok-1", fresh=True)
+    assert len(calls) == 2  # the confirm step always asks Databricks
+
+
+def test_the_link_carries_the_code_in_the_fragment_and_lookups_are_post_only(user_env):
+    from app import create_app  # noqa: F401 - the routes under test
+
+    assert "/connect#code=" in pathlib.Path(signin.__file__).read_text()
+    script = (pathlib.Path(um.STATIC) / "connect.js").read_text()
+    assert "window.location.hash" in script and "location.search" not in script
+    assert '"/api/connect?code=' not in script
+    with make_client() as client:
+        assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code in (404, 405)
+
+
+def test_lakebase_purge_deletes_only_expired_codes_and_their_uses():
+    log: list = []
+    store, _ = lakebase(lambda **kw: FakeConnection(log))
+    store.purge_expired_codes()
+    deletes = [(sql, params) for sql, params in log if sql.startswith("DELETE")]
+    assert [sql.split()[2] for sql, _ in deletes] == [
+        "cma_dispatcher.connect_codes",
+        "cma_dispatcher.connect_uses",
+    ]
+    assert "expires_at < now() - make_interval(secs => %s)" in deletes[0][0] and deletes[0][1] == (
+        86400.0,
+    )
+    assert not any(("bindings" in sql or ".audit" in sql) for sql, _ in deletes)
+
+
+def test_memory_store_purges_codes_a_day_after_expiry_and_keeps_live_ones():
+    now = [0.0]
+    store = us.MemoryStore(clock=lambda: now[0])
+    store.add_code("old", "sesn_1", 60)
+    store.use_code("old", "1001")
+    store.add_code("live", "sesn_2", 60)
+    now[0] = 60 + us.PURGE_GRACE_S - 1
+    assert store.purge_expired_codes() == 0  # expired, but not a day ago yet
+    store.add_code("new", "sesn_3", 900)
+    now[0] = 61 + us.PURGE_GRACE_S
+    assert (
+        store.purge_expired_codes() == 2
+    )  # "old" and "live" (both expired a day ago); "new" stays
+    assert store.peek_code("new") == "sesn_3" and store.use_code("old", "1002") is None
+
+
+def test_the_purge_never_raises():
+    class Broken(us.MemoryStore):
+        def purge_expired_codes(self, grace_s=us.PURGE_GRACE_S):
+            raise OSError("lakebase down")
+
+    user = um.UserMode(
+        config=config(),
+        identity=cast(Any, FakeIdentity()),
+        store=Broken(),
+        anthropic=MagicMock(),
+        service_launcher=service_launcher(),
+    )
+    assert user.purge_codes() == 0

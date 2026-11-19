@@ -28,6 +28,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,7 +46,10 @@ CODE_TTL_S = 15 * 60
 LINK_TICKET_MAX_S = 30 * 60
 TOKEN_MARGIN_S = 120.0
 # How long the App keeps answering one item's tool calls with the link before releasing it.
-LINK_ITEM_MAX_S = 300.0
+LINK_ITEM_MAX_S = 120.0
+# Sign-in-link answers run on their own threads, so sessions waiting for a sign-in never hold the dispatcher's
+# launch slots (CMA_MAX_CONCURRENT_LAUNCHES), which real sandbox launches need.
+LINK_WORKERS = 4
 LINK_POLL_S = 2.0
 TOOL_USE_TYPES = ("agent.tool_use", "agent.custom_tool_use")
 WATCH_EVENT_TYPES = (
@@ -161,6 +165,7 @@ class Deferred:
     action: str  # "signin-link", "refused", "no-tool-call"
     sandbox_name: None = None
     reused: bool = False
+    launched: bool = False  # no sandbox: the dispatcher counts it as deferred, not launched
 
 
 class RoutingLauncher:
@@ -186,6 +191,7 @@ class RoutingLauncher:
         sleep: Callable[[float], Any] = time.sleep,
         item_max_s: float = LINK_ITEM_MAX_S,
         poll_s: float = LINK_POLL_S,
+        link_executor: Executor | None = None,
     ) -> None:
         self.template = template
         self.environment_id = template.environment_id
@@ -206,6 +212,9 @@ class RoutingLauncher:
         self._session_client_for = session_client_for or self._session_client
         self._clock, self._sleep = clock, sleep
         self._item_max_s, self._poll_s = item_max_s, poll_s
+        self._links = link_executor or ThreadPoolExecutor(
+            max_workers=LINK_WORKERS, thread_name_prefix="cma-link"
+        )
 
     def __repr__(self) -> str:
         return (
@@ -230,7 +239,22 @@ class RoutingLauncher:
             self._audit(binding.principal_id, session_id, "launch", "")
             log.info("launched session=%s as its user", session_id)
             return result
-        return self._answer_with_link(work, binding)
+        # Answering with the link waits for the session's turn to end (up to item_max_s). Do it on the link pool,
+        # not in the dispatcher's launch slot; the item stays claimed until _answer_with_link releases it.
+        future = self._links.submit(self._answer_with_link, work, binding)
+        future.add_done_callback(self._log_link_failure)
+        if future.done():  # an inline executor (tests) has already answered
+            return future.result()
+        return Deferred(session_id, "answering")
+
+    def close(self) -> None:
+        """Stop the link pool without waiting (pending items are released by their lease)."""
+        self._links.shutdown(wait=False, cancel_futures=True)
+
+    @staticmethod
+    def _log_link_failure(future: Future) -> None:
+        if not future.cancelled() and future.exception() is not None:
+            log.error("sign-in link answer failed: %s", type(future.exception()).__name__)
 
     # ------------------------------------------------------------ the sign-in link
 
@@ -263,7 +287,7 @@ class RoutingLauncher:
                 minutes = int(CODE_TTL_S // 60)
                 message = (
                     "Databricks sign-in needed. Ask the user to open this link, sign in, confirm, and then reply "
-                    f"'done': {self.app_url}/connect?code={code} . The link works once and expires in {minutes} "
+                    f"'done': {self.app_url}/connect#code={code} . The link works once and expires in {minutes} "
                     "minutes. Don't call tools again until the user replies."
                 )
                 action = "signin-link"

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import hashlib
 import logging
 import os
@@ -35,7 +36,7 @@ from urllib.parse import urlsplit
 import anthropic
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from service import DispatcherService
@@ -59,6 +60,7 @@ log = logging.getLogger("cma_dispatcher_app.user")
 
 USER_MODE_ENV = "CMA_USER_MODE"
 USER_SANDBOX_PREFIX = "cmausr-"
+CODE_PURGE_INTERVAL_S = 3600.0
 TOKEN_HEADER = "x-forwarded-access-token"
 CSRF_HEADER = "x-cma-request"
 STATIC = Path(__file__).resolve().parent / "static"  # the /connect page
@@ -137,14 +139,18 @@ class Identity:
         self._cache: dict[str, tuple[float, Caller]] = {}
         self._lock = threading.Lock()
 
-    def resolve(self, token: str) -> tuple[Caller, WorkspaceClient]:
-        """The caller and a client that acts as them. Raises if the token is not accepted."""
+    def resolve(self, token: str, *, fresh: bool = False) -> tuple[Caller, WorkspaceClient]:
+        """The caller and a client that acts as them. Raises if the token is not accepted.
+
+        ``fresh`` skips the cache: state-changing steps (connecting a session) always re-check the token with
+        Databricks, so a revoked token can't connect a session during the cache window.
+        """
         client = self._make(self._host, token)
         key = hashlib.sha256(token.encode()).hexdigest()
         now = self._clock()
         with self._lock:
             hit = self._cache.get(key)
-        if hit and hit[0] > now:
+        if hit and hit[0] > now and not fresh:
             return hit[1], client
         me = client.current_user.me()
         caller = Caller(principal_id=me.id or "", user_name=me.user_name or "")
@@ -206,6 +212,7 @@ class UserMode:
     watcher: DispatcherService | None = None
     # "off" (the default), "on", or "unavailable (<error code>)" when user_memory=1 but the API isn't usable.
     memory_state: str = "off"
+    _purge_stop: threading.Event = field(default_factory=threading.Event, repr=False)
     _agent_names: dict[str, str] = field(default_factory=dict)
 
     def agent_name(self, agent_id: str) -> str:
@@ -266,16 +273,37 @@ class UserMode:
         )
 
     def start(self) -> None:
-        """Start the env-U watcher (the only poller of env U)."""
+        """Start the env-U watcher (the only poller of env U) and the hourly purge of expired sign-in codes."""
         self.watcher = DispatcherService(
             self.routing_launcher(),  # type: ignore[arg-type] - quacks like a launcher for the dispatcher
             make_dispatcher=_watcher_dispatcher,
         )
         self.watcher.start()
+        self._purge_stop.clear()
+        threading.Thread(target=self._purge_forever, name="cma-code-purge", daemon=True).start()
+
+    def purge_codes(self) -> int:
+        """One purge of sign-in codes that expired more than a day ago. Never raises."""
+        try:
+            gone = self.store.purge_expired_codes()
+        except Exception as e:  # noqa: BLE001 - the next sweep retries; sign-in is unaffected
+            log.warning("sign-in code purge failed: %s", type(e).__name__)
+            return 0
+        if gone:
+            log.info("purged %d expired sign-in code(s)", gone)
+        return gone
+
+    def _purge_forever(self) -> None:
+        while not self._purge_stop.wait(CODE_PURGE_INTERVAL_S):
+            self.purge_codes()
 
     async def stop(self) -> None:
+        self._purge_stop.set()
         if self.watcher:
             await self.watcher.stop()
+            launcher = getattr(self.watcher, "launcher", None)
+            if hasattr(launcher, "close"):
+                launcher.close()
 
 
 def _watcher_dispatcher(
@@ -339,11 +367,11 @@ def _token(request: Request) -> str:
     return token
 
 
-async def _caller(request: Request) -> tuple[Caller, WorkspaceClient]:
+async def _caller(request: Request, *, fresh: bool = False) -> tuple[Caller, WorkspaceClient]:
     user: UserMode = request.app.state.user
     token = _token(request)
     try:
-        return await asyncio.to_thread(user.identity.resolve, token)
+        return await asyncio.to_thread(functools.partial(user.identity.resolve, token, fresh=fresh))
     except Exception as e:  # noqa: BLE001 - never echo the token or the SDK message
         log.info("rejected a user token: %s", type(e).__name__)
         raise HTTPException(
@@ -404,12 +432,16 @@ def add_routes(app: FastAPI) -> None:
     async def connect_js():
         return _script(STATIC / "connect.js")
 
-    @app.get("/api/connect")
-    async def connect_info(request: Request, code: str = Query(min_length=16, max_length=100)):
-        """What a sign-in link is for, before the user confirms. Consumes nothing."""
+    @app.post("/api/connect/info", dependencies=[Depends(_csrf_guard)])
+    async def connect_info(body: Connect, request: Request):
+        """What a sign-in link is for, before the user confirms. Consumes nothing.
+
+        POST with the code in the body (not ``?code=``): the link carries the code in the URL fragment, which
+        browsers never send, so it never appears in a URL the Apps proxy or the App could log.
+        """
         user: UserMode = request.app.state.user
         caller, _ = await _caller(request)
-        session_id = await _db(user.store.peek_code, code_hash(code))
+        session_id = await _db(user.store.peek_code, code_hash(body.code))
         if not session_id:
             raise HTTPException(404, "this sign-in link has expired or was already used")
         binding = await _db(user.store.binding, session_id)
@@ -431,7 +463,9 @@ def add_routes(app: FastAPI) -> None:
     async def connect(body: Connect, request: Request):
         """Redeem a sign-in link: bind the session to the caller (unless already theirs) and leave a ticket."""
         user: UserMode = request.app.state.user
-        caller, client = await _caller(request)
+        caller, client = await _caller(
+            request, fresh=True
+        )  # never the cached identity for a state change
         hashed = code_hash(body.code)
         gone = HTTPException(404, "this sign-in link has expired or was already used")
         session_id = await _db(user.store.peek_code, hashed)

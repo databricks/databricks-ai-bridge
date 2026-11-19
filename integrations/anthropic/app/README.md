@@ -23,7 +23,7 @@ Sandbox. Nothing runs on a laptop.
 
 1. **Start a session** in the Claude Console with an allowed agent, on the **user environment**, and ask a question.
 2. **Sign in.** The agent's first tool call returns an error whose text is a one-time link:
-   *"Databricks sign-in needed … open `<app>/connect?code=…` … then reply 'done'"*. The agent passes it on. The command
+   *"Databricks sign-in needed … open `<app>/connect#code=…` … then reply 'done'"*. The agent passes it on. The command
    didn't run: no sandbox exists yet.
 3. **Confirm.** The link opens the App. Databricks signs the user in and, the first time, asks for consent to the App's
    scopes. The page shows the session, the agent and who is signed in. **Connect this session** binds the session to
@@ -45,10 +45,13 @@ new link. Only the session's owner can redeem it.
     tool results.
 - **Identity.** Databricks Apps forwards the user's downscoped token in `x-forwarded-access-token`. `current_user.me()`
   with it gives the user's immutable id. Sessions are bound to that id in Lakebase, never to an email. The token is
-  never logged, stored or returned (a digest is cached for 60 s), and a ticket expires before the token does (at most
-  30 minutes).
+  never logged, stored or returned. A digest is cached for 60 s to show the `/connect` page; the confirm step always
+  re-checks the token with Databricks. A ticket expires before the token does (at most 30 minutes).
 - **Sign-in codes** are random, stored only as SHA-256 hashes, valid for 15 minutes and single-use (redeeming inserts
-  the hash into `connect_uses`; the store never updates or deletes anything).
+  the hash into `connect_uses`). The link carries the code in the URL fragment (`#code=`), which browsers never send,
+  so it doesn't appear in any URL the Apps proxy or the App logs; the page posts it in request bodies. Bindings and
+  the audit trail are append-only; an hourly sweep deletes sign-in codes, and their use rows, a day after they
+  expire.
 - **Refusals.** `/connect` never takes over a session bound to another user (404), and refuses sessions on another
   environment, agents not in `user_agents`, and sessions with Anthropic memory stores or vaults.
 - **Requests.** `POST /api/connect` needs `X-CMA-Request: 1` and an `Origin` matching the App host, and rejects
@@ -57,7 +60,8 @@ new link. Only the session's owner can redeem it.
 ## Identity and isolation
 
 - **User mode:** each user's sandboxes are owned by that user and act with their grants, capped to the App's
-  `user_api_scopes` (below). The App's service principal can't list them.
+  `user_api_scopes` (below). The App's service principal can't list them. Sessions on the user environment run with the Databricks access of whoever signs in to connect them. Anyone who can start a session on this environment can ask another user to connect it. Keep this environment's membership limited to trusted users. (A dedicated Anthropic workspace
+  for the user environment is the simplest way to do that.)
 - **Service mode:** every tool call, Genie One question and Unity Catalog read uses the App's service principal.
   Anyone who can create a session on the service environment gets that access, so give the App its own environment
   (ideally its own Anthropic workspace) and grant the principal only data every such user may see.
@@ -209,10 +213,10 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
 | Route | Purpose |
 |---|---|
 | `GET /` | Status page (counters only) |
-| `GET /api/status` | The same as JSON, plus this deployment's service-mode sandboxes by state |
+| `GET /api/status` | The same as JSON, plus this deployment's service-mode sandboxes by state. `launched` counts sandboxes started, `deferred` items answered with a sign-in link or a refusal, and `slow_starts` workers still not ready after the start timeout (left running) |
 | `GET /api/health` | 200 while the poll loop runs; 503 after three consecutive poll-loop crashes. The Apps proxy answers `/healthz` itself, so that path never reaches the App |
 | `GET /connect`, `GET /connect.js` | User mode: the sign-in link page (strict CSP) and its script |
-| `GET /api/connect?code=` | User mode: what a link is for (consumes nothing) |
+| `POST /api/connect/info` | User mode: what a link is for (consumes nothing; the code is in the body) |
 | `POST /api/connect` | User mode: redeem a link (bind the session, leave a ticket) |
 
 - **Logs:** `databricks apps logs cma-dispatcher-<target>`. Claims and launches are logged with session and work

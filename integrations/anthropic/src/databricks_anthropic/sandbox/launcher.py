@@ -160,6 +160,11 @@ class LaunchResult:
     seconds: float
     # True when a worker for this same work item was already running and was left in place.
     reused: bool = False
+    # False when the worker was still starting after start_timeout_s: it is left running, but the launch is not a
+    # confirmed success (the dispatcher counts it as a slow start).
+    ready: bool = True
+    # A sandbox was started for this item (the user-mode watcher also records items it answered itself).
+    launched: bool = True
 
 
 @dataclass(kw_only=True)
@@ -354,8 +359,10 @@ class DatabricksSandboxLauncher:
             "CMA_MAX_IDLE": str(self.max_idle_s),
             "CMA_HEARTBEAT_SECONDS": str(self.heartbeat_s),
             "CMA_ON_EXIT": "delete" if self.lifecycle == "ephemeral" else "stop",
-            # Partner attribution for the agent's own Databricks SDK/CLI calls (tool subprocesses inherit it).
+            # Partner attribution for the agent's own Databricks SDK/CLI calls (tool subprocesses inherit it),
+            # and the connector's version for the worker's own User-Agent (it runs without this package).
             **_useragent.UPSTREAM_ENV,
+            "CMA_PRODUCT_VERSION": _useragent.PRODUCT_VERSION,
         }
         if self.export_volume_path:
             env["CMA_EXPORT_VOLUME"] = self.export_volume_path.rstrip("/")
@@ -442,7 +449,7 @@ class DatabricksSandboxLauncher:
                 pid_path=WORKER_PID,
                 envs=envs,
             )
-            self._wait_until_ready(name, pid)
+            ready = self._wait_until_ready(name, pid)
         except BaseException:
             # Never leak a sandbox we just created if bring-up fails.
             if created:
@@ -453,21 +460,25 @@ class DatabricksSandboxLauncher:
             raise
         seconds = time.monotonic() - t0
         log.info(
-            "launched worker session=%s work=%s sandbox=%s pid=%s created=%s in %.1fs",
+            "launched worker session=%s work=%s sandbox=%s pid=%s created=%s ready=%s in %.1fs",
             session_id,
             work.id,
             name,
             pid,
             created,
+            ready,
             seconds,
         )
-        return LaunchResult(sandbox_name=name, pid=pid, created=created, seconds=seconds)
+        return LaunchResult(
+            sandbox_name=name, pid=pid, created=created, seconds=seconds, ready=ready
+        )
 
-    def _wait_until_ready(self, name: str, pid: int) -> None:
-        """Wait for the worker's ready marker. Raise with its log if it exits first.
+    def _wait_until_ready(self, name: str, pid: int) -> bool:
+        """Wait for the worker's ready marker; True once it's there. Raise with its log if it exits first.
 
         Liveness, readiness and the log tail come from one call each time, so the reason survives even if
-        the sandbox goes away. A worker that is still starting after ``start_timeout_s`` is left running.
+        the sandbox goes away. A worker that is still starting after ``start_timeout_s`` is left running, and
+        this returns False so the launch isn't reported as a normal success.
         """
         deadline = time.monotonic() + self.start_timeout_s
         while True:
@@ -481,18 +492,18 @@ class DatabricksSandboxLauncher:
                     f"{name} was deleted while its worker was starting; see the App or dispatcher log"
                 ) from e
             if ready:
-                return
+                return True
             if not alive:
                 raise _ops.SandboxCommandError(
                     f"worker exited during start-up in {name}:\n{log_tail}"
                 )
             if time.monotonic() > deadline:
                 log.warning(
-                    "worker in %s still starting after %.0fs; leaving it running",
+                    "worker in %s not ready after %.0fs; leaving it running (counted as a slow start)",
                     name,
                     self.start_timeout_s,
                 )
-                return
+                return False
 
     def _still_usable(self, name: str) -> bool:
         """False if the sandbox is gone; otherwise make sure it is running (a finishing worker may have stopped it)."""

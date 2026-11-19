@@ -15,18 +15,44 @@ https://databrickslabs.github.io/partner-architecture/isv-partners/telemetry-att
   ``DATABRICKS_{SDK,CLI}_UPSTREAM[_VERSION]`` through ``subprocess_env()``; the in-sandbox worker (its own process)
   sets them for the agent's SDK and CLI calls; the App sets them in its ``config.env``.
 
-``sandbox/worker.py`` runs without this package, so it repeats the two constants; keep them equal.
+The version is read from the installed package, so it never needs editing per release. ``sandbox/worker.py`` runs
+without this package installed, so the launcher passes the version to it as ``CMA_PRODUCT_VERSION``.
 """
 
 from __future__ import annotations
 
 import os
+import re
+from importlib import metadata
 from typing import Any
 
 from databricks.sdk import useragent
 
 PRODUCT_NAME = "ClaudeManagedAgents-DatabricksSandbox"
-PRODUCT_VERSION = "0.1.0"
+
+
+UNKNOWN_VERSION = "0.0.0"  # the SDK only accepts semantic versions, so "unknown" is spelled 0.0.0
+
+
+def semver(version: str) -> str:
+    """A PEP 440 version as the semantic version the SDK's User-Agent requires (``0.1.0.dev0`` -> ``0.1.0-dev0``)."""
+    match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?[.-]?([A-Za-z0-9.]*)", version or "")
+    if not match:
+        return UNKNOWN_VERSION
+    major, minor, patch, rest = match.groups()
+    base = f"{major}.{minor}.{patch or 0}"
+    rest = re.sub(r"[^A-Za-z0-9]", "", rest)
+    return f"{base}-{rest}" if rest else base
+
+
+def _installed_version() -> str:
+    try:
+        return semver(metadata.version("databricks-anthropic"))
+    except metadata.PackageNotFoundError:  # e.g. run from a source tree that isn't installed
+        return UNKNOWN_VERSION
+
+
+PRODUCT_VERSION = _installed_version()
 
 UPSTREAM_ENV = {
     "DATABRICKS_SDK_UPSTREAM": PRODUCT_NAME,

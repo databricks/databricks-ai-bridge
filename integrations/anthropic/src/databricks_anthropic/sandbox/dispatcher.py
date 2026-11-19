@@ -55,8 +55,12 @@ class DispatcherStatus:
     polling: bool = False
     last_claim_at: float | None = None
     claimed: int = 0
-    launched: int = 0
+    launched: int = 0  # sandboxes started for a work item
     reused: int = 0
+    # A worker still not ready after start_timeout_s: left running, but not a confirmed success.
+    slow_starts: int = 0
+    # Items answered without a sandbox (the user-mode watcher's sign-in links and refusals).
+    deferred: int = 0
     failed: int = 0
     skipped: int = 0
     retries: int = 0
@@ -127,10 +131,15 @@ class DatabricksSandboxDispatcher:
                     result = await self._launch_with_retries(loop, pool, work)
                     self.results.append(result)
                     del self.results[:-MAX_RECORDED]  # bounded history in poll mode
-                    if getattr(result, "reused", False):
+                    if not getattr(result, "launched", True):
+                        status.deferred += 1
+                    elif getattr(result, "reused", False):
                         status.reused += 1
                     else:
                         status.launched += 1
+                        if not getattr(result, "ready", True):
+                            status.slow_starts += 1
+                            status.last_error = "WorkerNotReady"
                 except Exception as e:  # noqa: BLE001 - one bad item must not stop the dispatcher
                     detail = f"{type(e).__name__}: {e}"
                     self.failures.append((work.data.id, detail))

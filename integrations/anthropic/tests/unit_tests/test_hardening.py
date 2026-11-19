@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -275,7 +275,13 @@ async def test_genie_large_answer_stays_valid_json():
 # ---------------------------------------------------------------- copies worker.py keeps
 
 
-def test_worker_copies_match_package():
+def test_worker_copies_match_package(monkeypatch):
+    """The worker repeats the product name; its version comes from the launcher (CMA_PRODUCT_VERSION)."""
+    env = make_launcher()._worker_env(
+        cast(Any, SimpleNamespace(id="work_1", data=SimpleNamespace(id="sesn_1"))), "sandboxes/x"
+    )
+    assert env["CMA_PRODUCT_VERSION"] == _useragent.PRODUCT_VERSION
+    monkeypatch.setenv("CMA_PRODUCT_VERSION", env["CMA_PRODUCT_VERSION"])
     worker = load_worker()
     assert (worker.PRODUCT_NAME, worker.PRODUCT_VERSION, worker.UPSTREAM_ENV) == (
         _useragent.PRODUCT_NAME,
@@ -283,6 +289,36 @@ def test_worker_copies_match_package():
         _useragent.UPSTREAM_ENV,
     )
     assert worker._genie_wait_tool(None).name == mcp.GENIE_WAIT_DECLARATION["name"]
+
+
+def test_the_version_is_read_from_the_installed_package():
+    from importlib import metadata
+
+    assert _useragent.PRODUCT_VERSION == _useragent.semver(metadata.version("databricks-anthropic"))
+
+
+@pytest.mark.parametrize(
+    "pep440, expected",
+    [
+        ("0.1.0", "0.1.0"),
+        ("0.1.0.dev0", "0.1.0-dev0"),
+        ("1.2.3rc1", "1.2.3-rc1"),
+        ("2.0", "2.0.0"),
+        ("0.1.0.post1", "0.1.0-post1"),
+        ("", "0.0.0"),
+        ("garbage", "0.0.0"),
+    ],
+)
+def test_versions_become_semantic_versions_the_sdk_accepts(pep440, expected):
+    from databricks.sdk import useragent
+
+    assert _useragent.semver(pep440) == expected
+    useragent._match_semver(expected)  # raises if the SDK would refuse it
+
+
+def test_the_worker_falls_back_to_0_0_0_without_the_launcher(monkeypatch):
+    monkeypatch.delenv("CMA_PRODUCT_VERSION", raising=False)
+    assert load_worker().PRODUCT_VERSION == "0.0.0"
 
 
 def test_worker_pins_are_exact_and_within_pyproject_ranges():
@@ -322,5 +358,4 @@ def test_dev_copies_of_the_product_match_the_package():
         path = root / rel
         if not path.exists():  # the upstream copy of the package has no dev/ folder
             continue
-        text = path.read_text()
-        assert _useragent.PRODUCT_NAME in text and f'"{_useragent.PRODUCT_VERSION}"' in text, rel
+        assert _useragent.PRODUCT_NAME in path.read_text(), rel

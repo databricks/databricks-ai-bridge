@@ -1,5 +1,6 @@
 // The sign-in link page. No inline script (the page's CSP is script-src 'self'); text is only written with
-// textContent. The code comes from the link and is sent back only to this App.
+// textContent. The code comes from the link's fragment (#code=...), which the browser never sends to a server, and is
+// sent back only to this App, in request bodies.
 (function () {
   "use strict";
   function $(id) { return document.getElementById(id); }
@@ -25,14 +26,14 @@
     return data;
   }
 
-  var code = new URLSearchParams(window.location.search).get("code") || "";
+  var code = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("code") || "";
   // Keep the code out of the address bar and history once read.
   if (window.history && window.history.replaceState) window.history.replaceState(null, "", "/connect");
 
   async function load() {
     if (!code) { $("intro").textContent = "This link has no sign-in code."; return; }
     try {
-      var info = await api("GET", "/api/connect?code=" + encodeURIComponent(code));
+      var info = await api("POST", "/api/connect/info", { code: code });
       $("session").textContent = info.session_id;
       $("agent").textContent = info.agent || "(unknown)";
       $("user").textContent = info.signed_in_as;
