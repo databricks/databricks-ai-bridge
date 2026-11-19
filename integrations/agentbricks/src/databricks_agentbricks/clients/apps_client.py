@@ -29,6 +29,7 @@ from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.local_ports import accepts_connections
 from databricks_agentbricks.diagnostics import CommandDiagnostics
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.profiles import auth_login_command
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
 
@@ -275,7 +276,7 @@ class AppsClient:
         raise self._existence_check_failed(name, detail)
 
     def _existence_check_failed(self, name: str, detail: str) -> AgentCliError:
-        login = f"agentbricks login --profile {self._profile or '<profile>'}"
+        login = auth_login_command(self._profile)
         return AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
             hint=f"{detail or 'The `databricks apps get` command failed without a message.'}\n"
@@ -970,7 +971,7 @@ def add_tool_resources_for_rollout(
 
 
 def _get_run_local_env() -> dict[str, str]:
-    """Our environment without ``VIRTUAL_ENV`` or ``PORT``.
+    """Our environment without values the local manifest or run-local must determine.
 
     ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
     requirements with ``uv pip``, which targets ``$VIRTUAL_ENV`` first: an activated venv would get
@@ -979,5 +980,12 @@ def _get_run_local_env() -> dict[str, str]:
     ``run-local`` sets ``PORT`` to ``--app-port`` only when it isn't already set, and the templates
     listen on ``PORT``: a ``PORT`` exported for something else would move the app off the port the
     proxy forwards to.
+
+    The local manifest explicitly supplies the selected profile (or clears it when project
+    credentials take precedence). Inheriting a shell profile could bypass that choice.
     """
-    return {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "PORT")}
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("VIRTUAL_ENV", "PORT", "DATABRICKS_CONFIG_PROFILE")
+    }

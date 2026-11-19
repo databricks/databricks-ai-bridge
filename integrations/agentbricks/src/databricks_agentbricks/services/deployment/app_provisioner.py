@@ -80,7 +80,7 @@ def _app_lookup_error(name: DeploymentName, exc: Exception) -> AgentCliError:
     return AgentCliError(
         f"Could not check whether deployment '{name}' exists.",
         error_code=getattr(exc, "error_code", None),
-        hint=f"{exc}\nIf the profile isn't signed in, run `agentbricks login`; otherwise check the "
+        hint=f"{exc}\nIf the profile isn't signed in, run `agentbricks auth login <profile>`; otherwise check the "
         "network and the profile's host, then rerun the command.",
     )
 

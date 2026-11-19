@@ -634,19 +634,6 @@ class DeployService:
         """The authenticated target workspace for a background deployment's local record."""
         return WorkspaceIdentity.from_client(self._api_client_provider.get())
 
-    def check_auth(self) -> None:
-        """Fail now, rather than in a background deploy, when the profile can't authenticate."""
-        try:
-            _ = self._api_client_provider.get().current_user
-        except AgentCliError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - any auth/transport failure reads the same way
-            raise AgentCliError(
-                "Could not authenticate with the Databricks workspace.",
-                hint=f"{exc}\nRun `agentbricks login --profile <profile>` (or pass --profile), "
-                "then rerun the command.",
-            ) from exc
-
     def deploy(self, request: DeployRequest) -> DeployResult:
         """Deploy an agent by coordinating its project, resources, App, rollout, and grants.
 

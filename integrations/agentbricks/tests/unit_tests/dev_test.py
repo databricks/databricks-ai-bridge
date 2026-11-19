@@ -10,10 +10,11 @@ from unittest import mock
 import pytest
 import yaml
 from click.testing import CliRunner
+from databricks.sdk.errors import Unauthenticated
 
 from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.cli import telemetry
-from databricks_agentbricks.cli.app import agentbricks
+from databricks_agentbricks.cli.app import CliContext, agentbricks
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.clients.output_tail import OutputTail
 from databricks_agentbricks.diagnostics import FailureStage
@@ -170,10 +171,9 @@ def _write_agent_manifest(
     (source / "agent.toml").write_text(body)
 
 
-class _Ctx:
+class _Ctx(CliContext):
     def __init__(self, output: str = "text", profile=None):
-        self.output = output
-        self.profile = profile
+        super().__init__(profile, output)
         self.api_client_provider = types.SimpleNamespace(
             get=lambda: mock.Mock(
                 current_user="me@example.com", host="https://my-workspace.databricks.com"
@@ -194,6 +194,11 @@ def _run_local_starts(args, profile, *, on_ready=None, **kwargs):
 def _panel_text(output: str) -> str:
     """The success panel's rows joined back into text, without borders or padding."""
     return " ".join(line.strip("│ ") for line in output.splitlines() if line.startswith("│"))
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_profile(validated_profile):
+    """Preflight validation is the workspace boundary; these tests are not about workspace_auth."""
 
 
 @pytest.fixture(autouse=True)
@@ -518,7 +523,7 @@ def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.
     assert "Traces" not in result.output
 
 
-def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
+def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path, validated_profile):
     # No stores + no auth: obj.client() would raise, but with nothing bound it's never called (and
     # local tracing needs no workspace), so dev still runs the agent locally offline.
     from databricks_agentbricks.errors import AgentCliError
@@ -526,12 +531,12 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
 
-    class _OfflineCtx:
-        output = "text"
-        profile = None
-        api_client_provider = types.SimpleNamespace(
-            get=lambda: (_ for _ in ()).throw(AgentCliError("no databricks auth configured"))
-        )
+    class _OfflineCtx(CliContext):
+        def __init__(self):
+            super().__init__(None, "text")
+            self.api_client_provider = types.SimpleNamespace(
+                get=lambda: (_ for _ in ()).throw(AgentCliError("no databricks auth configured"))
+            )
 
         def client(self):
             raise AgentCliError("no databricks auth configured")
@@ -540,6 +545,7 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_OfflineCtx())
     assert result.exit_code == 0, result.output
     assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+    validated_profile.assert_not_called()
 
 
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
@@ -824,6 +830,127 @@ def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, m
     assert "VIRTUAL_ENV" not in env
     assert "PORT" not in env
     assert env["AGENTBRICKS_DEV_TEST_MARKER"] == "kept"
+
+
+def _write_project(source: pathlib.Path, env_file: str) -> None:
+    (source / "app.yaml").write_text("command: []\n")
+    (source / ".venv").mkdir()
+    (source / ".env").write_text(env_file)
+
+
+def _run_dev(source: pathlib.Path, monkeypatch, env_file: str, profile=None):
+    """Run `dev` on a fresh project; return the result, profile, manifest env, and runner env."""
+    _write_project(source, env_file)
+    profiles: list = []
+    manifest_env: dict[str, str] = {}
+    runner_env: dict[str, str] = {}
+
+    def _fake_databricks(cmd, profile, **kwargs):
+        profiles.append(profile)
+        manifest = yaml.safe_load(
+            (pathlib.Path(kwargs["cwd"]) / "app.agentbricksdev.yaml").read_text()
+        )
+        manifest_env.update({e["name"]: e["value"] for e in manifest["env"]})
+        runner_env.update(kwargs["env"])
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(source)], obj=_Ctx(profile=profile))
+    return result, profiles, manifest_env, runner_env
+
+
+@pytest.mark.parametrize(
+    ("flag_profile", "expected", "note"),
+    [
+        (None, "proj", "Using profile 'proj' (from .env) · https://ws.example"),
+        ("flag", "flag", "will run with profile 'flag' (from --profile), not .env's 'proj'"),
+    ],
+)
+def test_dev_runs_with_resolved_profile(
+    tmp_path, monkeypatch, validated_profile, write_databrickscfg, flag_profile, expected, note
+):
+    write_databrickscfg("[proj]\nhost = https://proj.example\n")
+    result, profiles, manifest_env, _ = _run_dev(
+        tmp_path, monkeypatch, "DATABRICKS_CONFIG_PROFILE=proj\n", profile=flag_profile
+    )
+
+    assert result.exit_code == 0, result.output
+    assert profiles == [expected]
+    assert manifest_env["DATABRICKS_CONFIG_PROFILE"] == expected
+    validated_profile.assert_called_once_with(expected)
+    assert note in " ".join(result.output.split())
+
+
+# A client id without its secret can't authenticate on its own, so the profile still applies.
+@pytest.mark.parametrize(
+    ("credentials", "uses_profile"),
+    [
+        ("DATABRICKS_TOKEN=dapi123\n", False),
+        ("DATABRICKS_CLIENT_ID=sp\nDATABRICKS_CLIENT_SECRET=secret\n", False),
+        ("DATABRICKS_CLIENT_ID=sp\n", True),
+    ],
+)
+def test_dev_env_credentials_replace_the_profile_only_when_complete(
+    tmp_path, monkeypatch, validated_profile, credentials, uses_profile
+):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "shell")
+    env_file = f"DATABRICKS_CONFIG_PROFILE=proj\n{credentials}"
+    result, runner_profiles, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, env_file)
+
+    assert result.exit_code == 0, result.output
+    assert runner_profiles == ["proj" if uses_profile else None]
+    assert manifest_env.get("DATABRICKS_CONFIG_PROFILE") == ("proj" if uses_profile else "")
+    assert "DATABRICKS_CONFIG_PROFILE" not in runner_env
+    assert validated_profile.call_args_list == ([mock.call("proj")] if uses_profile else [])
+
+
+def test_dev_unauthenticated_profile_fails_before_run_local(
+    tmp_path: pathlib.Path, monkeypatch, fail_validation
+):
+    _write_project(tmp_path, "DATABRICKS_CONFIG_PROFILE=proj\n")
+    fail_validation(Unauthenticated("expired"))
+    run_local = mock.Mock()
+    monkeypatch.setattr(dev_mod, "_databricks", run_local)
+
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    out = " ".join(result.output.split())
+    assert result.exit_code != 0
+    assert "Using profile 'proj' (from .env)" in out
+    assert "'proj' (from .env) isn't authenticated" in out
+    assert "agentbricks auth login proj" in out
+    run_local.assert_not_called()
+
+
+def test_dev_default_browser_auth_still_fails_before_run_local(
+    tmp_path: pathlib.Path, monkeypatch, write_databrickscfg, validated_profile
+):
+    _write_project(tmp_path, "")
+    write_project_metadata(tmp_path, framework="openai", template="agent-openai")
+    write_databrickscfg("[DEFAULT]\nhost = https://ws.example\nauth_type = external-browser\n")
+    run_local = mock.Mock()
+    monkeypatch.setattr(dev_mod, "_databricks", run_local)
+
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "agentbricks auth login" in result.output
+    validated_profile.assert_not_called()
+    run_local.assert_not_called()
+
+
+def test_dev_local_only_project_ignores_unrelated_ambient_profile(
+    tmp_path: pathlib.Path, monkeypatch, fail_validation
+):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "signed-out")
+    fail_validation(Unauthenticated("expired"))
+
+    result, runner_profiles, manifest_env, runner_env = _run_dev(tmp_path, monkeypatch, "")
+
+    assert result.exit_code == 0, result.output
+    assert runner_profiles == [None]
+    assert "DATABRICKS_CONFIG_PROFILE" not in manifest_env
+    assert "DATABRICKS_CONFIG_PROFILE" not in runner_env
 
 
 def test_dev_busy_port_renders_error_and_hint(tmp_path: pathlib.Path, monkeypatch):

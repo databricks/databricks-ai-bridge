@@ -546,6 +546,11 @@ def _workspace_client(ctx: Any) -> Any | None:
         return existing
     profile = getattr(obj, "profile", None)
     try:
+        from databricks_agentbricks.projects.profiles import sdk_auth_type
+
+        # Telemetry must not start browser consent after a command rejected noninteractive auth.
+        if sdk_auth_type(profile) == "external-browser":
+            return None
         # The shared AgentKit transport preserves the workspace-id host override used by profiles
         # that resolve through a regional host.  It still constructs the regular SDK
         # WorkspaceClient underneath, but keeps this telemetry path consistent with command auth.

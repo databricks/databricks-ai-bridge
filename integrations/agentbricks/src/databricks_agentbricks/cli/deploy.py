@@ -90,6 +90,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
+from databricks_agentbricks.services.workspace_auth import preflight_auth
 
 # `deployments wait` returns before a coding agent's usual 120 s command timeout, and exits with
 # EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
@@ -332,6 +333,14 @@ def deploy(
     ) or str(uuid.uuid4())
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
+    # Validate auth before any deployment work: an unauthenticated profile would otherwise fail
+    # deep into the deploy (or hang on a browser flow), far from anything actionable.
+    try:
+        validated = preflight_auth(obj.profile, obj.profile_info.source)
+    except Exception:
+        obj.announce_workspace()
+        raise
+    obj.api_client_provider.use(validated)
     request = DeployRequest(
         name=name,
         source=source,
@@ -348,7 +357,6 @@ def deploy(
         # Fail fast in the foreground on anything quick to check; the child repeats these checks.
         with diagnostics.phase(FailureStage.PREFLIGHT):
             prepared = service.prepare(request)
-            service.check_auth()
             workspace = service.workspace_identity()
         source_dir = pathlib.Path(source)
         log = deploy_state.log_path(source_dir, prepared.name)
@@ -404,6 +412,7 @@ def deployments() -> None:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
+    obj.announce_workspace()
     telemetry.begin_deployment()
     items = build_deploy_service(obj).list_deployments()
     names = [item["name"] for item in items if item.get("name")]
@@ -426,6 +435,7 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
+    obj.announce_workspace()
     telemetry.begin_deployment()
     data = build_deploy_service(obj).get(name)
     present_deployment_detail(
@@ -493,6 +503,7 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
+    obj.announce_workspace()
     build_deploy_service(obj).logs(name)
 
 
@@ -501,6 +512,7 @@ def deployments_logs(obj, name) -> None:
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
+    obj.announce_workspace()
     build_deploy_service(obj).start(name)
     present_started(name, output=obj.output)
 
@@ -515,6 +527,7 @@ def deployments_stop(obj, name, yes) -> None:
         click.confirm(
             f"Stop deployment '{name}'? This cannot be undone.", default=False, abort=True
         )
+    obj.announce_workspace()
     build_deploy_service(obj).stop(name)
     present_stopped(name, output=obj.output)
 
@@ -532,7 +545,15 @@ def deployments_stop(obj, name, yes) -> None:
 def deployments_delete(obj, name, delete_source, yes) -> None:
     """Delete a deployment, and its Runtime Store when managed provisioning is enabled."""
     service = build_deploy_service(obj)
-    target = service.delete_target(name)
+    # Managed cleanup reaches the shared API provider, whose notice uses the resolved host.
+    # A CLI-only delete has no SDK client to consult, so use the offline lookup there.
+    if not service.deletes_runtime_store_data():
+        obj.announce_workspace()
+    try:
+        target = service.delete_target(name)
+    except Exception:
+        obj.announce_workspace()
+        raise
     parts = [f"deployment '{name}'"]
     if not yes and service.deletes_runtime_store_data():
         parts.append("its Runtime Store data")
@@ -540,7 +561,11 @@ def deployments_delete(obj, name, delete_source, yes) -> None:
         parts.append(f"its source folder {target.source_path}")
     described = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     render.confirm_destroy(described, assume_yes=yes)
-    result = service.delete(target, delete_source=delete_source)
+    try:
+        result = service.delete(target, delete_source=delete_source)
+    except Exception:
+        obj.announce_workspace()
+        raise
     present_deleted(result, output=obj.output)
     if not result.confirmed or result.source_folder_status == "failed":
         raise click.exceptions.Exit(1)

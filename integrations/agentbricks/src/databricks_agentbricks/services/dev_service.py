@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import json
 import pathlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
@@ -55,6 +55,8 @@ class DevRequest:
     source: str
     prepare_environment: bool | None
     app_port: int | None
+    # Extra env for the local-only manifest (e.g. the resolved Databricks profile).
+    local_env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,17 @@ class DevService:
         self._free_port = free_port
         self._diagnostics = diagnostics or CommandDiagnostics()
 
+    def check_project(self, source: str) -> pathlib.Path:
+        """Fail unless ``source`` has an ``app.yaml`` to run; returns that path. Local only."""
+        app_yaml = pathlib.Path(source) / "app.yaml"
+        if not app_yaml.exists():
+            raise AgentCliError(
+                f"No app.yaml found at {app_yaml}.",
+                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
+                error_category="ERROR_CATEGORY_CONFIGURATION",
+            )
+        return app_yaml
+
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
         """Prepare a local run and clean up its temporary resources on context exit.
@@ -119,13 +132,7 @@ class DevService:
         """
         with self._diagnostics.phase(FailureStage.PROJECT):
             source_dir = pathlib.Path(request.source)
-            app_yaml = source_dir / "app.yaml"
-            if not app_yaml.exists():
-                raise AgentCliError(
-                    f"No app.yaml found at {app_yaml}.",
-                    hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
-                    error_category="ERROR_CATEGORY_CONFIGURATION",
-                )
+            app_yaml = self.check_project(request.source)
 
             project = self._project_resolver.load(source_dir)
             if project is not None and project.tools:
@@ -160,7 +167,7 @@ class DevService:
                     prepare_environment = not (source_dir / ".venv").exists()
                 self._diagnostics.prepare_environment = prepare_environment
 
-                local_env = dict(tracing_env)
+                local_env = {**request.local_env, **tracing_env}
                 if memory_store:
                     # Display-only: lets the chat app say the bound store connects on deploy. Memory
                     # itself stays off locally; nothing resolves a store from this.

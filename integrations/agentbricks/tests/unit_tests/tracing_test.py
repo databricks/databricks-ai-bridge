@@ -45,6 +45,9 @@ class _Ctx:
     def client(self):
         return mock.Mock(current_user=self._user, host="https://ws")
 
+    def announce_workspace(self) -> None:
+        pass
+
 
 def _project(tmp_path: pathlib.Path, *, experiment_name: str | None = None):
     body = _AGENT_TOML

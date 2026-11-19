@@ -32,9 +32,11 @@ class MLflowTraceClient:
         profile: Optional[str],
         *,
         mlflow_loader: Callable[[], Any] = _mlflow,
+        on_workspace: Callable[[], None] = lambda: None,
     ) -> None:
         self._profile = profile
         self._mlflow_loader = mlflow_loader
+        self._on_workspace = on_workspace
         self._module: Any | None = None
 
     @property
@@ -48,6 +50,7 @@ class MLflowTraceClient:
         return _workspace_uri(self._profile)
 
     def select_workspace(self) -> None:
+        self._on_workspace()
         self.module.set_tracking_uri(self.workspace_uri)
 
     def select_local(self, base_url: str) -> None:

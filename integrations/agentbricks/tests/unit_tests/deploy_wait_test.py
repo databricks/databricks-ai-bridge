@@ -30,6 +30,11 @@ _APP = "agent-bricks-demo"
 _DEAD_PID = 2**22 + 1
 
 
+@pytest.fixture(autouse=True)
+def _authenticated_profile(validated_profile):
+    """Deploy checks the profile's auth before any work; these tests exercise what follows."""
+
+
 @pytest.fixture
 def project(tmp_path: pathlib.Path) -> pathlib.Path:
     AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
@@ -258,7 +263,7 @@ def test_no_wait_passes_through_non_default_options(
     events: list[tuple] = []
     monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
     ctx = _real_deploy_context(_DeployApi(events))
-    ctx.profile = None
+    ctx.global_profile = None
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -370,24 +375,22 @@ def test_deploy_outside_a_project_fails_fast_and_writes_nothing(
 
 
 def test_no_wait_auth_failure_fails_synchronously_and_spawns_nothing(
-    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen, fail_validation
 ):
-    class _SignedOut(_DeployApi):
-        @property
-        def current_user(self):
-            raise ValueError("default auth: cannot configure default credentials")
+    from databricks.sdk.errors import Unauthenticated
 
+    fail_validation(Unauthenticated("expired"))
     events: list[tuple] = []
     monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["demo", "--source", str(project), "--no-wait"],
-        obj=_real_deploy_context(_SignedOut(events)),
+        obj=_real_deploy_context(_DeployApi(events)),
     )
 
     assert result.exit_code == 1
-    assert "Could not authenticate with the Databricks workspace." in result.output
+    assert "isn't authenticated" in result.output
     assert popen.calls == []
 
 

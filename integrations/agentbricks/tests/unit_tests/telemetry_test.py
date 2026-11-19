@@ -1234,6 +1234,11 @@ def test_failed_deploy_hook_records_known_outcome(
 ):
     """Run the command and service with fake workspace calls and an optional failing disk write."""
     AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    monkeypatch.setattr(
+        deploy_mod,
+        "preflight_auth",
+        lambda profile, source: SimpleNamespace(host="https://workspace.example"),
+    )
     events = []
     api = _DeployApi(events)
     runner = _DeployRunner(events)
@@ -1258,7 +1263,11 @@ def test_failed_deploy_hook_records_known_outcome(
         write_state(path, state)
 
     monkeypatch.setattr(deploy_mod, "_databricks", fail_rollout)
-    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(
+        cli,
+        "ApiClientProvider",
+        lambda _, on_first_use=None: SimpleNamespace(get=lambda: api, use=lambda client: None),
+    )
     monkeypatch.setattr(deploy_state, "write_state", write)
     monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
     monkeypatch.setattr(
@@ -1289,11 +1298,20 @@ def test_preparation_failure_hook_keeps_outcome_unspecified(
     tmp_path, monkeypatch, background_child
 ):
     AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
+    monkeypatch.setattr(
+        deploy_mod,
+        "preflight_auth",
+        lambda profile, source: SimpleNamespace(host="https://workspace.example"),
+    )
     events = []
     api = _DeployApi(events)
     logs = []
     monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
-    monkeypatch.setattr(cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: api))
+    monkeypatch.setattr(
+        cli,
+        "ApiClientProvider",
+        lambda _, on_first_use=None: SimpleNamespace(get=lambda: api, use=lambda client: None),
+    )
     monkeypatch.setattr(deploy_mod.signal, "signal", lambda *args: None)
     monkeypatch.setattr(
         telemetry, "emit_command", lambda ctx, **kwargs: logs.append(_log(ctx, **kwargs))
@@ -1396,7 +1414,9 @@ def test_read_command_links_join_one_command_event(
     # Fake only external Apps reads and workspace transport; the command hook, attribution,
     # event construction, and emitter all execute together.
     monkeypatch.setattr(
-        cli, "ApiClientProvider", lambda _: SimpleNamespace(get=lambda: client, _client=client)
+        cli,
+        "ApiClientProvider",
+        lambda _, on_first_use=None: SimpleNamespace(get=lambda: client, _client=client),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -1470,3 +1490,23 @@ def test_read_command_failure_keeps_outcome_unspecified(monkeypatch, command):
     assert uuid.UUID(log["invocation_id"]).version == 4
     assert log["details_link_emitted"] is False
     assert log["deployment_outcome"] == "DEPLOYMENT_OUTCOME_UNSPECIFIED"
+
+
+def test_browser_profile_rejection_never_constructs_telemetry_client(
+    tmp_path, monkeypatch, write_databrickscfg
+):
+    from databricks_agentkit import _api_client
+
+    write_databrickscfg("[browser]\nhost = https://ws.example\nauth_type = external-browser\n")
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "0")
+    construct = mock.Mock(side_effect=AssertionError("browser auth must not start"))
+    monkeypatch.setattr(_api_client, "_workspace_client", construct)
+
+    result = CliRunner().invoke(
+        cli.agentbricks, ["--profile", "browser", "dev", "--source", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "auth login browser" in result.output
+    construct.assert_not_called()

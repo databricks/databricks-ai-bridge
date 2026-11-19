@@ -9,6 +9,7 @@ rather than re-implementing it.
 
 from __future__ import annotations
 
+import pathlib
 from typing import Optional
 
 import click
@@ -17,10 +18,11 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
-from databricks_agentbricks.diagnostics import CommandDiagnostics
+from databricks_agentbricks.diagnostics import CommandDiagnostics, FailureStage
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
+    announce_agent_profile,
     announce_bound_resources,
     announce_starting,
     local_trace_label,
@@ -29,22 +31,38 @@ from databricks_agentbricks.presentation.dev import (
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
+from databricks_agentbricks.projects.profiles import SOURCE_FLAG
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
     DevService,
     _dev_entry_point,  # noqa: F401 - compatibility re-export for existing callers
 )
+from databricks_agentbricks.services.workspace_auth import preflight_auth
+
+# `.env` credential sets that authenticate the agent on their own, without a profile.
+_ENV_CREDENTIALS = (
+    ("DATABRICKS_TOKEN",),
+    ("DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"),
+)
 
 
-def build_dev_service(obj) -> DevService:
+def _env_credential(env_file: dict[str, str]) -> Optional[str]:
+    """The explicit credential `.env` sets (e.g. ``DATABRICKS_TOKEN``), or None."""
+    for names in _ENV_CREDENTIALS:
+        if all(env_file.get(name) for name in names):
+            return "/".join(names)
+    return None
+
+
+def build_dev_service(obj, runner_profile: Optional[str]) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     diagnostics = getattr(obj, "diagnostics", None) or CommandDiagnostics()
     obj.diagnostics = diagnostics
     diagnostics.app_listened = False
     return DevService(
         project_resolver=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=_databricks, diagnostics=diagnostics),
+        apps_client=AppsClient(runner_profile, runner=_databricks, diagnostics=diagnostics),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
         free_port=free_port,
@@ -79,8 +97,9 @@ def dev(
     prints where to reach it: the chat UI if the project has one, otherwise a sample request against
     the agent's API. If the agent fails to start, you get an error instead.
 
-    Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
-    serving through the AI Gateway on that profile — so there are no model keys to set up.
+    Auth uses your Databricks profile, resolved in this order: `-p`, the project's `.env`,
+    then `DATABRICKS_CONFIG_PROFILE`. The agent reaches Databricks model serving through the AI
+    Gateway on that profile — so there are no model keys to set up.
 
     Under the hood this wraps `databricks apps run-local`: it reads the command + env from
     `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
@@ -96,15 +115,62 @@ def dev(
     `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make;
     that all happens at `agentbricks deploy` time.
     """
-    service = build_dev_service(obj)
+    # The project's `.env` profile is already selected (see `CliContext.select_profile`); the
+    # locally running agent reads the same file, which dev also consults for explicit credentials.
+    env_file = obj.project_env(pathlib.Path(source))
+    env_credential = _env_credential(env_file)
+    project_profile = env_file.get("DATABRICKS_CONFIG_PROFILE")
+    # A scaffolded agent uses workspace model serving. An explicit flag or project profile also
+    # chooses a workspace for this run; ambient SDK configuration alone need not affect local code.
+    has_workspace_target = not env_credential and bool(
+        obj.profile_info.source == SOURCE_FLAG
+        or project_profile
+        or (pathlib.Path(source) / ".agentbricks" / "project.toml").is_file()
+    )
+    runner_profile = obj.profile if has_workspace_target else None
+    # Explicit `.env` credentials authenticate the agent directly, so the profile needs no
+    # validation. Clear an inherited profile in the manifest so load_dotenv(override=False)
+    # cannot retain the shell's selection in the local agent.
+    uses_env_credentials = bool(obj.profile and env_credential)
+    local_env: dict[str, str] = {}
+    if env_credential:
+        local_env["DATABRICKS_CONFIG_PROFILE"] = ""
+    elif runner_profile:
+        # Landing the profile in the dev manifest puts it in the agent's process env, where it
+        # beats `.env` because the template loads dotenv with override=False.
+        local_env["DATABRICKS_CONFIG_PROFILE"] = runner_profile
+
+    service = build_dev_service(obj, runner_profile)
+    with obj.diagnostics.phase(FailureStage.PROJECT):
+        service.check_project(source)
+    if has_workspace_target:
+        try:
+            validated = preflight_auth(obj.profile, obj.profile_info.source)
+        except Exception:
+            obj.announce_workspace()
+            raise
+        obj.announce_workspace(validated.host)
+    elif env_credential and not uses_env_credentials:
+        obj.announce_workspace()
     with service.prepare(
-        DevRequest(source=source, prepare_environment=prepare_environment, app_port=app_port)
+        DevRequest(
+            source=source,
+            prepare_environment=prepare_environment,
+            app_port=app_port,
+            local_env=local_env,
+        )
     ) as plan:
         if plan.preview.tracing_warning is not None:
             render.diagnostic(
                 "warning", plan.preview.tracing_warning, help=plan.preview.tracing_help
             )
         announce_bound_resources(plan.preview)
+        announce_agent_profile(
+            runner_profile,
+            obj.profile_info.source,
+            env_file.get("DATABRICKS_CONFIG_PROFILE"),
+            env_credential=env_credential if uses_env_credentials else None,
+        )
         announce_starting()
         # The green panel waits until the agent answers on its port, so a failed start (bad auth, a
         # build error, a crash on import) never looks like a successful one.

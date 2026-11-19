@@ -30,6 +30,16 @@ _DETAILS_URL = f"https://workspace.example/ml/agents/details/{_APP}?o=123"
 pytestmark = pytest.mark.usefixtures("deployable_tmp_path")
 
 
+@pytest.fixture(autouse=True)
+def _fake_deploy_auth(monkeypatch):
+    # These tests exercise links with fake workspace clients; no profile is signed in.
+    monkeypatch.setattr(
+        deploy_mod,
+        "preflight_auth",
+        lambda profile, source: types.SimpleNamespace(host="https://workspace.example"),
+    )
+
+
 @pytest.mark.parametrize("background", [False, True])
 def test_printed_deploy_link_matches_the_emitted_command(tmp_path, monkeypatch, background):
     from urllib.parse import parse_qs, urlsplit
@@ -250,7 +260,10 @@ def test_local_wait_verifies_workspace_and_live_gates(
         workspace_id=workspace_id,
     )
     ctx = types.SimpleNamespace(
-        profile="different-profile", output=output, api_client_provider=wait_provider
+        profile="different-profile",
+        output=output,
+        api_client_provider=wait_provider,
+        announce_workspace=lambda *args: None,
     )
     result = CliRunner().invoke(
         deploy_mod.deployments_wait, [_APP, "--source", str(tmp_path), "--timeout", "0"], obj=ctx
@@ -335,7 +348,9 @@ def test_get_and_list_keep_app_links_and_gate_details(monkeypatch, command, outp
 
     monkeypatch.setattr(deploy_mod, "_databricks", run)
     provider, api = _provider({"flags": {_UI_FLAG: ui, _PREVIEW: beta}})
-    ctx = types.SimpleNamespace(profile="test", output=output, api_client_provider=provider)
+    ctx = types.SimpleNamespace(
+        profile="test", output=output, api_client_provider=provider, announce_workspace=lambda: None
+    )
     result = CliRunner().invoke(
         getattr(deploy_mod, f"deployments_{command}"),
         [_APP] if command == "get" else [],
@@ -387,7 +402,12 @@ def test_empty_list_skips_flag_lookup(monkeypatch):
     )
     result = CliRunner().invoke(
         deploy_mod.deployments_list,
-        obj=types.SimpleNamespace(profile="test", output="json", api_client_provider=provider),
+        obj=types.SimpleNamespace(
+            profile="test",
+            output="json",
+            api_client_provider=provider,
+            announce_workspace=lambda: None,
+        ),
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == []
