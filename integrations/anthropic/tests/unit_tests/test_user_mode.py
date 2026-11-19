@@ -643,12 +643,10 @@ def test_watcher_answers_tool_calls_with_a_one_time_link_when_no_ticket_waits():
     )
     assert all(e["is_error"] for e in sessions.sent)
     text = sessions.sent[0]["content"][0]["text"]
-    found = re.search(r"/connect#code=([\w-]+)", text)
+    found = re.search(r"/connect\?code=([A-Za-z0-9]+)", text)
     assert found
     code = found.group(1)
-    assert (
-        text.count(f"{HOST}/connect#code=") == 1 and "reply 'done'" in text
-    )  # fragment: never sent to a server
+    assert text.count(f"{HOST}/connect?code=") == 1 and "reply 'done'" in text
     assert store.peek_code(signin.code_hash(code)) == "sesn_c"  # stored hashed, redeemable
     assert code not in str(store.audit_rows) and store.audit_rows[-1][2] == "signin-link"
     assert sessions.tokens == [
@@ -1030,13 +1028,14 @@ def test_confirm_always_rechecks_the_token_but_the_page_lookup_may_use_the_cache
     assert len(calls) == 2  # the confirm step always asks Databricks
 
 
-def test_the_link_carries_the_code_in_the_fragment_and_lookups_are_post_only(user_env):
-    from app import create_app  # noqa: F401 - the routes under test
-
-    assert "/connect#code=" in pathlib.Path(signin.__file__).read_text()
+def test_lookups_are_post_only_and_codes_have_no_trailing_punctuation(user_env):
+    """The link carries ?code= (the Apps sign-in redirect drops fragments); every API call sends it in the body."""
+    assert "/connect?code=" in pathlib.Path(signin.__file__).read_text()
     script = (pathlib.Path(um.STATIC) / "connect.js").read_text()
-    assert "window.location.hash" in script and "location.search" not in script
+    assert "window.location.search" in script and 'replaceState(null, "", "/connect")' in script
     assert '"/api/connect?code=' not in script
+    codes = [signin.new_code() for _ in range(200)]
+    assert all(re.fullmatch(r"[A-Za-z0-9]{32}", c) for c in codes) and len(set(codes)) == 200
     with make_client() as client:
         assert client.get(f"/api/connect?code={CODE}", headers=auth()).status_code in (404, 405)
 

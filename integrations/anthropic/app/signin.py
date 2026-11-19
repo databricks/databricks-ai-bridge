@@ -13,9 +13,10 @@ work item:
 Tickets live in this process's memory only, for minutes (never in the store, never logged). A ticket holds a
 client built from the user's forwarded token; it expires before the token does.
 
-Sign-in codes are random (``secrets.token_urlsafe``), stored only as SHA-256 hashes, valid for ``CODE_TTL_S`` and
-single-use (see ``user_store``). Whoever opens a link supplies the identity, so ``/connect`` shows which session
-and agent the link is for and asks for confirmation; a session bound to another user can't be taken over.
+Sign-in codes are random (32 letters and digits, ``new_code``), stored only as SHA-256 hashes, valid for
+``CODE_TTL_S`` and single-use (see ``user_store``). Whoever opens a link supplies the identity, so ``/connect``
+shows which session and agent the link is for and asks for confirmation; a session bound to another user can't be
+taken over.
 """
 
 from __future__ import annotations
@@ -51,6 +52,10 @@ LINK_ITEM_MAX_S = 120.0
 # launch slots (CMA_MAX_CONCURRENT_LAUNCHES), which real sandbox launches need.
 LINK_WORKERS = 4
 LINK_POLL_S = 2.0
+# Sign-in codes use letters and digits only: link auto-detection (Markdown in the Console) treats a trailing "_" or "-"
+# as punctuation and drops it, which would cut the code short. 32 characters of 62 symbols is about 190 bits.
+CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+CODE_LENGTH = 32
 TOOL_USE_TYPES = ("agent.tool_use", "agent.custom_tool_use")
 WATCH_EVENT_TYPES = (
     *TOOL_USE_TYPES,
@@ -60,6 +65,11 @@ WATCH_EVENT_TYPES = (
     "session.status_running",
     "session.status_terminated",
 )
+
+
+def new_code() -> str:
+    """A random sign-in code that survives link auto-detection intact (no trailing punctuation)."""
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
 
 
 def code_hash(code: str) -> str:
@@ -282,12 +292,12 @@ class RoutingLauncher:
                 action = "refused"
                 reason = "no app url"
             else:
-                code = secrets.token_urlsafe(24)
+                code = new_code()
                 self.store.add_code(code_hash(code), session_id, CODE_TTL_S)
                 minutes = int(CODE_TTL_S // 60)
                 message = (
                     "Databricks sign-in needed. Ask the user to open this link, sign in, confirm, and then reply "
-                    f"'done': {self.app_url}/connect#code={code} . The link works once and expires in {minutes} "
+                    f"'done': {self.app_url}/connect?code={code} . The link works once and expires in {minutes} "
                     "minutes. Don't call tools again until the user replies."
                 )
                 action = "signin-link"

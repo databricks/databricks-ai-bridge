@@ -1,6 +1,7 @@
 // The sign-in link page. No inline script (the page's CSP is script-src 'self'); text is only written with
-// textContent. The code comes from the link's fragment (#code=...), which the browser never sends to a server, and is
-// sent back only to this App, in request bodies.
+// textContent. The code comes from the link (?code=...): Databricks Apps' sign-in redirect keeps the query but drops a
+// URL fragment, so the query is the only way it survives a first sign-in. The page then clears it from the address
+// bar and history, and sends it back to this App only in request bodies.
 (function () {
   "use strict";
   function $(id) { return document.getElementById(id); }
@@ -26,7 +27,7 @@
     return data;
   }
 
-  var code = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("code") || "";
+  var code = new URLSearchParams(window.location.search).get("code") || "";
   // Keep the code out of the address bar and history once read.
   if (window.history && window.history.replaceState) window.history.replaceState(null, "", "/connect");
 

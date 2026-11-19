@@ -436,8 +436,8 @@ def add_routes(app: FastAPI) -> None:
     async def connect_info(body: Connect, request: Request):
         """What a sign-in link is for, before the user confirms. Consumes nothing.
 
-        POST with the code in the body (not ``?code=``): the link carries the code in the URL fragment, which
-        browsers never send, so it never appears in a URL the Apps proxy or the App could log.
+        POST with the code in the body, so the API call never puts the code in a URL. The link itself has to carry
+        it in the query: the Databricks Apps sign-in redirect drops URL fragments (verified live).
         """
         user: UserMode = request.app.state.user
         caller, _ = await _caller(request)

@@ -23,7 +23,7 @@ Sandbox. Nothing runs on a laptop.
 
 1. **Start a session** in the Claude Console with an allowed agent, on the **user environment**, and ask a question.
 2. **Sign in.** The agent's first tool call returns an error whose text is a one-time link:
-   *"Databricks sign-in needed … open `<app>/connect#code=…` … then reply 'done'"*. The agent passes it on. The command
+   *"Databricks sign-in needed … open `<app>/connect?code=…` … then reply 'done'"*. The agent passes it on. The command
    didn't run: no sandbox exists yet.
 3. **Confirm.** The link opens the App. Databricks signs the user in and, the first time, asks for consent to the App's
    scopes. The page shows the session, the agent and who is signed in. **Connect this session** binds the session to
@@ -48,8 +48,10 @@ new link. Only the session's owner can redeem it.
   never logged, stored or returned. A digest is cached for 60 s to show the `/connect` page; the confirm step always
   re-checks the token with Databricks. A ticket expires before the token does (at most 30 minutes).
 - **Sign-in codes** are random, stored only as SHA-256 hashes, valid for 15 minutes and single-use (redeeming inserts
-  the hash into `connect_uses`). The link carries the code in the URL fragment (`#code=`), which browsers never send,
-  so it doesn't appear in any URL the Apps proxy or the App logs; the page posts it in request bodies. Bindings and
+  the hash into `connect_uses`). The code is in the link's query (`?code=`), because the Databricks Apps sign-in
+  redirect drops URL fragments, so the Apps proxy's access log can record it. That's deliberate: a code works once,
+  for 15 minutes, and only binds a not-yet-connected session to whoever opens it. The page clears it from the
+  address bar and history, and every API call sends it in the request body. Bindings and
   the audit trail are append-only; an hourly sweep deletes sign-in codes, and their use rows, a day after they
   expire.
 - **Refusals.** `/connect` never takes over a session bound to another user (404), and refuses sessions on another
