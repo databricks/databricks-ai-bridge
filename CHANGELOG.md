@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## databricks-langchain 0.23.0 databricks-openai 0.19.0 (2026-11-18)
+
+### New Features
+- databricks-langchain, databricks-openai: sandbox clients now add a `databricks-langchain/<version>` / `databricks-openai/<version>` User-Agent token so sandbox usage can be attributed to each integration (#845)
+
+### Bug Fixes
+- databricks-langchain, databricks-openai: keep Claude 5.x reasoning out of agent replies (#800)
+- databricks-langchain, databricks-openai: keep Gemini thought signatures across tool calls (#807)
+
 ## databricks-langchain 0.22.0 databricks-openai 0.18.0 (2026-10-27)
 
 ### New Features
