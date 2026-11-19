@@ -20,19 +20,6 @@ def _source_type(ctx, param, value):
     return _SOURCE_PREFIX + source
 
 
-def _page_options(function):
-    function = click.option(
-        "--page-token", default=None, help="Continue a page with the same store and filters."
-    )(function)
-    return click.option(
-        "--page-size",
-        type=click.IntRange(1, 100),
-        default=10,
-        show_default=True,
-        help="Maximum results per page.",
-    )(function)
-
-
 def _continuation(data):
     token = data.get("next_page_token")
     if token:
@@ -52,7 +39,8 @@ def changes() -> None:
     """Inspect memory write history and immutable entry versions.
 
     Requires memory history to be enabled for the workspace and store read access.
-    Each command returns one page; JSON preserves the API response and continuation token.
+    List returns one page of change metadata; get returns one whole change. JSON preserves the
+    API response, including list's continuation token.
     """
 
 
@@ -72,18 +60,35 @@ def changes() -> None:
     default=None,
     help="Literal entry-path prefix (not an exact path or filesystem path).",
 )
-@_page_options
+@click.option(
+    "--memory-entry-id",
+    default=None,
+    help="Only changes touching this entry id: one entry's version history.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 100),
+    default=10,
+    show_default=True,
+    help="Maximum changes per page.",
+)
+@click.option("--page-token", default=None, help="Continue a page with the same store and filters.")
 @click.pass_obj
-def changes_list(obj, store, actor_id, source_type, path_prefix, page_size, page_token) -> None:
+def changes_list(
+    obj, store, actor_id, source_type, path_prefix, memory_entry_id, page_size, page_token
+) -> None:
     """List one page of change metadata, newest first, without entry contents.
 
-    Actor and path filters must match the same touched entry. Counts describe the whole change.
+    Actor, path, and entry filters must match the same touched entry. Counts describe the whole
+    change. For one entry's history, including after it was deleted, pass --memory-entry-id with
+    the final segment of its memory_entry name.
     """
     data = obj.client().list_memory_changes(
         store,
         actor_id=actor_id,
         source_type=source_type,
         path_prefix=path_prefix,
+        memory_entry_id=memory_entry_id,
         page_size=page_size,
         page_token=page_token,
     )
@@ -103,7 +108,7 @@ def changes_list(obj, store, actor_id, source_type, path_prefix, page_size, page
             _counts(change),
             timefmt.absolute(change.get("create_time")),
         ]
-        for change in data.get("changes", [])
+        for change in data.get("memory_changes", [])
     ]
     render.resource_table(
         "Memory Changes",
@@ -123,25 +128,15 @@ def changes_list(obj, store, actor_id, source_type, path_prefix, page_size, page
 @changes.command("get")
 @click.argument("change_id")
 @click.option("--store", required=True, help="Store id or resource name.")
-@click.option("--memory-entry-id", default=None, help="Exact entry id within the change.")
-@click.option("--path", default=None, help="Exact entry path within the change.")
-@_page_options
 @click.pass_obj
-def changes_get(obj, change_id, store, memory_entry_id, path, page_size, page_token) -> None:
-    """Get a change header and one page of entry versions, including content.
+def changes_get(obj, change_id, store) -> None:
+    """Get one change: its header and the entry versions it wrote, including content.
 
-    To compare versions, get an entry's previous_change_id with --memory-entry-id set to that
-    entry's id. A missing predecessor marks the start of recorded history. Restoring an older
-    version requires a new entry update; these commands only read history.
+    To compare versions, get the change named by an entry's previous_change_id. A missing
+    predecessor marks the start of recorded history. Restoring an older version requires a new
+    entry update; these commands only read history.
     """
-    data = obj.client().get_memory_changes(
-        store,
-        change_id,
-        memory_entry_id=memory_entry_id,
-        path=path,
-        page_size=page_size,
-        page_token=page_token,
-    )
+    data = obj.client().get_memory_change(store, change_id)
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -174,8 +169,7 @@ def changes_get(obj, change_id, store, memory_entry_id, path, page_size, page_to
             "Created": timefmt.absolute(entry.get("create_time")),
         }
         render.detail("Entry Version", entry.get("path") or "—", _literal_fields(fields))
-    click.echo(f"{len(entries)} entry versions on this page.")
-    _continuation(data)
+    click.echo(f"{len(entries)} entry versions.")
 
 
 def _literal_fields(fields):

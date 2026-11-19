@@ -502,11 +502,14 @@ class _AgentBricksApiClient:
         actor_id: Optional[str] = None,
         source_type: Optional[str] = None,
         path_prefix: Optional[str] = None,
+        memory_entry_id: Optional[str] = None,
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
     ) -> dict:
         """Read one page of change headers without entry contents."""
         validate_page_size(page_size)
+        if memory_entry_id:
+            _memory_change_id(memory_entry_id, "Memory entry id")
         return self._do(
             "GET",
             _memory_changes_path(store),
@@ -514,36 +517,16 @@ class _AgentBricksApiClient:
                 actor_id=actor_id,
                 source_type=source_type,
                 path_prefix=_memory_change_filter_path(path_prefix),
+                memory_entry_id=memory_entry_id,
                 page_size=page_size,
                 page_token=page_token,
             ),
         )
 
-    def get_memory_changes(
-        self,
-        store: str,
-        change_id: str,
-        *,
-        memory_entry_id: Optional[str] = None,
-        path: Optional[str] = None,
-        page_size: Optional[int] = None,
-        page_token: Optional[str] = None,
-    ) -> dict:
-        """Read a change header and one page of complete versions and predecessor links."""
-        validate_page_size(page_size)
+    def get_memory_change(self, store: str, change_id: str) -> dict:
+        """Read one change with the entry versions it wrote and their predecessor links."""
         resource = _memory_changes_path(store) + "/" + _memory_change_id(change_id, "Change id")
-        if memory_entry_id:
-            _memory_change_id(memory_entry_id, "Memory entry id")
-        return self._do(
-            "GET",
-            resource,
-            query=_query(
-                memory_entry_id=memory_entry_id,
-                path=_memory_change_filter_path(path),
-                page_size=page_size,
-                page_token=page_token,
-            ),
-        )
+        return self._do("GET", resource)
 
     # --- memory entries ------------------------------------------------------
 

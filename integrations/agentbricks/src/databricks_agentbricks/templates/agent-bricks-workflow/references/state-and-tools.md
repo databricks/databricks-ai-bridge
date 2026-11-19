@@ -33,17 +33,18 @@ chat app shows "Not connected" for memory locally, and the stores connect after
 ## Inspect memory write history
 
 When memory history is enabled, use `agentbricks memory changes list --store <Store ID>` to find
-write provenance across agent tools, Dreamer, and manual/API writes. Narrow by actor, source, or
-literal path prefix. List returns metadata; `memory changes get <change-id> --store <Store ID>`
-returns a header and entry versions. Use `-o json` for complete structured responses and repeat
-with the returned page token and unchanged filters until the token is absent.
+write provenance across agent tools, Dreamer, and manual/API writes. Narrow by actor, source,
+literal path prefix, or entry id. List returns metadata one page at a time; repeat with the
+returned page token and unchanged filters until the token is absent.
+`memory changes get <change-id> --store <Store ID>` returns one whole change: its header and the
+entry versions it wrote. Use `-o json` for complete structured responses.
 
-For a before/after comparison, fetch an entry's `previous_change_id` with `changes get`, filtering
-by `--memory-entry-id` using the final segment of its `memory_entry` resource name. Do not rely on
-the current path to identify its predecessor: paths can change. A missing predecessor marks the
-start of recorded history, which may be a baseline. History inspection does not restore content;
-restoring requires a new entry update and creates another version. Inspect installed command help
-for filters: list's `--path` is a prefix, while get's `--path` is exact.
+For a before/after comparison, run `changes get` on an entry's `previous_change_id`. For an
+entry's whole history, run `changes list --memory-entry-id` with the final segment of its
+`memory_entry` resource name. Do not rely on the current path to identify earlier versions: paths
+can change. A missing predecessor marks the start of recorded history, which may be a baseline.
+History inspection does not restore content; restoring requires a new entry update and creates
+another version.
 
 ## Store permissions
 

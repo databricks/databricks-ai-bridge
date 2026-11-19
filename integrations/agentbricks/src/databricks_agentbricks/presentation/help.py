@@ -167,12 +167,15 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "--source-type dreamer --path /preferences/",
             "filter change metadata",
         ),
+        (
+            "agentbricks memory changes list --store <store> --memory-entry-id <entry-id>",
+            "list one entry's version history",
+        ),
     ),
     ("memory", "changes", "get"): (
         (
-            "agentbricks -o json memory changes get <change-id> --store <store> "
-            "--memory-entry-id <entry-id>",
-            "read one entry version and its predecessor link",
+            "agentbricks -o json memory changes get <change-id> --store <store>",
+            "read a change's entry versions and predecessor links",
         ),
     ),
     ("memory", "pipeline"): (
