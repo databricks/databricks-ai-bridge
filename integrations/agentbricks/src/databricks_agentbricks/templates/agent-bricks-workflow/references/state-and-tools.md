@@ -34,8 +34,8 @@ chat app shows "Not connected" for memory locally, and the stores connect after
 
 When memory history is enabled, use `agentbricks memory changes list --store <Store ID>` to find
 write provenance across agent tools, Dreamer, and manual/API writes. Narrow by actor, source,
-literal path prefix, or entry id. List returns metadata one page at a time; repeat with the
-returned page token and unchanged filters until the token is absent.
+literal path prefix, or entry id. List returns metadata one page at a time; with `-o json`,
+repeat with the returned `next_page_token` and unchanged filters until the token is absent.
 `memory changes get <change-id> --store <Store ID>` returns one whole change: its header and the
 entry versions it wrote. Use `-o json` for complete structured responses.
 

@@ -252,8 +252,71 @@ def test_list_text_displays_provenance_counts_and_pagination(workspace):
     }
     result = run(["list", "--store", "store-1"], output="text")
     assert result.exit_code == 0, result.output
-    for text in ["c1", "AGENT", "[s1]", "+1 ~2 -3", "--page-token next-token"]:
+    for text in ["c1", "AGENT", "session:[s1]", "+1 ~2 -3", "More changes available"]:
         assert text in result.stdout
+    # The token is long and opaque; text output must not ask people to copy it.
+    assert "next-token" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "header,reference",
+    [
+        ({"session_id": "case-755"}, "session:case-755"),
+        ({"pipeline_run": "memory-pipelines/p1/runs/42"}, "run:42"),
+        ({"request_id": "req-1"}, "request:req-1"),
+    ],
+)
+def test_list_text_labels_each_reference_with_its_kind(workspace, header, reference):
+    # Session, run, and request ids look nothing alike; the label says which one a row shows.
+    workspace.api_client.do.return_value = {
+        "memory_changes": [{"name": "memory-stores/store-1/changes/c1", **header}]
+    }
+    result = run(["list", "--store", "store-1"], output="text")
+    assert result.exit_code == 0, result.output
+    assert reference in result.stdout
+
+
+def test_list_text_shows_the_actor_from_each_change(workspace):
+    # List rows have no actor, so the table reads it from the change's entry versions.
+    def do(method, path, **kwargs):
+        if path == BASE:
+            return {"memory_changes": [{"name": "memory-stores/store-1/changes/c1"}]}
+        assert path == BASE + "/c1"
+        return {"entries": [{"actor_id": "alice"}, {"actor_id": "bob"}, {"actor_id": "alice"}]}
+
+    workspace.api_client.do.side_effect = do
+    result = run(["list", "--store", "store-1"], output="text")
+    assert result.exit_code == 0, result.output
+    assert "alice, bob" in result.stdout
+
+
+def test_list_json_makes_no_extra_requests(workspace):
+    workspace.api_client.do.return_value = {
+        "memory_changes": [{"name": "memory-stores/store-1/changes/c1"}]
+    }
+    assert run(["list", "--store", "store-1"]).exit_code == 0
+    assert workspace.api_client.do.call_count == 1
+
+
+def test_list_text_on_a_terminal_offers_the_next_page(workspace, monkeypatch):
+    monkeypatch.setattr("databricks_agentbricks.cli.memory_changes._interactive", lambda: True)
+    pages = {
+        None: {"memory_changes": [{"name": "x/changes/first"}], "next_page_token": "t2"},
+        "t2": {"memory_changes": [{"name": "x/changes/second"}]},
+    }
+
+    def do(method, path, query=None, **kwargs):
+        return pages[(query or {}).get("page_token")] if path == BASE else {}
+
+    workspace.api_client.do.side_effect = do
+    result = CliRunner().invoke(
+        agentbricks,
+        ["--profile", "test", "memory", "changes", "list", "--store", "store-1"],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "first" in result.stdout and "second" in result.stdout
+    assert "t2" not in result.stdout
 
 
 def test_history_source_options_do_not_allow_dreamer_entry_creation(workspace):

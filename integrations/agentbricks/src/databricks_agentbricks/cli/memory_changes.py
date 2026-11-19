@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import click
 from rich.text import Text
 
@@ -20,10 +22,27 @@ def _source_type(ctx, param, value):
     return _SOURCE_PREFIX + source
 
 
-def _continuation(data):
-    token = data.get("next_page_token")
-    if token:
-        click.echo(f"More available. Repeat with the same filters and --page-token {token}")
+def _interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _reference(change) -> str:
+    # Session ids are caller-chosen, run and request ids are generated; naming the kind keeps a
+    # column of mixed ids readable.
+    if change.get("session_id"):
+        return f"session:{change['session_id']}"
+    if change.get("pipeline_run"):
+        return f"run:{change['pipeline_run'].rsplit('/', 1)[-1]}"
+    if change.get("request_id"):
+        return f"request:{change['request_id']}"
+    return "—"
+
+
+def _actors(client, store, change) -> str:
+    # List rows carry no actor; it is only on the entry versions of the change itself.
+    change_id = change.get("name", "").rsplit("/", 1)[-1]
+    entries = client.get_memory_change(store, change_id).get("entries", [])
+    return ", ".join(sorted({e["actor_id"] for e in entries if e.get("actor_id")})) or "—"
 
 
 def _counts(change):
@@ -36,11 +55,11 @@ def _counts(change):
 
 @click.group()
 def changes() -> None:
-    """Inspect memory write history and immutable entry versions.
+    """Inspect memory write history.
 
-    Requires memory history to be enabled for the workspace and store read access.
-    List returns one page of change metadata; get returns one whole change. JSON preserves the
-    API response, including list's continuation token.
+    List returns change metadata a page at a time; get returns one whole change, including its
+    immutable entry versions. JSON preserves the API response, including list's continuation
+    token.
     """
 
 
@@ -72,57 +91,69 @@ def changes() -> None:
     show_default=True,
     help="Maximum changes per page.",
 )
-@click.option("--page-token", default=None, help="Continue a page with the same store and filters.")
+@click.option(
+    "--page-token",
+    default=None,
+    help="Continue from a next_page_token returned by -o json, with the same store and filters.",
+)
 @click.pass_obj
 def changes_list(
     obj, store, actor_id, source_type, path_prefix, memory_entry_id, page_size, page_token
 ) -> None:
-    """List one page of change metadata, newest first, without entry contents.
+    """List change metadata, newest first, without entry contents.
 
-    Actor, path, and entry filters must match the same touched entry. Counts describe the whole
+    On a terminal, text output offers the next page; otherwise it prints one page. The actor
+    column costs one extra request per listed change. Actor, path, and entry filters must match the same touched entry. Counts describe the whole
     change. For one entry's history, including after it was deleted, pass --memory-entry-id with
     the final segment of its memory_entry name.
     """
-    data = obj.client().list_memory_changes(
-        store,
-        actor_id=actor_id,
-        source_type=source_type,
-        path_prefix=path_prefix,
-        memory_entry_id=memory_entry_id,
-        page_size=page_size,
-        page_token=page_token,
-    )
-    if obj.output == "json":
-        render.emit_json(data)
-        return
-    rows = [
-        [
-            Text(change.get("name", "").rsplit("/", 1)[-1]),
-            Text(change.get("source_type", "").removeprefix(_SOURCE_PREFIX)),
-            Text(
-                change.get("session_id")
-                or change.get("pipeline_run")
-                or change.get("request_id")
-                or "—"
-            ),
-            _counts(change),
-            timefmt.absolute(change.get("create_time")),
+    client = obj.client()
+    interactive = obj.output != "json" and _interactive()
+    while True:
+        data = client.list_memory_changes(
+            store,
+            actor_id=actor_id,
+            source_type=source_type,
+            path_prefix=path_prefix,
+            memory_entry_id=memory_entry_id,
+            page_size=page_size,
+            page_token=page_token,
+        )
+        if obj.output == "json":
+            render.emit_json(data)
+            return
+        rows = [
+            [
+                Text(change.get("name", "").rsplit("/", 1)[-1]),
+                Text(change.get("source_type", "").removeprefix(_SOURCE_PREFIX)),
+                Text(_actors(client, store, change)),
+                Text(_reference(change)),
+                _counts(change),
+                timefmt.absolute(change.get("create_time")),
+            ]
+            for change in data.get("memory_changes", [])
         ]
-        for change in data.get("memory_changes", [])
-    ]
-    render.resource_table(
-        "Memory Changes",
-        [
-            ("Change ID", "left"),
-            ("Source", "left"),
-            ("Reference", "left"),
-            ("Entries", "left"),
-            ("Created", "left"),
-        ],
-        rows,
-        no_wrap=[0],
-    )
-    _continuation(data)
+        render.resource_table(
+            "Memory Changes",
+            [
+                ("Change ID", "left"),
+                ("Source", "left"),
+                ("Actor", "left"),
+                ("Reference", "left"),
+                ("Entries", "left"),
+                ("Created", "left"),
+            ],
+            rows,
+            no_wrap=[0],
+        )
+        page_token = data.get("next_page_token")
+        if not page_token:
+            return
+        if not interactive:
+            click.echo("More changes available. Run in a terminal to page through them.")
+            return
+        if not click.confirm("Show next page?", default=False):
+            return
 
 
 @changes.command("get")

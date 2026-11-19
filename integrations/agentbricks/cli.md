@@ -216,7 +216,7 @@ A memory store is the managed store that holds this memory; each entry is a smal
 | --- | --- |
 | [`memory stores`](#agentbricks-memory-stores) | Workspace-scoped managed memory stores. |
 | [`memory entries`](#agentbricks-memory-entries) | Memory entries within a store, partitioned by actor. |
-| [`memory changes`](#agentbricks-memory-changes) | Inspect memory write history and immutable entry versions. |
+| [`memory changes`](#agentbricks-memory-changes) | Inspect memory write history. |
 | [`memory pipeline`](#agentbricks-memory-pipeline) | Distill session history into long-term memory. |
 | [`memory bind`](#agentbricks-memory-bind) | Bind memory STORE to the agent by declaring it in agent.toml. |
 | [`memory unbind`](#agentbricks-memory-unbind) | Remove the memory store binding from the agent's agent.toml. |
@@ -624,13 +624,13 @@ _Options_
 
 #### `agentbricks memory changes`
 
-Inspect memory write history and immutable entry versions. Requires memory history to be enabled
-for the workspace and store read access. Existing `--profile` authentication and global `-o json`
-apply. These commands only read history; restoring a version requires a new memory entry update.
+Inspect memory write history. Existing `--profile` authentication and global `-o json` apply.
+These commands only read history; restoring a version requires a new memory entry update.
 
-`list` returns **one page** of change metadata; `get` returns one whole change. JSON preserves the
-complete API response, including list's `next_page_token`. To continue a list, repeat the same
-command, store, and filters with `--page-token`.
+`list` returns change metadata a page at a time; `get` returns one whole change, including its
+immutable entry versions. On a terminal, text output offers the next page. JSON returns one page
+and preserves the complete API response, including `next_page_token`; pass it to `--page-token`
+with the same store and filters to continue.
 
 | Subcommand | RPC / REST endpoint | Description |
 | --- | --- | --- |
@@ -652,13 +652,15 @@ agentbricks -p my-workspace memory changes list --store support-memory \
 | `--path`, `--path-prefix` | absolute entry-path prefix | all paths | no | Literal prefix sent as `path_prefix`; `%`, `_`, and `*` are literal, not wildcards. |
 | `--memory-entry-id` | entry ID | all entries | no | Changes touching this entry: its version history, including after it was deleted. |
 | `--page-size` | integer, 1–100 | 10 | no | Maximum change headers per page. |
-| `--page-token` | opaque token | - | no | Continue with the same store and filters. |
+| `--page-token` | opaque token | - | no | Continue from a `next_page_token` returned by `-o json`, with the same store and filters. |
 
 Changes are listed newest first. When actor, path, and entry filters are combined, the same
 touched entry must match all of them. Counts describe the entire change, including entries outside
-those filters. Path filters must be absolute and contain no NUL, repeated slashes, or `.` / `..`
-segments. Text output shows the change ID, source, session/run/request reference, entry counts,
-and time.
+those filters. Path filters must be absolute, like `/preferences/tools.md`, and contain no
+repeated slashes or `.` / `..` segments. Text output shows the change ID, source, actor,
+reference, entry counts, and time. The reference names its kind: `session:<id>`, `run:<id>`, or
+`request:<id>`. List responses carry no actor, so the actor column costs one extra request per
+listed change.
 
 ##### `agentbricks memory changes get`
 

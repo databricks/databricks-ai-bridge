@@ -137,7 +137,8 @@ def _memory_change_filter_path(path: Optional[str]) -> Optional[str]:
         or any(part in {".", ".."} for part in path.split("/"))
     ):
         raise AgentCliError(
-            "Path must be absolute, without NUL, repeated slashes, or . / .. segments."
+            "Path must be absolute, like /preferences/tools.md, "
+            "without repeated slashes or . / .. segments."
         )
     return path
 
