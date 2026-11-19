@@ -91,22 +91,6 @@ def _owned_resources_match(actual: Sequence[Any], expected: Sequence[dict[str, A
     )
 
 
-def _instance_args(instance_count: Optional[int]) -> list[str]:
-    """Format an explicit fixed instance count for the Databricks Apps CLI.
-
-    ``None`` leaves an existing App's scale untouched.
-    """
-    # TODO(vNext): consider defaulting omitted --instances to 1 in a versioned breaking release.
-    if instance_count is None:
-        return []
-    return [
-        "--compute-min-instances",
-        str(instance_count),
-        "--compute-max-instances",
-        str(instance_count),
-    ]
-
-
 def _is_app_busy(result: subprocess.CompletedProcess) -> bool:
     """Whether a failed Apps call failed only because another operation is running on the App."""
     if result.returncode == 0:
@@ -494,25 +478,36 @@ class AppsClient:
             ["apps", "create-update", name, "--json", json.dumps(payload)], capture=True
         )
 
-    def create(self, name: str, instance_count: Optional[int], *, no_wait: bool = False) -> str:
-        """Create the app at an optional fixed scale; return the raw command output.
+    def provision(self, app: dict) -> str:
+        """Create through Agent Bricks provisioning without waiting for compute.
 
-        `apps create` blocks until the compute is ACTIVE unless ``no_wait`` is set, in which case it
-        returns once the App exists and leaves the compute booting server-side.
+        Use the raw API so this works before the generated Databricks CLI exposes the endpoint.
+        There is no fallback to ordinary Apps creation, which cannot assign provenance.
         """
         result = self._run(
             [
-                "apps",
-                "create",
-                name,
-                *_instance_args(instance_count),
-                *(["--no-wait"] if no_wait else []),
+                "api",
+                "post",
+                "/api/2.0/apps:provisionAgentBricksApp",
+                "--json",
+                json.dumps({"app": app}),
             ],
             self._profile,
             capture=True,
-            action=f"Could not create deployment '{name}'.",
+            action=f"Could not provision Agent Bricks deployment '{app.get('name', '')}'. "
+            "The workspace must support Agent Bricks app provisioning.",
         )
         return result.stdout or ""
+
+    def create(self, name: str, instance_count: Optional[int], *, no_wait: bool = False) -> str:
+        """Provision the App at an optional fixed scale and optionally wait for ACTIVE compute."""
+        app: dict = {"name": name}
+        if instance_count is not None:
+            app.update(compute_min_instances=instance_count, compute_max_instances=instance_count)
+        output = self.provision(app)
+        if not no_wait:
+            self.wait_for_active(name)
+        return output
 
     def create_update_instances(self, name: str, instances: int) -> str:
         """Pin the app's compute to a fixed instance count; returns the raw command output."""

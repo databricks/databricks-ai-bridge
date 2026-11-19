@@ -438,7 +438,7 @@ def test_app_provisioner_scope_drift_stops_before_update():
     )
 
     with pytest.raises(AgentCliError, match="changed"):
-        AppProvisioner._reconcile_scoped_app(plan, instance_count=2)
+        AppProvisioner._reconcile_scoped_app(plan, instance_count=2, apps_client=apps)
 
     apps.create_update.assert_not_called()
 
@@ -460,7 +460,7 @@ def test_app_provisioner_refuses_scope_removal(existing_scopes, desired_scopes):
     )
 
     with pytest.raises(AgentCliError, match="removal"):
-        AppProvisioner._reconcile_scoped_app(plan, instance_count=None)
+        AppProvisioner._reconcile_scoped_app(plan, instance_count=None, apps_client=apps)
 
     apps.create.assert_not_called()
     apps.create_update.assert_not_called()
@@ -481,9 +481,9 @@ def test_app_provisioner_new_app_allows_credential_only_user_auth():
         scopes=(),
     )
 
-    AppProvisioner._reconcile_scoped_app(plan, instance_count=None)
+    AppProvisioner._reconcile_scoped_app(plan, instance_count=None, apps_client=apps)
 
-    assert apps.create.call_args.args[0].as_dict() == {
+    assert apps.provision.call_args.args[0] == {
         "name": "agent-bricks-app",
         "forward_user_access_token": True,
     }
@@ -587,10 +587,11 @@ def test_app_provisioner_creates_new_scoped_app_and_verifies_effective_scopes():
         effective_user_api_scopes=["ai-gateway", "sql"],
     )
 
-    AppProvisioner._reconcile_scoped_app(plan, None)
+    AppProvisioner._reconcile_scoped_app(plan, None, apps_client=apps)
 
-    apps.create.assert_called_once()
-    assert apps.create.call_args.args[0].as_dict() == {
+    apps.provision.assert_called_once()
+    apps.create.assert_not_called()
+    assert apps.provision.call_args.args[0] == {
         "name": "agent-bricks-app",
         "user_api_scopes": ["ai-gateway", "sql"],
         "forward_user_access_token": True,
@@ -615,7 +616,7 @@ def test_app_provisioner_updates_existing_scopes_with_narrow_mask():
         scopes=("ai-gateway", "sql"),
     )
 
-    AppProvisioner._reconcile_scoped_app(plan, 2)
+    AppProvisioner._reconcile_scoped_app(plan, 2, apps_client=apps)
 
     payload = apps.create_update.call_args.kwargs
     assert set(payload["update_mask"].split(",")) == {
@@ -672,9 +673,10 @@ def test_deploy_composes_real_auth_client_and_scoped_create_before_rollout(tmp_p
 
     result = harness.service.deploy(_auth_request(tmp_path))
 
-    sdk_apps.create.assert_called_once()
-    created = sdk_apps.create.call_args.args[0]
-    assert created.as_dict() == {
+    sdk_apps.create.assert_not_called()
+    provision = next(call[0] for call in harness.cli_calls if call[0][:2] == ["api", "post"])
+    assert provision[:3] == ["api", "post", "/api/2.0/apps:provisionAgentBricksApp"]
+    assert json.loads(provision[-1])["app"] == {
         "name": "agent-bricks-demo",
         "user_api_scopes": ["ai-gateway"],
         "forward_user_access_token": True,
