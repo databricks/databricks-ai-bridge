@@ -30,6 +30,23 @@ chat app shows "Not connected" for memory locally, and the stores connect after
 - An existing store is reused as is; deploy changes only the app's own grant. Use the store
   permission commands below to give teammates access.
 
+## Inspect memory write history
+
+When memory history is enabled, use `agentbricks memory changes list --store <Store ID>` to find
+write provenance across agent tools, Dreamer, and manual/API writes. Narrow by actor, source,
+literal path prefix, or entry id. List returns metadata one page at a time; with `-o json`,
+repeat with the returned `next_page_token` and unchanged filters until the token is absent.
+`memory changes get <change-id> --store <Store ID>` returns one whole change: its header and the
+entry versions it wrote. Use `-o json` for complete structured responses.
+
+Text `changes get` shows each entry's content as a diff against its previous version. To compare
+in JSON, run `changes get` on an entry's `previous_change_id`. For an
+entry's whole history, run `changes list --memory-entry-id` with the final segment of its
+`memory_entry` resource name. Do not rely on the current path to identify earlier versions: paths
+can change. A missing predecessor marks the start of recorded history, which may be a baseline.
+History inspection does not restore content; restoring requires a new entry update and creates
+another version.
+
 ## Store permissions
 
 Use `agentbricks sessions stores permissions` or `agentbricks memory stores permissions` for

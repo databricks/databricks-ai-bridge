@@ -216,6 +216,7 @@ A memory store is the managed store that holds this memory; each entry is a smal
 | --- | --- |
 | [`memory stores`](#agentbricks-memory-stores) | Workspace-scoped managed memory stores. |
 | [`memory entries`](#agentbricks-memory-entries) | Memory entries within a store, partitioned by actor. |
+| [`memory changes`](#agentbricks-memory-changes) | Inspect memory write history. |
 | [`memory pipeline`](#agentbricks-memory-pipeline) | Distill session history into long-term memory. |
 | [`memory bind`](#agentbricks-memory-bind) | Bind memory STORE to the agent by declaring it in agent.toml. |
 | [`memory unbind`](#agentbricks-memory-unbind) | Remove the memory store binding from the agent's agent.toml. |
@@ -620,6 +621,86 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
+
+#### `agentbricks memory changes`
+
+Inspect memory write history. Existing `--profile` authentication and global `-o json` apply.
+These commands only read history; restoring a version requires a new memory entry update.
+
+`list` returns change metadata a page at a time; `get` returns one whole change, including its
+immutable entry versions. On a terminal, text output offers the next page. JSON returns one page
+and preserves the complete API response, including `next_page_token`; pass it to `--page-token`
+with the same store and filters to continue.
+
+| Subcommand | RPC / REST endpoint | Description |
+| --- | --- | --- |
+| `memory changes list` | `ListMemoryChanges` / `GET /api/2.0/agents/memory-stores/{store}/changes` | Change metadata without entry contents. |
+| `memory changes get CHANGE_ID` | `GetMemoryChange` / `GET /api/2.0/agents/memory-stores/{store}/changes/{change_id}` | One change: its header and the entry versions it wrote, including content and predecessor links. |
+
+##### `agentbricks memory changes list`
+
+```sh
+agentbricks -p my-workspace memory changes list --store support-memory \
+  --actor-id customer-1004 --source-type dreamer --path /preferences/ --page-size 20
+```
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--store` | Store ID or `memory-stores/ID` | - | yes | Store whose changes to list. |
+| `--actor-id` | text | all actors | no | Changes touching an entry belonging to this actor. |
+| `--source-type` | `agent`, `dreamer`, `unspecified`, or a full `MANAGED_MEMORY_ENTRY_SOURCE_TYPE_*` enum | all sources | no | Case-insensitive source filter. `unspecified` selects that source only. |
+| `--path`, `--path-prefix` | absolute entry-path prefix | all paths | no | Literal prefix sent as `path_prefix`; `%`, `_`, and `*` are literal, not wildcards. |
+| `--memory-entry-id` | entry ID | all entries | no | Changes touching this entry: its version history, including after it was deleted. |
+| `--page-size` | integer, 1–100 | 10 | no | Maximum change headers per page. |
+| `--page-token` | opaque token | - | no | Continue from a `next_page_token` returned by `-o json`, with the same store and filters. |
+
+Changes are listed newest first. When actor, path, and entry filters are combined, the same
+touched entry must match all of them. Counts describe the entire change, including entries outside
+those filters. Path filters must be absolute, like `/preferences/tools.md`, and contain no
+repeated slashes or `.` / `..` segments. Text output shows the change ID, source, actor,
+reference, entry counts, and time. The reference names its kind: `session:<id>`, `run:<id>`, or
+`request:<id>`. List responses carry no actor, so the actor column costs one extra request per
+listed change.
+
+##### `agentbricks memory changes get`
+
+```sh
+agentbricks -p my-workspace -o json memory changes get CHANGE_ID --store support-memory
+```
+
+`CHANGE_ID` is the final ID segment, not a full change resource name.
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--store` | Store ID or `memory-stores/ID` | - | yes | Store containing the change. |
+
+Get has no filters or paging. Text output includes provenance, description, summary, and
+`previous_change_id`; JSON retains all fields as returned, including absent or empty content for
+tombstones and metadata-only changes.
+
+Text output shows what the change did. Under each entry, a `<path> diff` box holds its content as
+a diff against the version named by its `previous_change_id`: removed lines start with `-`, added
+lines with `+`, and unchanged lines are indented. A new entry shows every line as added and a
+delete shows every line as removed. Each entry with a predecessor costs one extra request, and
+the command fails without printing if a predecessor cannot be read. JSON output makes no extra
+requests and has no diff; to compare in a script, fetch the predecessor yourself:
+
+```sh
+agentbricks -o json memory changes get PREVIOUS_CHANGE_ID --store support-memory
+```
+
+For an entry's whole history, list by entry identity, using the final segment of its
+`memory_entry` name, then get each change:
+
+```sh
+agentbricks -o json memory changes list --store support-memory --memory-entry-id ENTRY_ID
+```
+
+Use entry identity instead of the current path, which may differ from an earlier version's path.
+A missing predecessor marks the start of recorded history, including a baseline; it does not
+prove the entry never existed before recording began. These commands do not modify history
+pointers, and only text `get` fetches predecessors. Preview, permission, and invalid-token errors exit nonzero;
+with `-o json`, errors are JSON on stderr and stdout stays empty.
 
 #### `agentbricks memory pipeline`
 

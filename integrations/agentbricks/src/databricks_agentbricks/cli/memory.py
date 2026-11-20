@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from databricks_agentbricks.cli.memory_changes import changes
 from databricks_agentbricks.cli.permissions import store_permissions
 from databricks_agentbricks.cli.pipeline import pipeline
 from databricks_agentbricks.errors import AgentCliError
@@ -83,6 +84,7 @@ def entries() -> None:
 
 
 memory.add_command(pipeline)
+memory.add_command(changes)
 
 
 # --- bind a store to an agent project (agent.toml) --------------------------

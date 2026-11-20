@@ -433,6 +433,30 @@ def test_terminal_table_keeps_each_row_on_one_line_when_identifiers_fill_it():
         assert any(name in line and resource in line for line in lines)
 
 
+def test_terminal_table_keeps_the_identifier_when_other_columns_overflow():
+    # The identifier is what the next command needs. When the other columns are too wide for the
+    # screen they are the ones to shorten; the identifier must not be the column that disappears.
+    change_id = "8fdd8f56-d7da-406e-b544-a796b6f90000"
+    rows = [[change_id, "UNSPECIFIED", "alice@example.com", "request:" + change_id, "+0 ~1 -0"]]
+    buffer = io.StringIO()
+    con = Console(file=buffer, width=99, force_terminal=True, color_system=None)
+    render.resource_table(
+        "Memory Changes",
+        [(h, "left") for h in ["Change ID", "Source", "Actor", "Reference", "Entries"]],
+        rows,
+        con=con,
+        no_wrap=[0],
+    )
+    header, _, row = [line for line in buffer.getvalue().splitlines() if line.strip()][1:4]
+    assert header.startswith("CHANGE ID")
+    assert row.startswith(change_id)
+    # Every other column is still there, shortened, on the same line.
+    for text in ["SOURCE", "ACTOR", "REFERENCE", "ENTRIES"]:
+        assert text[:3] in header
+    for text in ["UNSP", "alice", "request:", "+0"]:
+        assert text in row
+
+
 # --- help ----------------------------------------------------------------------
 
 
