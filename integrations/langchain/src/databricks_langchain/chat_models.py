@@ -287,11 +287,11 @@ class ChatDatabricks(BaseChatModel):
     max_tokens: Optional[int] = None
     """The maximum number of tokens to generate."""
     extra_params: Optional[Dict[str, Any]] = None
+    """Any extra parameters to pass to the endpoint."""
+    stream_usage: bool = True
     """Whether to include usage metadata in streaming output. If True, additional
     message chunks will be generated during the stream including usage metadata.
     """
-    stream_usage: bool = True
-    """Any extra parameters to pass to the endpoint."""
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
     timeout: Optional[float] = None
