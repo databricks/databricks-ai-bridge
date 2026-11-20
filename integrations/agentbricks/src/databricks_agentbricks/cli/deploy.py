@@ -46,7 +46,6 @@ from databricks_agentbricks.diagnostics import (
     Outcome,
     operation_uuid,
 )
-from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     deploy_result_payload,
@@ -241,20 +240,25 @@ def _ignore_hangup() -> None:
 )
 @click.option("--git-revision", help="Local Git commit, tag, or branch to publish with --sandbox.")
 @click.option(
+    "--sandbox-warm-pool-size",
+    type=click.IntRange(0, 10),
+    default=0,
+    help="Maximum unassigned prepared sandboxes for --sandbox (default: 0, disabled).",
+)
+@click.option("--sandbox-max-sandboxes", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-concurrent-invocations", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-concurrent-preparations", type=click.IntRange(1, 10000), hidden=True)
+@click.option("--sandbox-max-pending-invocations", type=click.IntRange(1, 10000), hidden=True)
+@click.option(
     "--entrypoint",
     help="Installed module:function for --sandbox; defaults to the template adapter.",
-)
-@click.option(
-    "--environment",
-    "prepared_environment",
-    help="Published environment name or manifest path; deploy its orchestrator, install on first invocation.",
 )
 @click.option(
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local project directory (app.yaml for App execution; pyproject.toml and uv.lock "
-    "for --sandbox). Defaults to the current directory.",
+    help="Local project directory (app.yaml for App execution; pyproject.toml for --sandbox, "
+    "which generates uv.lock if missing). Defaults to the current directory.",
 )
 @click.option(
     "--pip-index-url",
@@ -306,9 +310,13 @@ def deploy(
     name,
     sandbox,
     sandbox_idle_timeout,
+    sandbox_warm_pool_size,
+    sandbox_max_sandboxes,
+    sandbox_max_concurrent_invocations,
+    sandbox_max_concurrent_preparations,
+    sandbox_max_pending_invocations,
     git_revision,
     entrypoint,
-    prepared_environment,
     source,
     pip_index_url,
     workspace_path,
@@ -354,11 +362,15 @@ def deploy(
 
     With --sandbox, deploy uploads a frozen source revision and publishes the generic App
     orchestrator in one command. No environment create step or agent image build is required.
+    If uv.lock is missing, deploy runs uv lock with Python 3.12 before uploading source;
+    existing lockfiles are preserved. --git-revision requires a committed lockfile.
     Deploy provisions an App-owned Runtime Store automatically; the workspace must
     support managed Runtime Store provisioning.
     The App installs one sandbox per session during explicit session preparation or first invocation.
     --sandbox-idle-timeout sets Lakebox idle shutdown in seconds (default 900). Reuse --sandbox
-    on redeploy; --git-revision optionally selects committed source. This prototype mode
+    on redeploy. --sandbox-warm-pool-size keeps up to N unassigned prepared sandboxes
+    in the background (default 0, disabled); assigned sessions remain dedicated.
+    --git-revision optionally selects committed source. This prototype mode
     requires an editable installation with the sandbox extra and does not support --no-wait.
     """
     telemetry.begin_deployment(background_child=background_child)
@@ -368,10 +380,6 @@ def deploy(
         operation_uuid(os.environ.get(_DEPLOY_OPERATION_ENV)) if background_child else None
     ) or str(uuid.uuid4())
     if sandbox:
-        if prepared_environment:
-            raise click.UsageError(
-                "Use --sandbox with source, or --environment with an existing publication."
-            )
         if (
             allowed_origin
             or clear_allowed_origins
@@ -390,10 +398,21 @@ def deploy(
             SandboxDeployService,
         )
         from databricks_agentkit._api_client import _workspace_client
+        from databricks_agentkit.sandbox.limits import RuntimeLimits
 
+        defaults = RuntimeLimits()
+        limits = RuntimeLimits(
+            max_sandboxes=sandbox_max_sandboxes or defaults.max_sandboxes,
+            max_concurrent_invocations=sandbox_max_concurrent_invocations
+            or defaults.max_concurrent_invocations,
+            max_concurrent_preparations=sandbox_max_concurrent_preparations
+            or defaults.max_concurrent_preparations,
+            max_pending_invocations=sandbox_max_pending_invocations
+            or defaults.max_pending_invocations,
+        )
         started = time.monotonic()
         result = SandboxDeployService(
-            _workspace_client(obj.profile), partial(deploy_prepared, obj)
+            _workspace_client(obj.profile), partial(deploy_prepared, obj), reporter=ClickReporter()
         ).deploy(
             SandboxDeployRequest(
                 name=name,
@@ -401,6 +420,8 @@ def deploy(
                 sandbox_idle_timeout=sandbox_idle_timeout
                 if sandbox_idle_timeout is not None
                 else 900,
+                sandbox_warm_pool_size=sandbox_warm_pool_size,
+                limits=limits,
                 git_revision=git_revision,
                 entrypoint=entrypoint,
                 workspace_path=workspace_path,
@@ -412,36 +433,26 @@ def deploy(
             result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
         )
         return
-    if any(value is not None for value in (git_revision, entrypoint, sandbox_idle_timeout)):
+    if (
+        any(
+            value is not None
+            for value in (
+                git_revision,
+                entrypoint,
+                sandbox_idle_timeout,
+                sandbox_max_sandboxes,
+                sandbox_max_concurrent_invocations,
+                sandbox_max_concurrent_preparations,
+                sandbox_max_pending_invocations,
+            )
+        )
+        or click.get_current_context().get_parameter_source("sandbox_warm_pool_size")
+        != click.core.ParameterSource.DEFAULT
+    ):
         raise click.UsageError(
-            "--git-revision, --entrypoint and --sandbox-idle-timeout require --sandbox."
+            "--git-revision, --entrypoint, --sandbox-idle-timeout and "
+            "--sandbox-warm-pool-size and sandbox capacity overrides require --sandbox."
         )
-    if prepared_environment:
-        if not name:
-            raise AgentCliError("Provide a deployment name with --environment.")
-        if source != "." or allow_user_scope_update:
-            raise AgentCliError(
-                "--environment cannot be combined with --source or --allow-user-scope-update."
-            )
-        if allowed_origin or clear_allowed_origins or no_wait or background_child:
-            raise click.UsageError(
-                "--environment does not support --allowed-origin, --clear-allowed-origins, or --no-wait."
-            )
-        from databricks_agentbricks.cli.prepared_deploy import deploy_prepared
-
-        started = time.monotonic()
-        result = deploy_prepared(
-            obj,
-            name,
-            prepared_environment,
-            workspace_path=workspace_path,
-            instances=instance_count,
-            index_url=pip_index_url,
-        )
-        present_sandbox_deploy_result(
-            result, output=obj.output, profile=obj.profile, elapsed_s=time.monotonic() - started
-        )
-        return
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(

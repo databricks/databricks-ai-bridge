@@ -88,7 +88,7 @@ class LauncherClient:
         deadline = time.monotonic() + timeout
         try:
             with requests.get(
-                self.url + f"/api/runs/{run_id}/events",
+                self.url + f"/api/invocations/{run_id}/events?view=workbench",
                 headers=headers,
                 stream=True,
                 timeout=(min(timeout, 30), min(timeout, 30)),

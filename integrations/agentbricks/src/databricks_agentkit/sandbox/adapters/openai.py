@@ -123,12 +123,15 @@ async def prepare_session(state_dir: Path) -> dict:
             importlib.import_module("agents.mcp")
             importlib.import_module("agents.stream_events")
             importlib.import_module("openai.types.responses")
+        with measure(timings, "agentkit_import"):
             importlib.import_module("databricks_agentkit.openai")
             importlib.import_module("databricks_agentkit.runtime")
             importlib.import_module("databricks_agentkit.runtime.tool_manifest")
             importlib.import_module("databricks_agentkit.openai.mcp")
             importlib.import_module("databricks_agentkit.openai.sessions")
+        with measure(timings, "tracing_import"):
             importlib.import_module("databricks_agentkit.runtime.tracing")
+        with measure(timings, "project_import"):
             importlib.import_module("agent.agent")
             importlib.import_module("agent.mcps")
     with measure(timings, "bindings"):

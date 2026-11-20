@@ -11,15 +11,23 @@ from uuid import uuid4
 from anyio import CancelScope
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound, PermissionDenied
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
+from databricks_agentkit.runtime.environment import SANDBOX
+from databricks_agentkit.runtime.http import (
+    InvocationRequest,
+    accepted_payload,
+    failure_response,
+    state_payload,
+)
 from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
 from databricks_agentkit.runtime.store import RUNTIME_STORE_USERNAME_ENV
+from databricks_agentkit.runtime.types import InvocationConflictError, InvocationFailedError
 from databricks_agentkit.sandbox.bundle import bundle_contents, files_digest
 from databricks_agentkit.sandbox.catalog import WorkspaceCatalog
 from databricks_agentkit.sandbox.control import ControlStore, scoped_session
@@ -32,10 +40,12 @@ from databricks_agentkit.sandbox.environments import (
     validate_name,
 )
 from databricks_agentkit.sandbox.features import source_features
-from databricks_agentkit.sandbox.jobs import RunManager
+from databricks_agentkit.sandbox.jobs import AppInvocationDispatcher
 from databricks_agentkit.sandbox.lakebox import Lakebox
+from databricks_agentkit.sandbox.limits import Capacity, CapacityExceeded, RuntimeLimits
 from databricks_agentkit.sandbox.orchestrator import Orchestrator, RevisionConflict
 from databricks_agentkit.sandbox.preparation import SessionPreparation
+from databricks_agentkit.sandbox.reconciliation import SandboxReconciler
 from databricks_agentkit.sandbox.source_view import source_page
 from databricks_agentkit.sandbox.sources import (
     DEFAULT_ENTRYPOINT,
@@ -46,12 +56,6 @@ from databricks_agentkit.sandbox.sources import (
 from databricks_agentkit.sandbox.store import ExecutionIdentityConflict, Registry, SessionBusy
 
 STATIC = Path(__file__).parent / "static"
-
-
-class InvocationRequest(BaseModel):
-    session_id: str = Field(min_length=1, max_length=512)
-    invocation_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=512)
-    input: dict = Field(default_factory=dict)
 
 
 @asynccontextmanager
@@ -115,13 +119,46 @@ async def lifespan(app):
                 _prepare_only=True,
                 _allow_install=False,
             )
-    app.state.runs = RunManager(app.state.control, app.state.orchestrator)
+    app.state.limits = RuntimeLimits.from_env()
+    app.state.capacity = Capacity(registry, app.state.limits)
+    app.state.orchestrator.sandboxes.capacity = app.state.capacity
+    app.state.control.capacity = app.state.capacity
+    app.state.reconciler = SandboxReconciler(app.state.control, app.state.orchestrator)
+    app.state.runs = AppInvocationDispatcher(
+        app.state.control,
+        app.state.orchestrator,
+        capacity=app.state.capacity,
+        reconciler=app.state.reconciler,
+    )
+    app.state.warm_pool = None
+    pool_size = int(os.getenv("SANDBOX_WARM_POOL_SIZE", "0"))
+    if pool_size and not on_demand(app.state.prepared_environment or {}):
+        raise ValueError("Warm pools require an on-demand source deployment")
+    if (
+        os.getenv("SANDBOX_WARM_POOL_GENERATION")
+        and on_demand(app.state.prepared_environment or {})
+        and (pool_size or app.state.orchestrator.sandbox_scope == "session")
+    ):
+        from databricks_agentkit.sandbox.warm_pool import WarmPool
+
+        app.state.warm_pool = WarmPool(
+            app.state.orchestrator,
+            prepared,
+            bundle,
+            size=pool_size,
+            generation=int(os.environ["SANDBOX_WARM_POOL_GENERATION"]),
+        )
+        app.state.warm_pool.start()
     app.state.runs.start()
     app.state.preparations = SessionPreparation(app.state.control, app.state.orchestrator)
     app.state.preparations.start()
+    app.state.reconciler.start()
     try:
         yield
     finally:
+        if app.state.warm_pool:
+            app.state.warm_pool.stop()
+        app.state.reconciler.stop()
         app.state.preparations.stop()
         app.state.runs.stop()
         app.state.control.close()
@@ -176,11 +213,6 @@ class AgentRegistration(BaseModel):
     entrypoint: str = Field(default=DEFAULT_ENTRYPOINT, max_length=256)
 
 
-class AgentInvocation(InvocationRequest):
-    agent_id: str = Field(min_length=1, max_length=64)
-    retry: bool = False
-
-
 class GitSource(BaseModel):
     commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     requested_revision: str = Field(min_length=1, max_length=1024)
@@ -210,10 +242,6 @@ class GitSource(BaseModel):
 class EnvironmentRegistration(AgentRegistration):
     source_kind: Literal["workspace", "volume"] = "workspace"
     git_source: GitSource | None = None
-
-
-class EnvironmentInvocation(InvocationRequest):
-    retry: bool = False
 
 
 @app.post("/api/environments", status_code=201)
@@ -248,22 +276,10 @@ def get_environment(name: str):
     return app.state.environments.get(name)
 
 
-@app.post("/api/environments/{name}/runs", status_code=202)
-def invoke_environment(name: str, request: EnvironmentInvocation):
-    if preparations := getattr(app.state, "preparations", None):
-        environment = app.state.environments.get(name)
-        preparations.assert_invocable(environment["default_agent_id"], request.session_id)
-    row = app.state.environments.invoke(
-        name, request.session_id, request.invocation_id, request.input, retry=request.retry
-    )
-    if row["status"] == "queued":
-        app.state.runs.submit(row["id"])
-    return chat_snapshot(row)
-
-
 @app.get("/api/config")
 def configuration():
     return {
+        "runtime_environment": SANDBOX,
         "workspace": app.state.orchestrator.lakebox.workspace.config.host,
         "service_principal": os.getenv(RUNTIME_STORE_USERNAME_ENV) or os.getenv("PGUSER", ""),
         "runtime_store": (
@@ -278,6 +294,7 @@ def configuration():
             "agent_id"
         ),
         "sandbox_idle_timeout_seconds": app.state.orchestrator.lakebox.idle_timeout,
+        "sandbox_warm_pool_size": int(os.getenv("SANDBOX_WARM_POOL_SIZE", "0")),
         "sandbox_scope": app.state.orchestrator.sandbox_scope,
         "environment_mode": (
             "on-demand" if on_demand(app.state.prepared_environment) else "prepared"
@@ -295,6 +312,16 @@ def configuration():
         ],
         "workbench": (getattr(app.state, "prepared_environment", None) or {}).get("workbench"),
     }
+
+
+@app.get("/api/warm-pool")
+def warm_pool_status():
+    pool = getattr(app.state, "warm_pool", None)
+    return (
+        pool.store.status()
+        if pool
+        else {"maximum": 0, "ready": 0, "preparing": 0, "retiring": 0, "error": None}
+    )
 
 
 @app.get("/api/agents")
@@ -335,10 +362,32 @@ def register_agent(request: AgentRegistration):
 def list_sessions(agent_id: str):
     app.state.control.agent(agent_id)
     sessions = {row["session_id"]: row for row in app.state.control.sessions(agent_id)}
-    for row in app.state.preparations.rows(agent_id=agent_id):
+    rows = app.state.preparations.rows(agent_id=agent_id)
+    ids = {row["sandbox_id"] for row in rows if row.get("sandbox_id")}
+    try:
+        statuses = app.state.orchestrator.lakebox.statuses(ids) if ids else {}
+    except DatabricksError:
+        statuses = dict.fromkeys(ids, "unknown")
+    for row in rows:
         prepared = row["preparation"]
-        sessions.setdefault(prepared["session_id"], prepared)
-    return list(sessions.values())
+        session = sessions.setdefault(prepared["session_id"], dict(prepared))
+        session["preparation_status"] = prepared["status"]
+        session["preparation_stage"] = prepared.get("stage")
+        session["sandbox_id"] = row.get("sandbox_id")
+        session["sandbox_status"] = statuses.get(
+            row.get("sandbox_id"), row.get("installation_status", "not_created")
+        )
+        if row.get("updated_at"):
+            session["updated_at"] = max(
+                filter(None, [session.get("updated_at"), row["updated_at"].isoformat()])
+            )
+        if row.get("created_at"):
+            session["created_at"] = row["created_at"].isoformat()
+    return sorted(
+        sessions.values(),
+        key=lambda row: row.get("updated_at") or row.get("created_at") or "",
+        reverse=True,
+    )[:100]
 
 
 class CreateSessionRequest(BaseModel):
@@ -355,6 +404,33 @@ def create_session(agent_id: str, request: CreateSessionRequest):
 def preparation_status(agent_id: str, session_id: str):
     app.state.control.agent(agent_id)
     return app.state.preparations.get(agent_id, session_id)
+
+
+@app.get("/api/agents/{agent_id}/sessions/{session_id}/events")
+def preparation_events(agent_id: str, session_id: str):
+    app.state.control.agent(agent_id)
+    app.state.preparations.get(agent_id, session_id)
+
+    async def events():
+        watch = app.state.preparations.watch(agent_id, session_id)
+        previous = None
+        try:
+            while (row := await run_in_threadpool(lambda: next(watch, None))) is not None:
+                payload = json.dumps(jsonable_encoder(row))
+                if payload != previous:
+                    yield f"event: preparation\ndata: {payload}\n\n"
+                    previous = payload
+                else:
+                    yield ": keepalive\n\n"
+        finally:
+            with CancelScope(shield=True):
+                await run_in_threadpool(watch.close)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/agents/{agent_id}/sandbox")
@@ -374,6 +450,7 @@ def session_sandbox(agent_id: str, session_id: str):
         "sandbox_id": sandbox_id,
         "status": status,
         "execution_principal": owner,
+        "warm_pool": ((row or {}).get("bootstrap_metrics") or {}).get("warm_pool"),
         "source_hash": row["source_hash"] if row else agent["source_hash"],
         "initial_bootstrap_timings_ms": ((row or {}).get("bootstrap_metrics") or {}).get(
             "timings_ms"
@@ -381,35 +458,76 @@ def session_sandbox(agent_id: str, session_id: str):
     }
 
 
-@app.get("/api/runs")
+@app.get("/api/invocations")
 def run_history(agent_id: str, session_id: str):
     return [chat_snapshot(row) for row in app.state.control.history(agent_id, session_id)]
 
 
-@app.post("/api/runs", status_code=202)
-def launch_agent(request: AgentInvocation):
-    app.state.control.agent(request.agent_id)
+@app.exception_handler(InvocationConflictError)
+def invocation_conflict(request, exc):
+    return JSONResponse(
+        status_code=409, content={"detail": "id was already used for another request"}
+    )
+
+
+@app.exception_handler(CapacityExceeded)
+def overloaded(request, exc):
+    return JSONResponse(status_code=429, headers={"Retry-After": "1"}, content={"detail": str(exc)})
+
+
+@app.post("/api/invocations")
+def launch_agent(
+    request: InvocationRequest,
+    agent_id: str | None = None,
+    view: Literal["workbench"] | None = Query(None, include_in_schema=False),
+):
+    agent_id = agent_id or (getattr(app.state, "prepared_environment", None) or {}).get("agent_id")
+    if not agent_id:
+        raise HTTPException(400, "Select an agent revision or deploy a default agent")
+    app.state.control.agent(agent_id)
+    session_id = request.session_id or str(request.id)
     if preparations := getattr(app.state, "preparations", None):
-        preparations.assert_invocable(request.agent_id, request.session_id)
+        preparations.assert_invocable(agent_id, session_id)
     row = app.state.control.create_run(
-        request.agent_id,
-        request.session_id,
-        request.invocation_id,
-        request.input,
-        retry=request.retry,
+        agent_id, session_id, str(request.id), request.input, public_id=True
     )
     if row["status"] == "queued":
         app.state.runs.submit(row["id"])
-    return chat_snapshot(row)
+    if view == "workbench":
+        return JSONResponse(jsonable_encoder(chat_snapshot(row)), status_code=202)
+    state = app.state.control._state(row["id"])
+    if request.background:
+        return JSONResponse(accepted_payload(state, stream=request.stream), status_code=202)
+    if request.stream:
+        return run_events(row["id"], view=None)
+    try:
+        output = app.state.control.call(app.state.runs.runtime.wait(row["id"]))
+        return JSONResponse({"id": row["id"], "status": "completed", "output": output})
+    except InvocationFailedError:
+        state = app.state.control._state(row["id"])
+        error, status, _ = failure_response(state)
+        return JSONResponse(
+            {"id": row["id"], "status": "failed", "error": error}, status_code=status
+        )
 
 
-@app.get("/api/runs/{run_id}")
-def run_status(run_id: str):
-    return chat_snapshot(app.state.control.run(run_id))
+@app.get("/api/invocations/{run_id}")
+def run_status(
+    run_id: str, view: Literal["workbench"] | None = Query(None, include_in_schema=False)
+):
+    if view == "workbench":
+        return chat_snapshot(app.state.control.run(run_id))
+    return state_payload(app.state.control._state(run_id))
 
 
-@app.get("/api/runs/{run_id}/events")
-def run_events(run_id: str):
+@app.get("/api/invocations/{run_id}/events")
+def run_events(
+    run_id: str,
+    after: int = 0,
+    view: Literal["workbench"] | None = Query(None, include_in_schema=False),
+):
+    if after < 0:
+        raise HTTPException(400, "after must be non-negative")
     # Resolve errors before sending HTTP 200. Subscription never launches work.
     app.state.control.run(run_id)
 
@@ -417,6 +535,9 @@ def run_events(run_id: str):
         import json
 
         previous = None
+        cursor = after
+        last_durable_read = 0
+        previous_preview = None
         watch = app.state.control.watch(run_id)
 
         def next_snapshot() -> dict | None:
@@ -425,10 +546,32 @@ def run_events(run_id: str):
         try:
             while (row := await run_in_threadpool(next_snapshot)) is not None:
                 payload = json.dumps(jsonable_encoder(chat_snapshot(row)), ensure_ascii=True)
-                if payload != previous:
-                    # Full snapshots are idempotent on reconnect, even across retries.
-                    yield f"event: run\ndata: {payload}\n\n"
-                    previous = payload
+                if view == "workbench":
+                    if payload != previous:
+                        yield f"event: run\ndata: {payload}\n\n"
+                        previous = payload
+                    else:
+                        yield ": keepalive\n\n"
+                    continue
+                import time
+
+                now = time.monotonic()
+                if now - last_durable_read >= 1 or row["status"] not in {"queued", "running"}:
+                    records = await run_in_threadpool(
+                        lambda cursor=cursor: app.state.control.call(
+                            app.state.control.runtime_store.events(run_id, after_sequence=cursor)
+                        )
+                    )
+                    for record in records:
+                        cursor = record.sequence_number
+                        yield f"id: {cursor}\nevent: {record.event.get('type', 'message')}\ndata: {json.dumps(record.event)}\n\n"
+                    last_durable_read = now
+                preview = row.get("stream")
+                if preview and preview != previous_preview:
+                    # Ephemeral preview stays off SQL. Durable lifecycle events
+                    # retain the same cursor/replay contract as DurableAgentServer.
+                    yield f"event: sandbox.preview\ndata: {json.dumps(preview)}\n\n"
+                    previous_preview = dict(preview)
                 else:
                     yield ": keepalive\n\n"
         finally:
@@ -478,13 +621,3 @@ def stop_session(request: SessionRequest):
 @app.get("/health")
 def health():
     return {"status": "ok", "execution": "lakebox", "registry": "lakebase"}
-
-
-@app.post("/invoke")
-def invoke(request: InvocationRequest):
-    try:
-        return app.state.orchestrator.invoke(
-            request.session_id, request.invocation_id, request.input
-        )
-    except (SessionBusy, RevisionConflict) as exc:
-        raise HTTPException(409, str(exc)) from exc

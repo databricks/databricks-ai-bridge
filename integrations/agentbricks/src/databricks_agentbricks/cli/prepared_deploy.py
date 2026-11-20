@@ -22,6 +22,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.prepared_environment import read_manifest, services
 from databricks_agentbricks.services.environment_features import provision_features
 from databricks_agentkit._api_client import _AgentBricksApiClient, _workspace_client
+from databricks_agentkit.runtime.environment import RUNTIME_ENVIRONMENT_ENV, SANDBOX
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -36,9 +37,19 @@ from databricks_agentkit.sandbox.environment import (
     saved_bundle,
 )
 from databricks_agentkit.sandbox.features import source_features
+from databricks_agentkit.sandbox.limits import RuntimeLimits
 
 
-def stage_runtime(target, manifest, principal, *, index_url, sandbox_idle_timeout=900):
+def stage_runtime(
+    target,
+    manifest,
+    principal,
+    *,
+    index_url,
+    sandbox_idle_timeout=900,
+    sandbox_warm_pool_size=0,
+    limits=None,
+):
     """Bundle the installed editable SDK; never read the local agent project."""
     package = Path(__file__).resolve().parents[3]
     if not (package / "pyproject.toml").exists():
@@ -82,12 +93,16 @@ def stage_runtime(target, manifest, principal, *, index_url, sandbox_idle_timeou
     (target / "requirements.txt").write_text(f"./{wheel.name}[sandbox]\n")
     (target / "environment.json").write_text(json.dumps(manifest, indent=2))
     environment = {
+        RUNTIME_ENVIRONMENT_ENV: SANDBOX,
+        **(limits or RuntimeLimits()).env(),
         "SANDBOX_NAMESPACE": manifest["namespace"],
         "SANDBOX_SCHEMA": manifest["namespace"].replace("-", "_"),
         "SANDBOX_CATALOG_PATH": manifest.get("catalog_path")
         or f"/Shared/agentbricks-runtime/{manifest['namespace']}",
         "SANDBOX_TRANSPORT": "https",
         "SANDBOX_IDLE_TIMEOUT_SECONDS": str(sandbox_idle_timeout),
+        "SANDBOX_WARM_POOL_SIZE": str(sandbox_warm_pool_size),
+        "SANDBOX_WARM_POOL_GENERATION": str(time.time_ns()),
         "AGENTBRICKS_ENVIRONMENT_FILE": "environment.json",
         "PIP_INDEX_URL": index_url,
         "UV_DEFAULT_INDEX": index_url,
@@ -129,13 +144,15 @@ def deploy_prepared(
     workspace_path=None,
     instances=None,
     sandbox_idle_timeout=900,
+    sandbox_warm_pool_size=0,
+    limits=None,
     index_url="https://pypi.org/simple/",
 ):
     from databricks_agentbricks.services.deployment.names import DeploymentName, _prefixed_name
 
     name = DeploymentName(_prefixed_name(name))
     workspace = _workspace_client(obj.profile)
-    manifest = read_manifest(workspace, environment)
+    manifest = {**read_manifest(workspace, environment), "runtime_environment": SANDBOX}
     lazy = on_demand(manifest)
     managed = "runtime_store" in manifest
     if managed and (
@@ -159,7 +176,7 @@ def deploy_prepared(
     if not lazy and not principal:
         raise AgentCliError(
             "Environment has no recorded sandbox execution identity.",
-            hint=f"Run agentbricks environment prepare {environment} to refresh its metadata.",
+            hint="Republish source with agentbricks deploy APP --sandbox --source PROJECT.",
         )
     if not lazy and (app is None or principal != app.service_principal_client_id):
         target_identity = app.service_principal_client_id if app else "a new App service principal"
@@ -167,8 +184,8 @@ def deploy_prepared(
             f"Prepared sandbox belongs to {principal}; deployment would run as {target_identity}.",
             hint="Lakebox currently restricts sandbox lifecycle and execution to its creator. "
             "Prepare under the target App's execution identity before deploying. "
-            "For a user-prepared environment, use environment invoke directly or the local "
-            "playground UI. No App settings or agent installation were changed.",
+            "Republish source with agentbricks deploy APP --sandbox --source PROJECT. "
+            "No App settings or agent installation were changed.",
         )
     registry = None
     if managed:
@@ -201,7 +218,7 @@ def deploy_prepared(
             _allow_install=False,
         )
     features = source_features(bundle_contents(bundle.data).get("agent.toml"))
-    click.echo(f"Deploying orchestrator {name} for environment {manifest['name']}", err=True)
+    click.echo(f"Deploying agent {name} to agentbricks runtime", err=True)
     resources = list(app.resources or [] if app else [])
     if not managed:
         resource = apps.AppResource(
@@ -303,6 +320,8 @@ def deploy_prepared(
             app.service_principal_client_id,
             index_url=index_url,
             sandbox_idle_timeout=sandbox_idle_timeout,
+            sandbox_warm_pool_size=sandbox_warm_pool_size,
+            limits=limits,
         )
         workspace.workspace.mkdirs(remote)
         for file in target.iterdir():
@@ -332,9 +351,11 @@ def deploy_prepared(
             if reply.status_code == 200:
                 result = {
                     "deployment": name,
+                    "runtime_environment": SANDBOX,
                     "url": app.url,
                     "environment": manifest["name"],
                     "manifest_path": manifest["manifest_path"],
+                    "sandbox_warm_pool_size": sandbox_warm_pool_size,
                     "sandbox_id": (manifest.get("preparation") or {}).get("sandbox_id"),
                     "installation": "on session preparation or first invocation"
                     if lazy

@@ -26,7 +26,29 @@ class SessionPreparation:
         self.control, self.orchestrator = control, orchestrator
         self.registry = orchestrator.registry
         self.stopping = threading.Event()
+        self.changed = threading.Condition()
+        self.version = 0
         self.threads = []
+
+    def notify(self):
+        with self.changed:
+            self.version += 1
+            self.changed.notify_all()
+
+    def watch(self, agent_id, session_id):
+        """Local writes wake subscribers; periodic reads cover other App replicas."""
+        while not self.stopping.is_set():
+            with self.changed:
+                version = self.version
+            row = self.get(agent_id, session_id)
+            yield row
+            if row["status"] not in ACTIVE:
+                return
+            with self.changed:
+                self.changed.wait_for(
+                    lambda version=version: self.stopping.is_set() or self.version != version,
+                    timeout=1,
+                )
 
     def key(self, agent_id, session_id):
         return self.orchestrator.execution_session_id(scoped_session(agent_id, session_id))
@@ -52,10 +74,16 @@ class SessionPreparation:
                 )
             )
             return db.execute(
-                "SELECT bootstrap_metrics->'preparation' AS preparation FROM sessions "
+                "SELECT bootstrap_metrics->'preparation' AS preparation, sandbox_id, "
+                "status AS installation_status, execution_principal, created_at, updated_at "
+                "FROM sessions "
                 "WHERE namespace=%s AND bootstrap_metrics->'preparation'->>'agent_id' "
                 + where
-                + " ORDER BY updated_at ASC LIMIT 100",
+                + (
+                    " ORDER BY updated_at DESC LIMIT 100"
+                    if agent_id
+                    else " ORDER BY updated_at ASC LIMIT 100"
+                ),
                 (self.registry.namespace, *args),
             ).fetchall()
 
@@ -66,8 +94,13 @@ class SessionPreparation:
                 "UPDATE sessions SET bootstrap_metrics=jsonb_set("
                 "COALESCE(bootstrap_metrics, '{}'::jsonb), '{preparation}', %s), updated_at=now() "
                 "WHERE namespace=%s AND session_key=%s",
-                (Jsonb(value), self.registry.namespace, digest),
+                (
+                    Jsonb({**value, "updated_at": datetime.now(timezone.utc).isoformat()}),
+                    self.registry.namespace,
+                    digest,
+                ),
             )
+        self.notify()
 
     def create(self, agent_id, session_id, *, retry=False):
         if self.orchestrator.sandbox_scope != "session":
@@ -113,6 +146,10 @@ class SessionPreparation:
             if current["status"] in ACTIVE:
                 return current
             raise
+        finally:
+            # Wake after the create lock is released, including when a worker
+            # already observed the queued row while create still held it.
+            self.notify()
 
     def assert_invocable(self, agent_id, session_id):
         if self.get(agent_id, session_id)["status"] in ACTIVE:
@@ -193,9 +230,12 @@ class SessionPreparation:
 
     def stop(self):
         self.stopping.set()
+        self.notify()
 
     def _worker(self):
         while not self.stopping.is_set():
+            with self.changed:
+                version = self.version
             try:
                 for row in self.rows():
                     if self.stopping.is_set():
@@ -204,4 +244,8 @@ class SessionPreparation:
                     self.execute(request["agent_id"], request["session_id"])
             except Exception:
                 logging.getLogger(__name__).exception("Preparation scheduler unavailable")
-            self.stopping.wait(1)
+            with self.changed:
+                self.changed.wait_for(
+                    lambda version=version: self.stopping.is_set() or self.version != version,
+                    timeout=1,
+                )

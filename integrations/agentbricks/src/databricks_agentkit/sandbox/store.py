@@ -115,7 +115,7 @@ class Registry:
 
     def runtime(self, session_id):
         """Read runtime state without reserving a sandbox or acquiring ownership."""
-        key = hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
+        key = self.session_key(session_id)
         with self.connect() as db:
             row = Session(db, self.namespace, key).get()
         return {
@@ -130,6 +130,31 @@ class Registry:
                 "SELECT * FROM sessions WHERE namespace=%s ORDER BY updated_at DESC LIMIT 100",
                 (self.namespace,),
             ).fetchall()
+
+    def mapping_page(self, *, after="", limit=100):
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM sessions WHERE namespace=%s AND session_key>%s "
+                "ORDER BY session_key LIMIT %s",
+                (self.namespace, after, limit),
+            ).fetchall()
+
+    def observe(self, row, status):
+        from psycopg.types.json import Jsonb
+
+        with self.connect() as db:
+            db.execute(
+                "UPDATE sessions SET bootstrap_metrics=COALESCE(bootstrap_metrics, '{}'::jsonb) || %s "
+                "WHERE namespace=%s AND session_key=%s AND sandbox_id=%s "
+                "AND bootstrap_metrics->>'observed_status' IS DISTINCT FROM %s",
+                (
+                    Jsonb({"observed_status": status}),
+                    self.namespace,
+                    row["session_key"],
+                    row["sandbox_id"],
+                    status,
+                ),
+            )
 
     def execution_principals(self):
         with self.connect() as db:
@@ -172,7 +197,7 @@ class Registry:
 
     @contextmanager
     def session(self, session_id: str):
-        key = hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
+        key = self.session_key(session_id)
         lock_id = int.from_bytes(bytes.fromhex(key[:16]), "big", signed=True)
         with self.connect() as db:
             if not db.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (lock_id,)).fetchone()[
@@ -183,6 +208,9 @@ class Registry:
                 yield Session(db, self.namespace, key)
             finally:
                 db.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+
+    def session_key(self, session_id):
+        return hashlib.sha256(f"{self.namespace}\0{session_id}".encode()).hexdigest()
 
 
 class Session:

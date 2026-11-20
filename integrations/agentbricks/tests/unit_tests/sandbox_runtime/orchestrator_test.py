@@ -57,7 +57,11 @@ def setup(tmp_path):
             return ""
         if command.startswith("python3 -c"):
             return json.dumps(
-                {"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}
+                {
+                    "python": "/venv/bin/python",
+                    "timings_ms": {"dependency_install": 42},
+                    "source_hash": "a" * 64,
+                }
             )
         if "sandbox_agent.worker:run" in command:
             return json.dumps({"reply": "hello"})
@@ -90,7 +94,13 @@ def test_skips_transfer_and_install_when_environment_is_ready(setup):
     registry.record.save(build_bundle(orchestrator.source).digest, "sandbox-one", "ready")
     remote.run.side_effect = [
         "/home/sandbox",
-        json.dumps({"python": "/venv/bin/python", "timings_ms": {"dependency_install": 42}}),
+        json.dumps(
+            {
+                "python": "/venv/bin/python",
+                "timings_ms": {"dependency_install": 42},
+                "source_hash": "a" * 64,
+            }
+        ),
         json.dumps({"reply": "hello"}),
     ]
     result = orchestrator.invoke("session", "call-two", {})
@@ -349,3 +359,65 @@ def test_app_execution_publishes_descriptor_without_owning_a_tail_reader(setup, 
     follower.assert_not_called()
     orchestrator.invoke("session", "call", {}, stream_ready=descriptors.append)
     assert descriptors[0]["path"] != descriptors[1]["path"]
+
+
+def test_pool_assignment_keeps_physical_worker_path_and_skips_install(setup):
+    orchestrator, registry, lakebox, remote = setup
+    registry.record.save(build_bundle(orchestrator.source).digest, "sandbox-one", "ready")
+    registry.record.row["bootstrap_metrics"] = {"worker_state_key": "b" * 64}
+    remote.run.side_effect = [
+        "/home/sandbox",
+        json.dumps(
+            {
+                "python": "/venv/bin/python",
+                "timings_ms": {"dependency_install": 42},
+                "source_hash": "a" * 64,
+            }
+        ),
+        json.dumps({"reply": "hello"}),
+    ]
+    result = orchestrator.invoke("assigned-session", "first-turn", {})
+    assert result["environment_reused"]
+    assert "sessions/" + "b" * 64 in remote.run.call_args.args[0]
+    assert json.loads(remote.run.call_args.args[1])["session_id"] == "assigned-session"
+    lakebox.create.assert_not_called()
+
+
+def test_pool_hit_attaches_validated_worker_without_reprobing_or_preparing(setup):
+    import hashlib
+
+    from databricks_agentkit.sandbox.session_client import PreparedSandbox
+
+    orchestrator, registry, lakebox, remote = setup
+    orchestrator.worker_mode = "persistent"
+    digest = build_bundle(orchestrator.source).digest
+    deployment = hashlib.sha256(b"test").hexdigest()[:16]
+    prepared = PreparedSandbox(
+        sandbox={"sandboxId": "ready-spare", "status": "Running"},
+        home="/home/sandbox",
+        bootstrap={"python": "/venv/bin/python", "source_hash": digest, "timings_ms": {}},
+        state_dir=f"/home/sandbox/.agentbricks-prototype/{deployment}/sessions/" + "b" * 64,
+        entrypoint="sandbox_agent.worker:run",
+        worker={"id": "already-initialized", "reused": True},
+        result={"level": "initialized"},
+    )
+
+    def claim(*args):
+        registry.record.row = {
+            "source_hash": digest,
+            "sandbox_id": "ready-spare",
+            "status": "ready",
+            "bootstrap_metrics": {"worker_state_key": "b" * 64},
+        }
+        return prepared
+
+    pool = MagicMock()
+    pool.claim.side_effect = claim
+    orchestrator.sandboxes.warm_pool = pool
+    result = orchestrator.prepare_session("new-session")
+    assert result["warm_pool_hit"] and result["environment_reused"]
+    assert result["worker"]["id"] == "already-initialized"
+    assert result["lifecycle"]["steps"]["handler_prepare"]["details_ms"] == {"cached_handler": 0}
+    remote.run.assert_not_called()
+    lakebox.get.assert_not_called()
+    lakebox.create.assert_not_called()

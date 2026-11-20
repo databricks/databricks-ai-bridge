@@ -2,12 +2,48 @@
 
 CALL_SCRIPT = r"""
 import asyncio
+import fcntl
 import importlib
 import inspect
 import json
 import os
 import time
 from pathlib import Path
+
+def request_digest(request):
+    import hashlib
+    return hashlib.sha256(json.dumps(request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def begin_attempt(request, stream_path, identity=None):
+    if not stream_path:
+        return
+    path = Path(stream_path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with Path(str(path) + ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if Path(str(path) + ".revoked").exists():
+            raise RuntimeError("Invocation attempt has been revoked; it was not submitted")
+        stat = Path("/proc/self/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        value = {"request_digest": request_digest(request), "identity": identity,
+                 "pid": os.getpid(), "process_start": stat}
+        # Never execute the same attempt twice, including delayed commands.
+        with os.fdopen(os.open(str(path) + ".started.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as file:
+            json.dump(value, file)
+            file.flush()
+            os.fsync(file.fileno())
+
+def finish_attempt(request, stream_path, response, identity=None):
+    if not stream_path:
+        return
+    path = Path(str(stream_path) + ".result.json")
+    if path.exists():
+        return
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as file:
+        json.dump({"request_digest": request_digest(request), "identity": identity, "response": response}, file)
+        file.flush()
+        os.fsync(file.fileno())
+    temporary.replace(path)
 
 _preparation = None
 _handler = None
@@ -86,8 +122,14 @@ import sys
 request = json.load(sys.stdin)
 stream_path = sys.argv[4] if len(sys.argv) > 4 and sys.argv[3] == "--stream-file" else None
 async def main():
+    begin_attempt(request, stream_path)
     try:
-        return await call_handler(request, Path(sys.argv[1]), sys.argv[2], stream_path)
+        result = await call_handler(request, Path(sys.argv[1]), sys.argv[2], stream_path)
+        finish_attempt(request, stream_path, {"ok": True, "result": result, "worker": {"mode": "oneshot"}})
+        return result
+    except BaseException as error:
+        finish_attempt(request, stream_path, {"ok": False, "error": (type(error).__name__ + ": " + str(error))[:4000]})
+        raise
     finally:
         # One-shot processes have no later worker lifetime in which to export traces.
         # Preserve the agent outcome if an optional shutdown hook fails.

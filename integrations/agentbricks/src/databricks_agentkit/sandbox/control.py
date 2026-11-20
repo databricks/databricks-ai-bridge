@@ -30,6 +30,7 @@ class ControlStore:
         self.preview_factory = preview_factory or self._preview
         self.loop = None
         self.thread = None
+        self._session_summaries = {}
 
     def initialize(self):
         if self.loop is not None:
@@ -120,7 +121,50 @@ class ControlStore:
             ).hexdigest()
         )
 
-    def create_run(self, agent_id, session_id, invocation_id, value, *, retry=False):
+    def create_run(
+        self, agent_id, session_id, invocation_id, value, *, retry=False, public_id=False
+    ):
+        from contextlib import nullcontext
+
+        from databricks_agentkit.sandbox.limits import CapacityExceeded
+
+        capacity = getattr(self, "capacity", None)
+        # All replicas serialize admission, but an existing id can reconnect at
+        # the limit. RuntimeStore.accept still checks request identity atomically.
+        with capacity.slot("admission", 1) if capacity else nullcontext():
+            if capacity:
+                run_id = (
+                    invocation_id
+                    if public_id
+                    else self._run_id(agent_id, session_id, invocation_id)
+                )
+                existing = self.call(self.runtime_store.get(run_id))
+                count = self.call(
+                    self.runtime_store.count_pending_invocations(
+                        request_filter={"namespace": self.namespace}
+                    )
+                )
+                if existing is None and count >= capacity.limits.max_pending_invocations:
+                    raise CapacityExceeded(
+                        "Invocation queue is full; wait and retry the same invocation id"
+                    )
+            return self._create_run(
+                agent_id, session_id, invocation_id, value, retry=retry, public_id=public_id
+            )
+
+    def _run_id(self, agent_id, session_id, invocation_id):
+        return (
+            "sandbox:"
+            + hashlib.sha256(
+                json.dumps(
+                    [self.namespace, agent_id, session_id, invocation_id], ensure_ascii=True
+                ).encode()
+            ).hexdigest()
+        )
+
+    def _create_run(
+        self, agent_id, session_id, invocation_id, value, *, retry=False, public_id=False
+    ):
         run_id = (
             "sandbox:"
             + hashlib.sha256(
@@ -129,6 +173,8 @@ class ControlStore:
                 ).encode()
             ).hexdigest()
         )
+        if public_id:
+            run_id = invocation_id
         request = {
             "namespace": self.namespace,
             "agent_id": agent_id,
@@ -251,31 +297,48 @@ class ControlStore:
         ]
 
     def sessions(self, agent_id):
-        states = self.call(
-            self.runtime_store.list_invocations(
-                request_filter={"namespace": self.namespace, "agent_id": agent_id},
-                limit=1000,
-            )
+        return self.call(self._sessions(agent_id))
+
+    async def _sessions(self, agent_id):
+        states = await self.runtime_store.list_invocations(
+            request_filter={"namespace": self.namespace, "agent_id": agent_id},
+            limit=1000,
         )
-        sessions = {}
+        heads = {}
         for state in states:
-            row = self._snapshot(state, events=[])
-            current = sessions.get(row["session_id"])
-            if (
-                current is None
-                or row["session_sequence_number"] > current["session_sequence_number"]
-            ):
-                sessions[row["session_id"]] = {
-                    "session_id": row["session_id"],
-                    "run_id": row["id"],
-                    "status": row["status"],
-                    "stage": row["stage"],
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                    "session_sequence_number": row["session_sequence_number"],
-                    "sandbox_id": (row["result"] or {}).get("sandbox_id"),
-                }
-        return list(sessions.values())[:100]
+            session_id = state.request["session_id"]
+            current = heads.get(session_id)
+            if current is None or state.session_sequence_number > current.session_sequence_number:
+                heads[session_id] = state
+        # Read timestamps/stages from existing events. Terminal heads are immutable;
+        # caching their display projection avoids rereading every old event on refresh.
+        readers = asyncio.Semaphore(8)
+
+        async def summary(state):
+            key = (state.invocation_id, state.attempt, state.status)
+            cached = self._session_summaries.get(key)
+            if cached is not None:
+                return cached
+            async with readers:
+                row = snapshot(state, await self.runtime_store.events(state.invocation_id))
+            result = {
+                "session_id": row["session_id"],
+                "run_id": row["id"],
+                "status": row["status"],
+                "stage": row["stage"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "session_sequence_number": row["session_sequence_number"],
+                "sandbox_id": (row["result"] or {}).get("sandbox_id"),
+            }
+            if state.is_terminal:
+                if len(self._session_summaries) >= 1000:
+                    self._session_summaries.pop(next(iter(self._session_summaries)))
+                self._session_summaries[key] = result
+            return result
+
+        rows = await asyncio.gather(*(summary(state) for state in heads.values()))
+        return sorted(rows, key=lambda row: row["updated_at"] or "", reverse=True)[:100]
 
 
 def scoped_session(agent_id: str, session_id: str) -> str:

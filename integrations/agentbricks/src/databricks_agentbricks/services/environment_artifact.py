@@ -35,8 +35,8 @@ def stop_builder(lakebox, sandbox_id):
 def build_artifact(workspace, manifest, bundle, lakebox, save, *, progress=None):
     """Persist intent before create; publish only after build and cleanup succeed.
 
-    Failed attempts retain source and bounded builder logs. `environment prepare`
-    retries with a new owned staging path after reconciling the previous builder.
+    Failed attempts retain source and bounded builder logs. A retry uses a new
+    owned staging path after reconciling the previous builder.
     """
     report = progress or (lambda stage: None)
     previous = manifest.get("builder")

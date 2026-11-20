@@ -2,18 +2,20 @@
 
 import hashlib
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from databricks_agentkit.sandbox._apps_lifecycle import (
     LakeboxProvider,
     RegistryBindings,
     allocation,
+    blocking,
     run_sync,
 )
 from databricks_agentkit.sandbox.session_lifecycle import (
     AgentRevision,
     ExecutionIdentityConflict,
+    SandboxAllocation,
     SessionSandboxManager,
     SessionScope,
 )
@@ -30,11 +32,27 @@ def timed(metrics, name):
 
 
 @dataclass(frozen=True)
+class PreparedSandbox:
+    """A spare validated during this claim, never a cross-request health cache."""
+
+    sandbox: dict
+    home: str
+    bootstrap: dict
+    state_dir: str
+    entrypoint: str
+    worker: dict
+    result: dict
+
+
+@dataclass(frozen=True)
 class SessionSandbox:
     sandbox: dict
     created: bool
     replaced: bool
     installation_status: str
+    state_key: str | None = None
+    pool_hit: bool = False
+    prepared: PreparedSandbox | None = None
 
     @property
     def id(self):
@@ -45,6 +63,24 @@ class SessionSandboxClient:
     def __init__(self, registry, lakebox, namespace):
         self.registry, self.lakebox, self.namespace = registry, lakebox, namespace
         self._principal = None
+        self.warm_pool = None
+        self.capacity = None
+
+    async def _reserve_compute(self, reservation, binding):
+        def reserve():
+            guard = self.capacity.slot("allocation", 1) if self.capacity else nullcontext()
+            with guard:
+                if self.capacity:
+                    self.capacity.check_sandboxes(self.lakebox, existing_id=binding.sandbox_id)
+                self._save(
+                    reservation.record,
+                    binding.source_hash,
+                    binding.sandbox_id,
+                    binding.status,
+                    binding.revision,
+                )
+
+        await blocking(reserve)
 
     def execution_principal(self):
         if self._principal is None:
@@ -64,6 +100,7 @@ class SessionSandboxClient:
         return SessionSandboxManager(
             RegistryBindings(self.registry, self.namespace),
             provider,
+            reserve_compute=self._reserve_compute,
             sandbox_name=lambda scope, key: (
                 f"ab-proto-{hashlib.sha256(scope.namespace.encode()).hexdigest()[:8]}-{key[:16]}"
             ),
@@ -78,8 +115,34 @@ class SessionSandboxClient:
         allow_create=True,
         progress=None,
         metrics=None,
+        use_pool=True,
     ):
+        metrics = metrics if metrics is not None else {}
         provider = LakeboxProvider(self.lakebox)
+        prepared = None
+
+        async def claim_prepared(reservation, row):
+            nonlocal prepared
+            if not use_pool or not self.warm_pool or (row and row.status != "pending"):
+                return None
+            with timed(metrics, "pool_claim"):
+                prepared = await blocking(
+                    self.warm_pool.claim, reservation.record, source_hash, source_revision
+                )
+            if prepared:
+                binding = await reservation.read()
+                if progress:
+                    progress("Using prepared sandbox from warm pool")
+                return SandboxAllocation(
+                    provider.capture(prepared.sandbox),
+                    False,
+                    False,
+                    "ready",
+                    binding.worker_state_key,
+                    prepared=True,
+                )
+            return None
+
         result = run_sync(
             self._manager(provider).get_or_create(
                 SessionScope(self.namespace, session_id, self.execution_principal()),
@@ -87,6 +150,7 @@ class SessionSandboxClient:
                 allow_create=allow_create,
                 progress=progress,
                 metrics=metrics,
+                claim_prepared=claim_prepared,
             )
         )
         return SessionSandbox(
@@ -94,6 +158,9 @@ class SessionSandboxClient:
             result.created,
             result.replaced,
             result.installation_status,
+            result.worker_state_key,
+            pool_hit=result.prepared,
+            prepared=prepared,
         )
 
     @staticmethod

@@ -15,40 +15,61 @@ from databricks_agentbricks.services import environment_debug as debug
 
 def test_cli_passes_the_session_and_command_to_debug_service(monkeypatch):
     launcher = MagicMock()
+    launcher.request.return_value = {"default_environment": "revision-one"}
     constructor = MagicMock(return_value=launcher)
     connect = MagicMock(return_value=7)
-    monkeypatch.setattr("databricks_agentbricks.cli.environment.LauncherClient", constructor)
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.sandbox_deployments.LauncherClient", constructor
+    )
     monkeypatch.setattr(debug, "connect", connect)
     result = CliRunner().invoke(
         agentbricks,
         [
             "--profile",
             "test",
-            "environment",
+            "deployments",
             "ssh",
-            "my-env",
+            "demo",
             "--session-id",
             "chat-one",
-            "--app",
-            "exact-app",
             "--command",
             "exit 7",
         ],
     )
     assert result.exit_code == 7, result.output
-    constructor.assert_called_once_with("test", app="exact-app", url=None, auth=None)
-    connect.assert_called_once_with(launcher, "my-env", "chat-one", command="exit 7")
+    constructor.assert_called_once_with("test", app="agent-bricks-demo")
+    launcher.request.assert_called_once_with("GET", "/api/config")
+    connect.assert_called_once_with(launcher, "revision-one", "chat-one", command="exit 7")
 
 
 @pytest.mark.parametrize("session", [" ", "x" * 129, "é" * 65])
 def test_invalid_session_is_rejected_before_workspace_access(session, monkeypatch):
     constructor = MagicMock()
-    monkeypatch.setattr("databricks_agentbricks.cli.environment.LauncherClient", constructor)
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.sandbox_deployments.LauncherClient", constructor
+    )
     result = CliRunner().invoke(
-        agentbricks, ["environment", "ssh", "env", "--session-id", session, "--app", "app"]
+        agentbricks, ["deployments", "ssh", "demo", "--session-id", session]
     )
     assert result.exit_code != 0
     constructor.assert_not_called()
+
+
+def test_debug_without_deployment_binding_does_not_open_shell(monkeypatch):
+    launcher = MagicMock()
+    launcher.request.return_value = {}
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.sandbox_deployments.LauncherClient", lambda *a, **k: launcher
+    )
+    connect = MagicMock()
+    monkeypatch.setattr(debug, "connect", connect)
+    result = CliRunner().invoke(
+        agentbricks,
+        ["deployments", "ssh", "agent-bricks-demo", "--session-id", "s", "--command", "pwd"],
+    )
+    assert result.exit_code != 0
+    assert "deploy it with --sandbox" in result.output
+    connect.assert_not_called()
 
 
 @pytest.mark.parametrize(

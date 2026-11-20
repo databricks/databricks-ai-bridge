@@ -6,11 +6,12 @@ const ACTIVE = new Set(["queued", "running"]);
 const API_TIMEOUTS = { stop: 210000, status: 15000 };
 const state = {
   config: null, agents: [], agent: null, context: null, sessions: [], runs: [],
-  preparation: null, preparationTimer: null,
+  preparation: null, preparationTimer: null, preparationSource: null, warmPool: null,
   pending: null, sandbox: null, busy: false, loading: false, recovery: null,
   source: null, pollTimer: null, messages: new Map(), historyUnavailable: false,
   stopOperations: new Map(), sandboxRequests: new Map(), sandboxes: new Map(),
   eventFilter: "all", eventSignature: null,
+  sessionsVersion: 0,
   model: "", models: [], modelsLoading: false,
 };
 function node(tag, text, className) {
@@ -412,6 +413,10 @@ function mergeRun(row) {
   if (nearBottom) elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
   $("run-details").textContent = JSON.stringify(row, null, 2);
   renderEvents();
+  updateSession(state.context, {
+    run_id: row.id, status: row.status, stage: row.stage,
+    updated_at: row.updated_at || row.created_at,
+  });
   renderLifecycle();
 }
 function eventsForRun(row) {
@@ -510,6 +515,7 @@ const TIMING_LABELS = {
   project_build: "Build wheel", project_install: "Install project", import_check: "Import check",
   prepare: "Handler preparation", agent_execution: "Agent execution",
   import_cache: "Import cache setup", framework_import: "Framework imports", project_import: "Agent project imports",
+  agentkit_import: "AgentKit imports", tracing_import: "Tracing imports",
   bindings: "Source bindings", configuration: "Agent configuration", session_open: "Session setup",
   agent_build: "Agent construction", mcp_discovery: "MCP tool discovery",
 };
@@ -605,6 +611,14 @@ function renderTimings(row) {
   }
 }
 function renderLifecycle() {
+  const pool = state.warmPool;
+  $("warm-pool-status").hidden = !state.config?.sandbox_warm_pool_size;
+  $("warm-pool-status").textContent = pool
+    ? `Warm pool: ${pool.ready} ready · ${pool.preparing} preparing · ${pool.retiring} retiring · maximum ${pool.maximum}${pool.error ? " · replenishment needs attention" : ""}`
+    : "Warm pool: checking readiness…";
+  const assigned = state.sandbox?.warm_pool;
+  $("warm-pool-allocation").hidden = !assigned;
+  $("warm-pool-allocation").textContent = "This session received a prepared sandbox from the warm pool.";
   const row = latestRun();
   const active = row && ACTIVE.has(row.status);
   const operation = stopping();
@@ -636,6 +650,8 @@ function renderLifecycle() {
   updateControls();
 }
 function closeWatch() {
+  state.preparationSource?.close();
+  state.preparationSource = null;
   state.source?.close();
   state.source = null;
   clearTimeout(state.preparationTimer);
@@ -661,42 +677,109 @@ async function refreshSandbox(ctx) {
   }
   if (current(ctx)) renderLifecycle();
 }
+function updateSession(ctx, fields) {
+  if (!current(ctx)) return;
+  const index = state.sessions.findIndex(row => row.session_id === ctx.sessionId);
+  const previous = state.sessions[index] || { session_id: ctx.sessionId };
+  const row = { ...previous, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null)) };
+  if (JSON.stringify(row) === JSON.stringify(previous)) return;
+  if (index < 0) state.sessions.push(row); else state.sessions[index] = row;
+  state.sessionsVersion++;
+  renderSessions();
+}
+function sessionStatus(session) {
+  if (session.session_id === state.context?.sessionId && stopping()) return "Stopping…";
+  if (["submitting", "queued", "preparing"].includes(session.preparation_status)) return "Preparing…";
+  if (ACTIVE.has(session.status)) return session.status === "queued" ? "Queued" : "Running";
+  const labels = { running: "Ready", ready: "Ready", stopped: "Stopped", terminated: "Stopped", stopping: "Stopping…", missing: "Missing", unknown: "Status unavailable", bootstrapping: "Installing…", creating: "Starting…" };
+  return labels[session.sandbox_status] || (session.preparation_status === "failed" ? "Preparation failed" : session.status || "New chat");
+}
 function renderSessions() {
   const target = $("session-list");
-  target.replaceChildren();
+  const scrollTop = target.scrollTop;
+  const focused = target.contains(document.activeElement) ? document.activeElement : null;
+  const existing = new Map([...target.querySelectorAll(".session-open-button")].map(button => [button.dataset.sessionId, button]));
+  const desired = [];
   const query = $("session-search-input").value.trim().toLowerCase();
   const sessions = [...state.sessions];
   if (state.context && !sessions.some(row => row.session_id === state.context.sessionId)) sessions.unshift({ session_id: state.context.sessionId, status: "New chat" });
+  const timestamp = row => Date.parse(row.updated_at || row.created_at) || 0;
+  sessions.sort((a, b) => timestamp(b) - timestamp(a) || a.session_id.localeCompare(b.session_id));
   for (const session of sessions.filter(row => row.session_id.toLowerCase().includes(query))) {
     const selected = session.session_id === state.context?.sessionId;
-    const button = node("button", undefined, `session-item session-open-button${selected ? " current" : ""}`);
-    button.type = "button";
-    if (selected) button.setAttribute("aria-current", "true");
-    const top = node("div", undefined, "session-item-top");
-    top.append(node("span", selected ? "Current session" : "Session", "session-item-title"), node("span", session.status, "session-item-time"));
-    button.append(top, node("span", session.session_id, "session-item-id"));
-    button.addEventListener("click", () => { if (!selected) void selectSession(session.session_id); });
-    target.append(button);
+    let button = existing.get(session.session_id);
+    if (!button) {
+      button = node("button", undefined, "session-item session-open-button");
+      button.type = "button";
+      button.dataset.sessionId = session.session_id;
+      const top = node("div", undefined, "session-item-top");
+      top.append(node("span", "", "session-item-title"), node("span", "", "session-item-time"));
+      button.append(top, node("span", session.session_id, "session-item-id"));
+      button.addEventListener("click", () => {
+        if (session.session_id !== state.context?.sessionId) void selectSession(session.session_id);
+      });
+    }
+    button.classList.toggle("current", selected);
+    if (selected) button.setAttribute("aria-current", "true"); else button.removeAttribute("aria-current");
+    button.querySelector(".session-item-title").textContent = selected ? "Current session" : "Session";
+    button.querySelector(".session-item-time").textContent = sessionStatus(session);
+    let updated = button.querySelector(".session-item-updated");
+    if (timestamp(session)) {
+      if (!updated) { updated = node("span", "", "session-item-id session-item-updated"); button.append(updated); }
+      updated.textContent = `Updated ${new Date(timestamp(session)).toLocaleString()}`;
+      updated.title = session.updated_at || session.created_at;
+    } else updated?.remove();
+    button.title = session.run_id ? `Last invocation: ${session.status}` : "";
+    if (["queued", "preparing"].includes(session.preparation_status)) button.title = session.preparation_stage || "Preparing session";
+    desired.push(button);
   }
-  if (!target.children.length) target.append(node("div", query ? "No sessions match your search." : "No sessions yet.", "state-empty"));
+  // Reconcile existing rows so selection and background refresh never empty the
+  // sidebar or discard the clicked row's focus and scroll position.
+  const keep = new Set(desired);
+  for (const child of [...target.children]) if (!keep.has(child)) child.remove();
+  desired.forEach((button, index) => {
+    if (target.children[index] !== button) target.insertBefore(button, target.children[index] || null);
+  });
+  if (!desired.length) target.append(node("div", query ? "No sessions match your search." : "No sessions yet.", "state-empty"));
+  if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  target.scrollTop = scrollTop;
 }
 async function refreshSessions(ctx) {
-  const rows = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, undefined, ctx);
-  if (!current(ctx)) return;
+  const version = state.sessionsVersion;
+  const request = ctx.sessionsRequest = (ctx.sessionsRequest || 0) + 1;
+  const rows = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, undefined, ctx, API_TIMEOUTS.status);
+  if (!current(ctx) || request !== ctx.sessionsRequest || version !== state.sessionsVersion) return;
   state.sessions = rows;
   renderSessions();
+  const session = rows.find(row => row.session_id === ctx.sessionId);
+  if (session?.sandbox_status && session.sandbox_id === state.sandbox?.sandbox_id && !state.busy && !preparing() && !stopping(ctx)) {
+    state.sandbox = { ...state.sandbox, status: session.sandbox_status };
+    state.sandboxes.set(stopKey(ctx), state.sandbox);
+    renderLifecycle();
+    if ($("prompt-input").value.trim()) autoResume(ctx);
+  }
 }
-async function history(ctx) { return api(contextUrl(ctx, "/api/runs"), undefined, ctx); }
+async function refreshSessionList() {
+  const ctx = state.context;
+  if (!ctx || document.hidden || state.loading || ctx.refreshingSessions) return;
+  ctx.refreshingSessions = true;
+  try { await refreshSessions(ctx); }
+  catch { /* Keep the last known list during a transient network failure. */ }
+  finally { ctx.refreshingSessions = false; }
+}
+async function history(ctx) { return api(contextUrl(ctx, "/api/invocations"), undefined, ctx); }
 async function beginPreparation(ctx) {
   if (!current(ctx) || !supportsPreparation() || preparing()) return;
+  ctx.manuallyStopped = false;
   nextSandboxRequest(ctx); // A pre-resume status read cannot overwrite new preparation state.
   state.preparation = { status: "submitting", stage: "Requesting session preparation" };
+  updateSession(ctx, { preparation_status: "submitting", preparation_stage: "Preparing…", updated_at: new Date().toISOString() });
   notice(); renderLifecycle(); selectEvidenceTab("sandbox");
   try {
     const result = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions`, { session_id: ctx.sessionId, retry: true }, ctx, 20000);
     if (!current(ctx)) return;
     state.preparation = result;
-    await pollPreparation(ctx);
+    watchPreparation(ctx);
     void refreshSessions(ctx).catch(() => {});
   } catch (error) {
     if (!current(ctx)) return;
@@ -705,28 +788,78 @@ async function beginPreparation(ctx) {
     renderLifecycle();
   }
 }
+function applyPreparation(ctx, result) {
+  if (!current(ctx)) return;
+  state.preparation = result;
+  if (result.status === "ready") ctx.autoResumeAttempted = false;
+  updateSession(ctx, {
+    preparation_status: result.status, preparation_stage: result.stage,
+    sandbox_id: result.result?.sandbox_id || result.sandbox_id,
+    sandbox_status: result.status === "ready" ? "running" : undefined,
+    updated_at: result.updated_at || result.created_at,
+  });
+  const prepared = result.result;
+  if (result.status === "ready" && prepared?.sandbox_id) {
+    // The completed preparation already verified compute and worker readiness.
+    // Enable Send before the optional status refresh makes another remote call.
+    nextSandboxRequest(ctx);
+    state.sandbox = {
+      ...state.sandbox, agent_id: ctx.agentId, session_id: ctx.sessionId,
+      sandbox_id: prepared.sandbox_id, status: "running", preparation: result,
+      source_hash: prepared.source_hash,
+      initial_bootstrap_timings_ms: prepared.initial_bootstrap_timings_ms,
+    };
+    state.sandboxes.set(stopKey(ctx), state.sandbox);
+  } else if (result.sandbox_id) {
+    state.sandbox = { ...state.sandbox, sandbox_id: result.sandbox_id };
+  }
+  if (result.error) notice(result.error);
+  else notice();
+  renderLifecycle();
+  if (!["queued", "preparing"].includes(result.status)) void refreshSandbox(ctx);
+}
+function watchPreparation(ctx) {
+  if (!current(ctx)) return;
+  state.preparationSource?.close();
+  clearTimeout(state.preparationTimer);
+  if (!("EventSource" in window)) { void pollPreparation(ctx); return; }
+  const source = new EventSource(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions/${encodeURIComponent(ctx.sessionId)}/events`);
+  state.preparationSource = source;
+  const close = () => {
+    source.close();
+    if (state.preparationSource === source) state.preparationSource = null;
+  };
+  const fallback = () => {
+    close();
+    if (current(ctx)) void pollPreparation(ctx);
+  };
+  source.addEventListener("preparation", event => {
+    if (!current(ctx)) { close(); return; }
+    try {
+      const result = JSON.parse(event.data);
+      if (result.agent_id !== ctx.agentId || result.session_id !== ctx.sessionId) throw new Error("Unexpected session preparation");
+      applyPreparation(ctx, result);
+      if (!["queued", "preparing"].includes(result.status)) close();
+    } catch { fallback(); }
+  });
+  source.onerror = fallback;
+}
 async function pollPreparation(ctx) {
   if (!current(ctx)) return;
   clearTimeout(state.preparationTimer);
   try {
     const result = await api(`/api/agents/${encodeURIComponent(ctx.agentId)}/sessions/${encodeURIComponent(ctx.sessionId)}`, undefined, ctx, API_TIMEOUTS.status);
     if (!current(ctx)) return;
-    state.preparation = result;
-    if (result.sandbox_id) state.sandbox = { ...state.sandbox, sandbox_id: result.sandbox_id };
+    applyPreparation(ctx, result);
     if (["queued", "preparing"].includes(result.status)) {
       state.preparationTimer = setTimeout(() => { void pollPreparation(ctx); }, 1000);
-    } else {
-      await refreshSandbox(ctx);
-      if (!current(ctx)) return;
-      if (result.error) notice(result.error);
-      else notice();
     }
   } catch (error) {
     if (!current(ctx)) return;
     state.preparation = { ...state.preparation, status: "unknown" };
     notice(`Preparation status unavailable: ${error.message}`, "prepare-status");
+    renderLifecycle();
   }
-  if (current(ctx)) renderLifecycle();
 }
 async function newSession() {
   if (!state.agent) return;
@@ -734,13 +867,22 @@ async function newSession() {
   await selectSession(id);
   if (state.context?.sessionId === id) await beginPreparation(state.context);
 }
+function autoResume(ctx) {
+  if (!current(ctx) || !supportsPreparation() || ctx.autoResumeAttempted || ctx.manuallyStopped || stopping(ctx)
+      || state.loading || state.historyUnavailable || state.busy || state.pending || preparing()
+      || state.preparation?.error || ACTIVE.has(latestRun()?.status)
+      || ["failed", "interrupted", "cancelled", "unknown"].includes(state.preparation?.status)
+      || !["stopped", "terminated"].includes(state.sandbox?.status)) return;
+  ctx.autoResumeAttempted = true;
+  void beginPreparation(ctx);
+}
 async function selectSession(sessionId) {
   state.context?.controller.abort();
   closeWatch();
   const ctx = { agentId: state.agent.id, sessionId, controller: new AbortController() };
   state.context = ctx;
   state.preparation = null;
-  state.runs = []; state.sessions = []; state.sandbox = state.sandboxes.get(stopKey(ctx)) || null;
+  state.runs = []; state.sandbox = state.sandboxes.get(stopKey(ctx)) || null;
   state.pending = savedObject(pendingKey(ctx));
   state.loading = true; state.historyUnavailable = false;
   setBusy(false); notice();
@@ -770,9 +912,10 @@ async function selectSession(sessionId) {
   if (state.pending) notice("The last submission was not confirmed. Reconnect with its original invocation ID before sending another message.", "submit");
   else if (row && ACTIVE.has(row.status)) watchRun(row, ctx);
   else if (row?.error) notice(row.error, ["failed", "interrupted"].includes(row.status) ? "failed" : null);
-  if (preparing()) void pollPreparation(ctx);
+  if (preparing()) watchPreparation(ctx);
   else if (state.preparation?.error && !row) notice(state.preparation.error);
   renderLifecycle();
+  autoResume(ctx);
 }
 function clearPending(ctx) {
   try { localStorage.removeItem(pendingKey(ctx)); } catch { /* Keep in-memory identity for this tab. */ }
@@ -796,7 +939,7 @@ function watchRun(row, ctx, reconnects = 0) {
   if (!current(ctx)) return;
   closeWatch(); setBusy(true); mergeRun(row);
   if (!ACTIVE.has(row.status)) { void terminal(row, ctx); return; }
-  const source = new EventSource(`/api/runs/${encodeURIComponent(row.id)}/events`);
+  const source = new EventSource(`/api/invocations/${encodeURIComponent(row.id)}/events?view=workbench`);
   state.source = source;
   source.addEventListener("run", event => {
     if (!current(ctx) || state.source !== source) return;
@@ -821,7 +964,7 @@ function watchRun(row, ctx, reconnects = 0) {
 async function pollRun(runId, ctx, failures = 0, reconnects = 0) {
   if (!current(ctx)) return;
   try {
-    const row = await api(`/api/runs/${encodeURIComponent(runId)}`, undefined, ctx);
+    const row = await api(`/api/invocations/${encodeURIComponent(runId)}?view=workbench`, undefined, ctx);
     if (!current(ctx)) return;
     mergeRun(row);
     if (!ACTIVE.has(row.status)) { await terminal(row, ctx); return; }
@@ -840,14 +983,10 @@ async function submitPending(ctx) {
   if (!pending || !current(ctx) || stopping(ctx)) return;
   notice(); setBusy(true); renderLifecycle();
   try {
-    const bound = state.config.default_environment;
-    const path = bound ? `/api/environments/${encodeURIComponent(bound)}/runs` : "/api/runs";
-    // Transport reconnects use retry=false. A failed-run retry creates a new invocation ID.
-    const retryFailed = Boolean(pending.retry);
-    if (retryFailed) persistPending(ctx, { ...pending, retry: false });
+    const path = `/api/invocations?agent_id=${encodeURIComponent(ctx.agentId)}&view=workbench`;
+    // An identical invocation ID reattaches; a failed-turn retry uses a fresh ID.
     const row = await api(path, {
-      ...(bound ? {} : { agent_id: ctx.agentId }), session_id: ctx.sessionId,
-      invocation_id: pending.invocation_id, input: pending.input, retry: retryFailed,
+      session_id: ctx.sessionId, id: pending.invocation_id, input: pending.input, background: true,
     });
     clearPending(ctx);
     if (!current(ctx)) return;
@@ -909,6 +1048,8 @@ async function stopSession() {
   const key = stopKey(ctx);
   const operation = { started: Date.now() };
   state.stopOperations.set(key, operation);
+  ctx.manuallyStopped = true; // An explicit stop stays stopped in this view.
+  updateSession(ctx, { sandbox_status: "stopping", updated_at: new Date().toISOString() });
   nextSandboxRequest(ctx);
   notice(); renderLifecycle();
   try {
@@ -918,7 +1059,10 @@ async function stopSession() {
     nextSandboxRequest(ctx);
     const sandbox = { ...state.sandboxes.get(key), ...result };
     state.sandboxes.set(key, sandbox);
-    if (selected(ctx)) { state.sandbox = sandbox; notice(); }
+    if (selected(ctx)) {
+      state.sandbox = sandbox; notice();
+      updateSession(state.context, { sandbox_status: "stopped", updated_at: new Date().toISOString() });
+    }
   } catch (error) {
     remember(key, JSON.stringify({ unconfirmed: true, elapsed_ms: Date.now() - operation.started }));
     if (selected(ctx)) notice(`Stop was not confirmed: ${error.message} Reconnect to check status.`, "reload");
@@ -957,6 +1101,7 @@ function renderAgent() {
   $("agent-select").value = agent?.id || "";
 }
 async function selectAgent(agent) {
+  if (state.agent?.id !== agent.id) state.sessions = [];
   if (state.agent?.id !== agent.id) state.model = "";
   state.agent = agent;
   renderModels();
@@ -999,6 +1144,7 @@ function resizeComposer() {
 async function initialize() {
   try {
     state.config = await api("/api/config");
+    void refreshWarmPool();
     void loadModels();
     renderCapabilities();
     const shared = state.config.sandbox_scope === "environment";
@@ -1052,6 +1198,8 @@ document.querySelectorAll(".event-filter").forEach(button => button.addEventList
   renderEvents();
 }));
 $("prompt-input").addEventListener("input", resizeComposer);
+$("prompt-input").addEventListener("input", () => { if (state.context) autoResume(state.context); });
+$("prompt-input").addEventListener("focus", () => { if (state.context) autoResume(state.context); });
 $("prompt-input").addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -1077,6 +1225,15 @@ $("source-kind").addEventListener("change", () => {
 document.querySelectorAll("[data-prompt]").forEach(button => button.addEventListener("click", () => {
   $("prompt-input").value = button.dataset.prompt; resizeComposer(); $("prompt-input").focus();
 }));
+async function refreshWarmPool() {
+  if (!state.config?.sandbox_warm_pool_size || document.hidden) return;
+  try { state.warmPool = await api("/api/warm-pool", undefined, undefined, API_TIMEOUTS.status); }
+  catch { state.warmPool = null; }
+  if (state.context) renderLifecycle();
+}
+setInterval(() => { void refreshWarmPool(); }, 10000);
+setInterval(() => { void refreshSessionList(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshSessionList(); });
 setInterval(() => { if (state.context) renderLifecycle(); }, 500);
 window.addEventListener("pagehide", closeWatch);
 void initialize();

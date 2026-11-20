@@ -83,8 +83,13 @@ the agreed checks pass, or report the concrete failure and remaining limitation.
 
 Use `agentbricks deploy APP --sandbox --source PROJECT` to upload
 source and deploy the generic App orchestrator in one command. No `environment create`
-step is required. Optional `--git-revision` selects committed source. Deploy provisions the
-App-owned managed Runtime Store; only the App connects to SQL and creates its two tables.
+step is required. Deploy generates a missing `uv.lock` using Python 3.12 before source
+upload, without installing the agent locally; existing locks are preserved. Optional
+`--git-revision` selects committed source and requires the lockfile in that commit.
+Record custom package indexes in the project's `pyproject.toml` or `uv.toml` so
+sandbox installation can use the same configuration with `uv sync --locked`.
+Deploy provisions the
+App-owned managed Runtime Store; only the App connects to SQL and initializes runtime tables.
 The workspace must support managed Runtime Store provisioning; there is no manual Lakebase
 configuration path. Historical state is retained without migration.
 Workspace stores the frozen source archive and revision manifests. Lakebase stores only
@@ -95,11 +100,20 @@ before the first message. Direct API/CLI invocation retains lazy preparation;
 later turns in that session reuse it. Use `--sandbox` on redeploy and retain the same
 App and Workspace root to keep earlier revisions and session mappings available.
 Deploy prints the agent URL and next steps; use global `--output json` for machine-readable results.
-The environment name in JSON deploy output is internal revision metadata, useful for debug
-commands below. The environment group provides inspection, invocation and debugging; environment create is removed.
+Source revision identifiers in deploy JSON are internal metadata. Use `agentbricks invoke APP`
+for invocation and `agentbricks deployments ssh APP` for debugging; neither needs a revision name.
 Use `--sandbox-idle-timeout SECONDS` to configure Lakebox idle shutdown (default 900,
 range 60–86400). Existing sandboxes adopt the policy on their next prepare/invoke after
 redeploy; the resident worker has no separate idle timer.
+
+Optional `--sandbox-warm-pool-size N` prepares up to N unused sandboxes in the background,
+including source installation and handler initialization. Default 0 disables the pool;
+the prototype accepts 0–10. Each new session claims one healthy spare or falls back to cold
+preparation. Assigned sandboxes never return to the pool. The limit is deployment-wide
+across App replicas and excludes assigned sessions. Check the Sandbox tab for pool
+readiness; deploy completion does not mean the pool is full. Redeploy with 0 to drain
+unassigned spares. This spends idle compute to move initialization before session creation;
+custom preparation hooks must be safe to run without a user request.
 
 Sandbox invocations use the existing durable runtime's invocation and event tables;
 there are no changes to those table schemas. Failed invocations stay terminal: inspect
@@ -118,8 +132,8 @@ retains that disk; deleting or replacing it loses SQLite history. Deployment rec
 declared session and tracing resources and the App's grants. A provisioning failure
 must be resolved or reported; do not silently substitute another managed store.
 
-For an environment deployed with the sandbox prototype, use
-`agentbricks environment ssh ENV --app APP --session-id SESSION` to open its existing
+For an agent deployed with the sandbox prototype, use
+`agentbricks deployments ssh APP --session-id SESSION` to open its existing
 session sandbox. The installed CLI must include the `sandbox` extra. The developer needs
 workspace OAuth and `CAN_MANAGE` on that App; chat access alone is insufficient.
 Finish session preparation or send the first message before connecting. The shell resumes stopped compute
@@ -138,6 +152,11 @@ rather than imposing a generated template's payload.
 
 ### Historical sandbox execution-artifact experiment
 
-The wheelhouse experiment is not used by `deploy --sandbox`. Existing artifact manifests can
-still be retried with `environment prepare` and served with `deploy --environment`; the creation
-command has been removed. Refer to the runtime notes for historical behavior and limitations.
+The wheelhouse experiment is not used by `deploy --sandbox`. Its legacy environment
+CLI commands are removed. Use source publication through `deploy --sandbox`.
+
+The warm-spare target is the public tuning control. Deployment-wide defaults also bound total
+running/starting sandboxes (64), executing invocations (16), installations/preparations (2), and
+accepted unfinished invocations (128). Hidden operator overrides are documented in the CLI
+reference; ordinary deployments retain their existing path unless `--sandbox` is selected.
+The sandbox API uses `/api/invocations` with the existing managed-server request fields.

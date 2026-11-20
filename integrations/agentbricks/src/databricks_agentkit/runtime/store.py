@@ -199,6 +199,18 @@ class InMemoryRuntimeStore(RuntimeStore):
                 )
             return copy.deepcopy(state) if state is not None else None
 
+    async def count_pending_invocations(self, *, request_filter: JsonObject | None = None) -> int:
+        """Accepted unfinished work; optional admission helper, outside RuntimeStore."""
+        async with self._lock:
+            return sum(
+                not state.is_terminal
+                and isinstance(state.request, dict)
+                and all(
+                    state.request.get(key) == value for key, value in (request_filter or {}).items()
+                )
+                for state in self.states.values()
+            )
+
     async def list_invocations(
         self,
         *,

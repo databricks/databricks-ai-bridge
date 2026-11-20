@@ -75,6 +75,8 @@ with (state_dir / "worker.lock").open("a") as lease:
             while count < max_invocations:
                 connection, _ = server.accept()
                 retire = False
+                attempt_started = False
+                request = {}
                 with connection:
                     connection.settimeout(5)
                     try:
@@ -84,7 +86,8 @@ with (state_dir / "worker.lock").open("a") as lease:
                             raise ValueError("Invalid worker request")
                         request = json.loads(line)
                         if request.get("op") == "ping":
-                            send(connection, {"identity": identity, "id": worker_id, "pid": os.getpid()})
+                            send(connection, {"identity": identity, "id": worker_id, "pid": os.getpid(),
+                                "prepared": _preparation is not None, "invocation_count": count})
                             continue
                         if request.get("op") == "shutdown":
                             send(connection, {"stopped": True})
@@ -95,6 +98,9 @@ with (state_dir / "worker.lock").open("a") as lease:
                         # cannot execute a session concurrently after a timeout.
                         with (state_dir / "execution.lock").open("a") as execution:
                             fcntl.flock(execution, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            if request["op"] == "invoke":
+                                begin_attempt(request["request"], request.get("stream_path"), identity)
+                                attempt_started = True
                             reused = count > 0 or _preparation is not None
                             if request["op"] == "invoke":
                                 count += 1
@@ -108,19 +114,24 @@ with (state_dir / "worker.lock").open("a") as lease:
                                 retire = cleanup["retire"]
                             finally:
                                 watchdog.cancel()
-                            send(connection, {
+                            response = {
                                 "ok": True, "result": result,
                                 "worker": {"mode": "persistent", "id": worker_id,
                                     "pid": os.getpid(), "reused": reused,
                                     "invocation_count": count, "identity": identity,
                                     "retiring": retire or count >= max_invocations},
-                            })
+                            }
+                            if attempt_started:
+                                finish_attempt(request["request"], request.get("stream_path"), response, identity)
+                            send(connection, response)
                     except BaseException as error:
                         traceback.print_exc()
                         retire = True
                         try:
-                            send(connection, {"ok": False,
-                                "error": (type(error).__name__ + ": " + str(error))[:4000]})
+                            response = {"ok": False, "error": (type(error).__name__ + ": " + str(error))[:4000]}
+                            if attempt_started:
+                                finish_attempt(request["request"], request.get("stream_path"), response, identity)
+                            send(connection, response)
                         except OSError:
                             pass
                 # An exception or lost reply can leave handler state uncertain.
@@ -146,6 +157,42 @@ with (state_dir / "worker.lock").open("a") as lease:
 )
 
 WORKER_VERSION = hashlib.sha256(DAEMON_SCRIPT.encode()).hexdigest()
+
+# Inspect installation and worker identity in one command. Never start a worker
+# or call user initialization code while validating an unassigned spare.
+ATTACH_SCRIPT = r"""
+import hashlib
+import json
+from pathlib import Path
+import socket
+import sys
+
+expected = json.load(sys.stdin)
+bootstrap = json.loads((Path(expected["root"]) / "ready.json").read_text())
+if (bootstrap["source_hash"] != expected["source_hash"]
+    or bootstrap["python"] != expected["python"]
+    or bootstrap.get("artifact_hash") != expected["artifact_hash"]):
+    raise RuntimeError("Prepared installation identity mismatch")
+state_dir = str(Path(expected["state_dir"]).resolve())
+key = hashlib.sha256(state_dir.encode()).hexdigest()[:32]
+address = str(Path("/tmp") / ("ab-worker-" + key) / "rpc.sock")
+identity = hashlib.sha256(json.dumps([
+    state_dir, expected["entrypoint"], expected["python"], expected["worker_version"]
+]).encode()).hexdigest()
+with socket.socket(socket.AF_UNIX) as connection:
+    connection.settimeout(.5)
+    connection.connect(address)
+    connection.sendall(b'{"op":"ping"}\n')
+    with connection.makefile("rb") as reply:
+        line = reply.readline(65537)
+    if len(line) > 65536 or not line.endswith(b"\n"):
+        raise RuntimeError("Invalid prepared worker response")
+    worker = json.loads(line)
+if (not worker.get("prepared") or worker.get("invocation_count") != 0
+    or worker.get("identity") != identity or worker.get("id") != expected["worker_id"]):
+    raise RuntimeError("Prepared worker identity mismatch")
+print(json.dumps({"bootstrap": bootstrap, "worker": worker}), flush=True)
+"""
 
 CLIENT_SCRIPT = (
     "DAEMON_SCRIPT = "
@@ -228,6 +275,10 @@ def ensure_worker():
                 raise RuntimeError("Session worker failed to start; inspect worker.log")
             time.sleep(.05)
         raise TimeoutError("Session worker did not become ready; invocation was not submitted")
+
+if "--probe" in sys.argv[4:]:
+    print(json.dumps(probe()), flush=True)
+    sys.exit(0)
 
 ensure_worker()
 request = json.load(sys.stdin)

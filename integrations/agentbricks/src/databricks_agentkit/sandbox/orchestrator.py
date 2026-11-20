@@ -6,7 +6,7 @@ import os
 import re
 import shlex
 import time
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from databricks_agentkit.sandbox.artifact_scripts import CHECK_READY, FETCH, INS
 from databricks_agentkit.sandbox.bootstrap import SCRIPT
 from databricks_agentkit.sandbox.bundle import build_bundle
 from databricks_agentkit.sandbox.lifecycle import RunLifecycle
-from databricks_agentkit.sandbox.persistent import CLIENT_SCRIPT
+from databricks_agentkit.sandbox.persistent import CLIENT_SCRIPT, WORKER_VERSION
 from databricks_agentkit.sandbox.runner import SCRIPT as RUNNER_SCRIPT
 from databricks_agentkit.sandbox.session_client import RevisionConflict, SessionSandboxClient, timed
 from databricks_agentkit.sandbox.sources import DEFAULT_ENTRYPOINT, validate_entrypoint
@@ -80,6 +80,7 @@ class Orchestrator:
         _prepare_only=False,
         _warm_worker=False,
         _allow_install=True,
+        _pool_fill=False,
     ):
         started = time.perf_counter()
         metrics = {}
@@ -107,33 +108,43 @@ class Orchestrator:
                     allow_create=_allow_install and (not self.prepared_session_id or _prepare_only),
                     progress=report,
                     metrics=metrics,
+                    use_pool=not _pool_fill,
                 )
+                state_key = allocation.state_key or state_key
                 sandbox, sandbox_id = allocation.sandbox, allocation.id
                 created, replaced = allocation.created, allocation.replaced
                 try:
                     connect_started = time.perf_counter()
-                    with self.lakebox.connect(sandbox) as remote:
+                    with self.lakebox.connect(sandbox) as remote, ExitStack() as preparation:
                         metrics["remote_connect"] = round(
                             (time.perf_counter() - connect_started) * 1000, 2
                         )
-                        with timed(metrics, "environment_probe"):
-                            home = remote.run('printf "%s" "$HOME"').strip()
-                            deployment = hashlib.sha256(self.namespace.encode()).hexdigest()[:16]
-                            root = f"{home}/.agentbricks-prototype/{deployment}/{bundle.digest}"
-                            if execution_artifact:
-                                artifact_hash = execution_artifact["sha256"]
-                                if not re.fullmatch(r"[a-f0-9]{64}", artifact_hash):
-                                    raise ValueError("Invalid execution artifact hash")
-                                root += "/" + artifact_hash
-                                ready = remote.run(
-                                    f"python3 -c {shlex.quote(CHECK_READY)} {shlex.quote(root)} "
-                                    f"{shlex.quote(json.dumps(execution_artifact))}"
-                                ).strip()
-                            else:
-                                ready = remote.run(
-                                    f"if test -f {shlex.quote(root + '/ready.json')}; then "
-                                    f"cat {shlex.quote(root + '/ready.json')}; fi"
-                                ).strip()
+                        deployment = hashlib.sha256(self.namespace.encode()).hexdigest()[:16]
+                        attached = allocation.prepared
+                        if attached:
+                            if attached.entrypoint != entrypoint:
+                                raise RevisionConflict("Prepared worker entrypoint mismatch")
+                            home = attached.home
+                            ready = json.dumps(attached.bootstrap)
+                            metrics["environment_probe"] = 0.0
+                        else:
+                            with timed(metrics, "environment_probe"):
+                                home = remote.run('printf "%s" "$HOME"').strip()
+                                root = f"{home}/.agentbricks-prototype/{deployment}/{bundle.digest}"
+                                if execution_artifact:
+                                    artifact_hash = execution_artifact["sha256"]
+                                    if not re.fullmatch(r"[a-f0-9]{64}", artifact_hash):
+                                        raise ValueError("Invalid execution artifact hash")
+                                    root += "/" + artifact_hash
+                                    ready = remote.run(
+                                        f"python3 -c {shlex.quote(CHECK_READY)} {shlex.quote(root)} "
+                                        f"{shlex.quote(json.dumps(execution_artifact))}"
+                                    ).strip()
+                                else:
+                                    ready = remote.run(
+                                        f"if test -f {shlex.quote(root + '/ready.json')}; then "
+                                        f"cat {shlex.quote(root + '/ready.json')}; fi"
+                                    ).strip()
                         bootstrap_reused = bool(ready)
                         if ready:
                             timeline.reuse_installation()
@@ -149,6 +160,13 @@ class Orchestrator:
                             if not _allow_install or self.prepared_session_id and not _prepare_only:
                                 raise RuntimeError(
                                     "Prepared installation is missing; prepare a new environment before invoking"
+                                )
+                            if self.sandboxes.capacity:
+                                preparation.enter_context(
+                                    self.sandboxes.capacity.slot(
+                                        "preparation",
+                                        self.sandboxes.capacity.limits.max_concurrent_preparations,
+                                    )
                                 )
                             timeline.start("source_copy")
                             if execution_artifact:
@@ -196,6 +214,8 @@ class Orchestrator:
                         state_dir = (
                             f"{home}/.agentbricks-prototype/{deployment}/sessions/{state_key}"
                         )
+                        if attached and state_dir != attached.state_dir:
+                            raise RevisionConflict("Prepared worker state directory mismatch")
                         request = {
                             "session_id": session_id,
                             "invocation_id": invocation_id,
@@ -209,25 +229,38 @@ class Orchestrator:
                         result = None
                         worker = None
                         if _warm_worker:
+                            if self.sandboxes.capacity and bootstrap_reused and not attached:
+                                preparation.enter_context(
+                                    self.sandboxes.capacity.slot(
+                                        "preparation",
+                                        self.sandboxes.capacity.limits.max_concurrent_preparations,
+                                    )
+                                )
                             timeline.start("handler_prepare")
                             report("Initializing resident handler")
-                            result, worker = self._invoke_worker(
-                                remote,
-                                home,
-                                bootstrap,
-                                state_dir,
-                                entrypoint,
-                                request,
-                                None,
-                                metrics,
-                                prepare=True,
-                            )
+                            if attached:
+                                result, worker = attached.result, attached.worker
+                            else:
+                                result, worker = self._invoke_worker(
+                                    remote,
+                                    home,
+                                    bootstrap,
+                                    state_dir,
+                                    entrypoint,
+                                    request,
+                                    None,
+                                    metrics,
+                                    prepare=True,
+                                )
                             timeline.complete(
                                 details=(result.get("details") or {}).get("timings_ms")
+                                if not worker.get("reused")
+                                else {"cached_handler": 0}
                             )
                             metrics["environment_startup"] = round(
                                 (time.perf_counter() - started) * 1000, 2
                             )
+                        preparation.close()
                         timeline.ready(metrics["environment_startup"], prepare_only=_prepare_only)
                         if not _prepare_only:
                             timeline.start("agent_run")
@@ -260,6 +293,7 @@ class Orchestrator:
                 "stream_transport": "ExecuteCommand(tail -F)" if emit or stream_ready else None,
                 "sandbox_created": created,
                 "sandbox_replaced": replaced,
+                "warm_pool_hit": allocation.pool_hit,
                 "environment_reused": bootstrap_reused,
                 "source_hash": bundle.digest,
                 "artifact_hash": execution_artifact["sha256"] if execution_artifact else None,
@@ -271,6 +305,18 @@ class Orchestrator:
                 "initial_bootstrap_timings_ms": bootstrap["timings_ms"],
                 "result": result,
                 "worker": worker,
+                **(
+                    {
+                        "pool_worker": {
+                            "state_dir": state_dir,
+                            "python": bootstrap["python"],
+                            "home": home,
+                            "root": root,
+                        }
+                    }
+                    if _pool_fill
+                    else {}
+                ),
             }
 
     def _invoke_worker(
@@ -313,7 +359,28 @@ class Orchestrator:
                 if stream_ready:
                     # Publish once before execution. Subscribers can independently
                     # follow this attempt; their lifetime never owns the worker.
-                    stream_ready({"sandbox_id": remote.sandbox_id, "path": path})
+                    identity = (
+                        hashlib.sha256(
+                            json.dumps(
+                                [state_dir, entrypoint, bootstrap["python"], WORKER_VERSION]
+                            ).encode()
+                        ).hexdigest()
+                        if self.worker_mode == "persistent"
+                        else None
+                    )
+                    stream_ready(
+                        {
+                            "sandbox_id": remote.sandbox_id,
+                            "path": path,
+                            "protocol_version": 1,
+                            "worker_mode": self.worker_mode,
+                            "identity": identity,
+                            "request_digest": hashlib.sha256(
+                                json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+                            ).hexdigest(),
+                            "source_hash": bootstrap["source_hash"],
+                        }
+                    )
                 reader = FileFollower(remote, path, emit) if emit else nullcontext()
                 with reader as follower:
                     try:

@@ -13,7 +13,12 @@ from unittest.mock import ANY
 
 import pytest
 
-from databricks_agentkit.sandbox.persistent import CLIENT_SCRIPT, DAEMON_SCRIPT, WORKER_VERSION
+from databricks_agentkit.sandbox.persistent import (
+    ATTACH_SCRIPT,
+    CLIENT_SCRIPT,
+    DAEMON_SCRIPT,
+    WORKER_VERSION,
+)
 
 
 @pytest.fixture
@@ -63,6 +68,7 @@ def worker(tmp_path):
         script=CLIENT_SCRIPT,
         wait=True,
         prepare=False,
+        probe=False,
     ):
         directory = tmp_path / state
         states.add(directory)
@@ -78,6 +84,7 @@ def worker(tmp_path):
                 "--stream-file",
                 str(stream),
                 *(["--prepare"] if prepare else []),
+                *(["--probe"] if probe else []),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -291,6 +298,22 @@ def test_prepare_hook_runs_once_per_resident_worker(worker, tmp_path):
     assert first[1]["result"]["details"]["loop"] == invoked[1]["result"]["loop"]
 
 
+def test_pool_probe_never_starts_worker_and_reports_unused_prepared_process(worker, tmp_path):
+    code, result, error, _ = worker(probe=True)
+    assert code == 0 and result is None, error
+    assert not (tmp_path / "session/worker.log").exists()
+    prepared = worker(prepare=True)[1]
+    probe = worker(probe=True)[1]
+    assert probe["prepared"] and probe["invocation_count"] == 0
+    assert probe["id"] == prepared["worker"]["id"]
+    invoked = worker(invocation="real-session-first-turn")[1]
+    assert invoked["worker"]["id"] == probe["id"]
+    assert worker(probe=True)[1]["invocation_count"] == 1
+    os.kill(probe["pid"], signal.SIGKILL)
+    time.sleep(0.05)
+    assert worker(probe=True)[1] is None
+
+
 def test_shutdown_hook_runs_after_turns_and_on_termination(worker, tmp_path):
     with (tmp_path / "test_agent.py").open("a") as file:
         file.write(
@@ -333,3 +356,75 @@ def test_blocking_shutdown_is_bounded_and_preserves_successful_reply(worker, tmp
     assert second[0] == 0, second[2]
     assert first[1]["worker"]["id"] != second[1]["worker"]["id"]
     assert second[1]["result"]["disk"] == 2
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, "source_hash", "worker_id", "artifact_hash", "used", "dead"]
+)
+def test_prepared_attachment_checks_disk_and_live_worker_without_initializing(
+    worker, tmp_path, invalid
+):
+    prepared = worker(prepare=True)
+    assert prepared[0] == 0, prepared[2]
+    live = prepared[1]["worker"]
+    root = tmp_path / "installation"
+    root.mkdir()
+    bootstrap = {"source_hash": "revision", "python": sys.executable, "timings_ms": {}}
+    (root / "ready.json").write_text(json.dumps(bootstrap))
+    expected = {
+        "root": str(root),
+        "source_hash": "revision",
+        "artifact_hash": None,
+        "python": sys.executable,
+        "state_dir": str(tmp_path / "session"),
+        "entrypoint": "test_agent:invoke",
+        "worker_version": WORKER_VERSION,
+        "worker_id": live["id"],
+    }
+    if invalid in {"source_hash", "worker_id", "artifact_hash"}:
+        expected[invalid] = "wrong"
+    elif invalid == "used":
+        assert worker()[0] == 0
+    elif invalid == "dead":
+        os.killpg(live["pid"], signal.SIGKILL)
+    checked = subprocess.run(
+        [sys.executable, "-c", ATTACH_SCRIPT],
+        input=json.dumps(expected),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if invalid:
+        assert checked.returncode != 0
+    else:
+        assert checked.returncode == 0, checked.stderr
+        result = json.loads(checked.stdout)
+        assert result["bootstrap"] == bootstrap
+        assert result["worker"]["id"] == live["id"]
+        assert result["worker"]["invocation_count"] == 0
+    if invalid != "used":
+        assert not (tmp_path / "session/count").exists()
+
+
+def test_lost_controller_reply_leaves_result_journal_without_reexecution(worker):
+    process, stream = worker(invocation="lost-reply", action="sleep", wait=False)
+    started = Path(str(stream) + ".started.json")
+    deadline = time.monotonic() + 10
+    while not started.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    process.kill()
+    process.wait(timeout=5)
+    process.stdout.close()
+    process.stderr.close()
+    result_path = Path(str(stream) + ".result.json")
+    while not result_path.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    response = json.loads(result_path.read_text())["response"]
+    assert response["ok"] is True
+    assert response["result"]["disk"] == 1
+    duplicate = worker(invocation="lost-reply")
+    assert duplicate[0] != 0
+    assert json.loads(result_path.read_text())["response"] == response
+    assert (stream.parent.parent / "count").read_text() == "1"

@@ -45,7 +45,11 @@ with (root / "bootstrap.lock").open("w") as lock:
         phase("toolchain_download", [str(tools / "bin/python"), "-m", "pip", "install", "uv==0.13.5"])
         uv = str(tools / "bin/uv")
     metrics["toolchain"] = round((time.perf_counter() - start) * 1000, 2)
-    env = {**os.environ, "UV_CACHE_DIR": str(root / "uv-cache"), "UV_LINK_MODE": "copy", "UV_NO_PROGRESS": "1", "UV_DEFAULT_INDEX": "https://pypi.org/simple"}
+    env = {**os.environ, "UV_CACHE_DIR": str(root / "uv-cache"), "UV_LINK_MODE": "copy", "UV_NO_PROGRESS": "1"}
+    # Index selection belongs to the published project, not the sandbox image.
+    # uv uses public PyPI when the project does not configure another index.
+    for key in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX", "UV_EXTRA_INDEX_URL"):
+        env.pop(key, None)
     phase("dependency_install", [uv, "sync", "--locked", "--no-dev", "--no-install-project", "--python", "3.12"], cwd=source, env=env)
     phase("project_build", [uv, "build", "--wheel", "--out-dir", str(root / "wheels")], cwd=source, env=env)
     wheels = list((root / "wheels").glob("*.whl"))

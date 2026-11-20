@@ -924,6 +924,14 @@ class DeployService:
             else:
                 env_removals.append(CORS_ALLOWED_ORIGINS_ENV)
 
+        # Persist execution placement with the deployment; lifecycle commands can
+        # inspect configuration even when App compute is stopped.
+        from databricks_agentkit.runtime.environment import RUNTIME_ENVIRONMENT_ENV, SHARED_COMPUTE
+
+        # Keep custom-server projects without app.yaml on their existing startup
+        # path. An absent marker also means shared compute.
+        if env or (source_dir / "app.yaml").exists():
+            env[RUNTIME_ENVIRONMENT_ENV] = SHARED_COMPUTE
         # 2. Patch app.yaml with the initial env. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
         with timer(FailureStage.APP_YAML):

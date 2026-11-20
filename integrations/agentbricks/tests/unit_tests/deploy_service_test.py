@@ -14,6 +14,7 @@ from unittest.mock import Mock, call
 
 import pytest
 import requests
+import yaml
 from databricks.sdk.errors import (
     BadRequest,
     InternalError,
@@ -302,6 +303,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
             "AGENT_MEMORY_STORE": "mem-id",
             "AGENT_SESSION_STORE": "session",
             "RUNTIME_STORE_DATABASE": "db-id",
+            "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
         }
 
     app.sync_source.side_effect = check_manifest_before_sync
@@ -686,8 +688,8 @@ env:
         return late_patch
 
     deployment_fixture.runtime.after_app_created.side_effect = add_late_patch
-    deployment_fixture.app.resolve_workspace_path.side_effect = (
-        lambda *args: phases.append("workspace") or "/Workspace/custom"
+    deployment_fixture.app.resolve_workspace_path.side_effect = lambda *args: (
+        phases.append("workspace") or "/Workspace/custom"
     )
     deployment_fixture.app.sync_source.side_effect = lambda *args: phases.append("sync")
     deployment_fixture.app.wait_for_compute.side_effect = lambda *args: phases.append("wait")
@@ -716,6 +718,7 @@ env:
         "UV_INDEX_URL": "https://packages.example/simple",
         "UV_DEFAULT_INDEX": "https://packages.example/simple",
         "RUNTIME_LATE": "late",
+        "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
     }
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
@@ -784,15 +787,16 @@ def test_deploy_rejects_an_unusable_app_yaml_before_any_workspace_call(
     assert (tmp_path / "app.yaml").read_text() == text
 
 
-def test_deploy_with_no_manifest_changes_leaves_app_yaml_alone(
+def test_deploy_with_no_resource_changes_records_shared_compute_placement(
     deployment_fixture, tmp_path: pathlib.Path
 ):
     deployment_fixture.resolver.load.return_value = None
-    before = (tmp_path / "app.yaml").read_text()
-
     deployment_fixture.service.deploy(_request(tmp_path))
 
-    assert (tmp_path / "app.yaml").read_text() == before
+    assert yaml.safe_load((tmp_path / "app.yaml").read_text()) == {
+        "command": ["python", "app.py"],
+        "env": [{"name": "AGENTBRICKS_RUNTIME_ENVIRONMENT", "value": "shared_compute"}],
+    }
     deployment_fixture.provider.get.assert_called_once_with()
 
 
@@ -835,7 +839,10 @@ def test_declarative_unbind_prunes_stale_store_env_from_existing_manifest(
         entry["name"]: entry["value"]
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
-    assert env == {"KEEP": "preserve-me"}
+    assert env == {
+        "KEEP": "preserve-me",
+        "AGENTBRICKS_RUNTIME_ENVIRONMENT": "shared_compute",
+    }
     assert result.memory_grant_attempted is False
     assert result.session_grant_attempted is False
     memory_client.assert_not_called()

@@ -1021,22 +1021,18 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH | --environment NAME] [--instances N] [--no-wait]
+  deploy       [<name>] [--source PATH] [--sandbox] [--instances N] [--no-wait]
                [--allowed-origin ORIGIN ... | --clear-allowed-origins]
   deployments
     wait       [<name>] [--timeout SECONDS] [--source PATH]
     list | get | logs | start | stop | delete
-  environment
-    get | prepare NAME
-    list        (--app APP | --url URL)
-    invoke      NAME --session-id ID --json JSON (--app APP | --url URL)
-                [--invocation-id ID] [--retry] [--no-wait] [--timeout SECONDS]
+    ssh        APP --session-id ID [--command COMMAND]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
     loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
                 [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
                 [--report-dir PATH] [--save-responses FILE]
-  invoke       APP --session-id ID --json JSON [--environment NAME] [--stream]
+  invoke       APP --session-id ID --json JSON [--stream]
 ```
 
 ## Sandbox deployments
@@ -1682,6 +1678,12 @@ sync/streaming/background transport selector is manual.
 Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Sandbox deployment placement is recorded in deployed App configuration as
+`AGENTBRICKS_RUNTIME_ENVIRONMENT=sandbox`; ordinary App execution records `shared_compute`.
+Sandbox invocations use the existing `/api/invocations` request/status contract, with separate
+session preparation. Capacity defaults and hidden operator overrides are in the
+[deploy reference](cli.md).
 
 The deployment workflow tracks phases and readiness internally; these observations are not
 logged as separate telemetry fields. Network errors are retried within the existing readiness budget; if the final probe remains unreachable,

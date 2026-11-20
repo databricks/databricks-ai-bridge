@@ -124,10 +124,13 @@ async def prepare_session(state_dir: Path) -> dict:
         with measure(timings, "framework_import"):
             importlib.import_module("langchain.messages")
             importlib.import_module("langgraph.checkpoint.sqlite.aio")
+        with measure(timings, "agentkit_import"):
             importlib.import_module("databricks_agentkit.langgraph")
             importlib.import_module("databricks_agentkit.runtime.tool_manifest")
             importlib.import_module("databricks_agentkit.langgraph.session_store")
+        with measure(timings, "tracing_import"):
             importlib.import_module("databricks_agentkit.runtime.tracing")
+        with measure(timings, "project_import"):
             importlib.import_module("agent.agent")
     with measure(timings, "bindings"):
         prepare_source(state_dir)
