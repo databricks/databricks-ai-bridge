@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import difflib
 import sys
 
 import click
+from rich import box
+from rich.panel import Panel
 from rich.text import Text
 
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentkit import timefmt
 
@@ -45,12 +49,51 @@ def _actors(client, store, change) -> str:
     return ", ".join(sorted({e["actor_id"] for e in entries if e.get("actor_id")})) or "—"
 
 
-def _counts(change):
-    return (
-        f"+{change.get('entries_added', 0)} "
-        f"~{change.get('entries_updated', 0)} "
-        f"-{change.get('entries_deleted', 0)}"
+def _counts(change) -> Text:
+    return Text.assemble(
+        (f"+{change.get('entries_added', 0)}", render.SUCCESS),
+        " ",
+        (f"~{change.get('entries_updated', 0)}", render.WARNING),
+        " ",
+        (f"-{change.get('entries_deleted', 0)}", render.ERROR),
     )
+
+
+def _previous_version(client, store, entry):
+    """The version of `entry` that this change replaced, or None at the start of its history."""
+    previous_id = entry.get("previous_change_id")
+    if not previous_id:
+        return None
+    previous = client.get_memory_change(store, previous_id)
+    for version in previous.get("entries", []):
+        if version.get("memory_entry") == entry.get("memory_entry"):
+            return version
+    # Diffing against nothing would show the whole entry as new, which is wrong.
+    raise AgentCliError(
+        f"Change {previous_id} has no version of {entry.get('memory_entry')}; cannot diff."
+    )
+
+
+def _diff_panel(entry, previous) -> Panel:
+    previous_id = entry.get("previous_change_id")
+    title = f"Diff from {previous_id}" if previous_id else "Diff from start of recorded history"
+    is_delete = entry.get("change_type", "").endswith("_DELETE")
+    if "content" not in entry and previous is not None and not is_delete:
+        # Without this version's content there is nothing to compare; an all-removed diff would
+        # read as a delete.
+        body = Text("This version carries no content to compare.", style=render.DIM)
+    else:
+        old = ((previous or {}).get("content") or "").splitlines()
+        new = (entry.get("content") or "").splitlines()
+        styles = {"-": render.ERROR, "+": render.SUCCESS, " ": render.DIM}
+        # ndiff also emits "?" hint lines that point inside a changed line; skip them.
+        lines = [
+            Text(line, style=styles[line[0]])
+            for line in difflib.ndiff(old, new)
+            if line[0] in styles
+        ]
+        body = Text("\n").join(lines) if lines else Text("No content.", style=render.DIM)
+    return Panel(body, title=title, title_align="left", border_style=render.DIM, box=box.ROUNDED)
 
 
 @click.group()
@@ -159,18 +202,30 @@ def changes_list(
 @changes.command("get")
 @click.argument("change_id")
 @click.option("--store", required=True, help="Store id or resource name.")
+@click.option(
+    "--diff",
+    is_flag=True,
+    help="Show each entry's content as a diff against its previous version (text output).",
+)
 @click.pass_obj
-def changes_get(obj, change_id, store) -> None:
+def changes_get(obj, change_id, store, diff) -> None:
     """Get one change: its header and the entry versions it wrote, including content.
 
-    To compare versions, get the change named by an entry's previous_change_id. A missing
-    predecessor marks the start of recorded history. Restoring an older version requires a new
-    entry update; these commands only read history.
+    With --diff, each entry's content is shown as a line diff against the version named by its
+    previous_change_id, at the cost of one extra request per entry. A missing predecessor marks
+    the start of recorded history. Restoring an older version requires a new entry update; these
+    commands only read history.
     """
-    data = obj.client().get_memory_change(store, change_id)
+    if diff and obj.output == "json":
+        raise click.UsageError("--diff renders text; drop it with -o json.")
+    client = obj.client()
+    data = client.get_memory_change(store, change_id)
     if obj.output == "json":
         render.emit_json(data)
         return
+    entries = data.get("entries", [])
+    # Read every predecessor before printing, so a failed read cannot leave a partial page.
+    previous = [_previous_version(client, store, entry) for entry in entries] if diff else []
     fields = {
         "Name": data.get("name"),
         "Source": data.get("source_type"),
@@ -185,8 +240,7 @@ def changes_get(obj, change_id, store) -> None:
         "Updated": timefmt.absolute(data.get("update_time")),
     }
     render.detail("Memory Change", change_id, _literal_fields(fields))
-    entries = data.get("entries", [])
-    for entry in entries:
+    for index, entry in enumerate(entries):
         fields = {
             "Memory entry": entry.get("memory_entry"),
             "Actor": entry.get("actor_id"),
@@ -199,7 +253,13 @@ def changes_get(obj, change_id, store) -> None:
             "Summary": entry.get("summary"),
             "Created": timefmt.absolute(entry.get("create_time")),
         }
+        if diff:
+            # The diff below shows every line of the content.
+            del fields["Content"]
         render.detail("Entry Version", entry.get("path") or "—", _literal_fields(fields))
+        if diff:
+            render.console().print()
+            render.console().print(_diff_panel(entry, previous[index]))
     click.echo(f"{len(entries)} entry versions.")
 
 

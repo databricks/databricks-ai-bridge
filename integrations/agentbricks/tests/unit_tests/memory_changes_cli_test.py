@@ -354,3 +354,104 @@ def test_list_text_reads_changes_from_the_memory_changes_field(workspace):
     assert result.exit_code == 0, result.output
     assert "right-key" in result.stdout
     assert "wrong-key" not in result.stdout
+
+
+ENTRY = "memory-stores/store-1/entries/e1"
+
+
+def _changes(by_id):
+    def do(method, path, **kwargs):
+        return by_id[path.rsplit("/", 1)[-1]]
+
+    return do
+
+
+def test_diff_shows_what_the_change_did_to_each_entry(workspace):
+    # "What did this change do?" is the question history exists to answer; --diff must answer it
+    # from the predecessor's content, not just restate the new content.
+    workspace.api_client.do.side_effect = _changes(
+        {
+            "c2": {
+                "entries": [
+                    {
+                        "memory_entry": ENTRY,
+                        "path": "/profile.md",
+                        "previous_change_id": "c1",
+                        "content": "Name: Maya\nRole: lead\n[bold]literal[/bold]",
+                    }
+                ]
+            },
+            "c1": {
+                "entries": [
+                    {"memory_entry": "memory-stores/store-1/entries/other", "content": "unrelated"},
+                    {"memory_entry": ENTRY, "content": "Name: Maya\nRole: engineer"},
+                ]
+            },
+        }
+    )
+    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    assert result.exit_code == 0, result.output
+    for line in ["Diff from c1", "  Name: Maya", "- Role: engineer", "+ Role: lead"]:
+        assert line in result.stdout
+    assert "+ [bold]literal[/bold]" in result.stdout
+    assert "unrelated" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "entry,previous,expected",
+    [
+        ({"content": "a\nb"}, None, ["start of recorded history", "+ a", "+ b"]),
+        (
+            {"change_type": "MEMORY_CHANGE_TYPE_DELETE", "previous_change_id": "c1"},
+            {"content": "a\nb"},
+            ["- a", "- b"],
+        ),
+    ],
+)
+def test_diff_of_a_new_or_deleted_entry_is_all_added_or_all_removed(
+    workspace, entry, previous, expected
+):
+    by_id = {"c2": {"entries": [{"memory_entry": ENTRY, **entry}]}}
+    if previous is not None:
+        by_id["c1"] = {"entries": [{"memory_entry": ENTRY, **previous}]}
+    workspace.api_client.do.side_effect = _changes(by_id)
+    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    assert result.exit_code == 0, result.output
+    for line in expected:
+        assert line in result.stdout
+
+
+def test_diff_fails_instead_of_showing_a_wrong_diff(workspace):
+    # A predecessor without this entry would otherwise diff against nothing and present the whole
+    # entry as newly added.
+    workspace.api_client.do.side_effect = _changes(
+        {
+            "c2": {
+                "entries": [{"memory_entry": ENTRY, "previous_change_id": "c1", "content": "new"}]
+            },
+            "c1": {"entries": []},
+        }
+    )
+    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    assert result.exit_code == 1, result.output
+    assert "has no version of" in result.stderr
+    assert "+ new" not in result.stdout
+
+
+def test_diff_without_this_versions_content_does_not_read_as_a_delete(workspace):
+    workspace.api_client.do.side_effect = _changes(
+        {
+            "c2": {"entries": [{"memory_entry": ENTRY, "previous_change_id": "c1"}]},
+            "c1": {"entries": [{"memory_entry": ENTRY, "content": "kept"}]},
+        }
+    )
+    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    assert result.exit_code == 0, result.output
+    assert "no content to compare" in result.stdout
+    assert "- kept" not in result.stdout
+
+
+def test_diff_is_rejected_for_json_and_get_without_it_makes_one_request(workspace):
+    result = run(["get", "c2", "--store", "store-1", "--diff"])
+    assert result.exit_code == 2, result.output
+    workspace.api_client.do.assert_not_called()

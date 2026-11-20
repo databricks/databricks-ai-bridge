@@ -673,13 +673,24 @@ agentbricks -p my-workspace -o json memory changes get CHANGE_ID --store support
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--store` | Store ID or `memory-stores/ID` | - | yes | Store containing the change. |
+| `--diff` | flag | off | no | Show each entry's content as a line diff against its previous version. Text output only. |
 
 Get has no filters or paging. Text output includes provenance, content, description, summary, and
 `previous_change_id`; JSON retains all fields as returned, including absent or empty content for
 tombstones and metadata-only changes.
 
-For a diff, read an entry's `previous_change_id`, fetch that change, and compare the two returned
-contents locally:
+To see what a change did, add `--diff`:
+
+```sh
+agentbricks memory changes get CHANGE_ID --store support-memory --diff
+```
+
+Under each entry version, the content is replaced by a diff against the version named by its
+`previous_change_id`: removed lines start with `-`, added lines with `+`, and unchanged lines are
+indented. A new entry shows every line as added and a delete shows every line as removed. Each
+entry with a predecessor costs one extra request, and the command fails without printing if a
+predecessor cannot be read. `--diff` is rejected with `-o json`; to compare in a script, fetch
+the predecessor yourself:
 
 ```sh
 agentbricks -o json memory changes get PREVIOUS_CHANGE_ID --store support-memory
@@ -694,8 +705,8 @@ agentbricks -o json memory changes list --store support-memory --memory-entry-id
 
 Use entry identity instead of the current path, which may differ from an earlier version's path.
 A missing predecessor marks the start of recorded history, including a baseline; it does not
-prove the entry never existed before recording began. These commands do not modify history pointers
-or automatically fetch predecessors. Preview, permission, and invalid-token errors exit nonzero;
+prove the entry never existed before recording began. These commands do not modify history
+pointers, and only `get --diff` fetches predecessors. Preview, permission, and invalid-token errors exit nonzero;
 with `-o json`, errors are JSON on stderr and stdout stays empty.
 
 #### `agentbricks memory pipeline`

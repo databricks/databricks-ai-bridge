@@ -177,6 +177,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks -o json memory changes get <change-id> --store <store>",
             "read a change's entry versions and predecessor links",
         ),
+        (
+            "agentbricks memory changes get <change-id> --store <store> --diff",
+            "see what the change did to each entry",
+        ),
     ),
     ("memory", "pipeline"): (
         (
