@@ -145,7 +145,9 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
         reporter=reporter,
         state_tracker=state_tracker,
         diagnostics=diagnostics,
-        app_probe=AppProbe(WorkspaceOAuthAuthenticator(obj.profile).authorization_header),
+        app_probe=AppProbe(
+            WorkspaceOAuthAuthenticator(obj.profile, allow_pat=True).authorization_header
+        ),
     )
 
 

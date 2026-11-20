@@ -9,15 +9,20 @@ from databricks_agentkit._api_client import _workspace_client
 
 
 class WorkspaceOAuthAuthenticator:
-    """Resolve an OAuth header from one selected Databricks workspace profile."""
+    """Resolve an OAuth header from one selected Databricks workspace profile.
 
-    def __init__(self, profile: Optional[str]) -> None:
+    ``allow_pat`` sends a ``pat`` profile's token anyway: a Databricks Sandbox saves its OAuth token as
+    ``token =``, so only the App's 401/403 can tell it from a real PAT.
+    """
+
+    def __init__(self, profile: Optional[str], *, allow_pat: bool = False) -> None:
         self._profile = profile
+        self._allow_pat = allow_pat
 
     def authorization_header(self) -> str:
         try:
             client = _workspace_client(self._profile)
-            if client.config.auth_type == "pat":
+            if client.config.auth_type == "pat" and not self._allow_pat:
                 raise AgentCliError(
                     "Databricks Apps API routes require OAuth; the selected profile uses a PAT.",
                     hint="Authenticate the same workspace with `databricks auth login`.",
