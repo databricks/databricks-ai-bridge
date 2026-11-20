@@ -7,15 +7,13 @@ from agents.models import openai_chatcompletions
 from agents.models.chatcmpl_converter import Converter
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
-from databricks_openai.utils.clients import _is_claude_model
-
 _preserve_thinking_blocks: ContextVar[bool] = ContextVar(
     "databricks_preserve_thinking_blocks", default=False
 )
 
 
 class _ThinkingBlockConverter(Converter):
-    """Converter that replays Claude thinking blocks while a Databricks model builds its request.
+    """Converter that replays thinking blocks while a Databricks model builds its request.
 
     The SDK only asks for ``preserve_thinking_blocks`` from its LiteLLM and any-llm models. Other
     models are unaffected: the context variable is set only inside
@@ -33,11 +31,12 @@ openai_chatcompletions.Converter = _ThinkingBlockConverter  # ty: ignore[invalid
 
 
 class DatabricksChatCompletionsModel(OpenAIChatCompletionsModel):
-    """Chat completions model that sends Claude reasoning signatures back on the next turn.
+    """Chat completions model that sends reasoning signatures back on the next turn.
 
     Claude models on the AI Gateway return reasoning with a signature that must be replayed on the
     following request, notably after a tool call. Use it with ``AsyncDatabricksOpenAI``, which
-    turns the gateway's reasoning content into the SDK's thinking blocks and back.
+    turns any model's gateway reasoning content into the SDK's thinking blocks, and signed blocks
+    back into reasoning content. Unsigned reasoning (Qwen, gpt-oss) is not sent back.
 
     Example:
         >>> from agents import Agent
@@ -53,7 +52,7 @@ class DatabricksChatCompletionsModel(OpenAIChatCompletionsModel):
     """
 
     async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
-        token = _preserve_thinking_blocks.set(_is_claude_model(str(self.model)))
+        token = _preserve_thinking_blocks.set(True)
         try:
             return await super()._fetch_response(*args, **kwargs)
         finally:

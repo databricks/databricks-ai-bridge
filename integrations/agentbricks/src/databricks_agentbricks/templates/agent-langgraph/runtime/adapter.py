@@ -126,7 +126,7 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
                 for message in messages:
-                    # Claude reasoning comes out as its own item, before the answer message.
+                    # Reasoning comes out as its own item, before the answer message.
                     for item in message_items(message):
                         yield {"type": "message", "message": item}
         elif mode == "messages":

@@ -196,19 +196,46 @@ async def test_assistant_thinking_blocks_are_sent_as_gateway_reasoning(async_cli
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["system.ai.claude-sonnet-4-5", "databricks-gpt-oss-120b"])
-async def test_other_models_are_unchanged(async_client, model):
+@pytest.mark.parametrize(
+    "model",
+    ["system.ai.claude-sonnet-4-5", "system.ai.gpt-5-2", "databricks-meta-llama-3-3-70b-instruct"],
+)
+async def test_string_content_models_are_unchanged(async_client, model):
     response = ChatCompletion.construct(**copy.deepcopy(_MESSAGE))
-    if "claude" in model:
-        response.choices[0].message.content = _ANSWER
-    with patch.object(AsyncCompletions, "create", new_callable=AsyncMock, return_value=response):
+    response.choices[0].message.content = _ANSWER
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": _ANSWER},
+        {"role": "user", "content": "again"},
+    ]
+    with patch.object(
+        AsyncCompletions, "create", new_callable=AsyncMock, return_value=response
+    ) as create:
         result = await async_client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": "hi"}]
+            model=model, messages=cast(Any, copy.deepcopy(messages))
         )
     assert result is response
-    expected = _ANSWER if "claude" in model else _MESSAGE["choices"][0]["message"]["content"]
-    assert result.choices[0].message.content == expected
+    assert result.choices[0].message.content == _ANSWER
     assert getattr(result.choices[0].message, "thinking_blocks", None) is None
+    assert create.call_args.kwargs["messages"] == messages
+
+    string_deltas = [
+        {"role": "assistant", "content": ""},
+        {"content": "Hello! "},
+        {"content": "How can I help?"},
+    ]
+    with patch.object(
+        AsyncCompletions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=_astream(_chunks(string_deltas)),
+    ):
+        stream = await async_client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        deltas = [chunk.choices[0].delta async for chunk in stream]
+    assert [delta.content for delta in deltas] == ["", "Hello! ", "How can I help?"]
+    assert not any(getattr(delta, "thinking_blocks", None) for delta in deltas)
 
 
 async def _drain(result: Any) -> None:

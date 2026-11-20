@@ -58,7 +58,7 @@ class _RoutedChatDatabricks(ChatDatabricks):
         return kwargs
 
     def _prepare_inputs(self, messages: list[Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
-        # Send Claude 5.x reasoning (and its signature) back to the model on the next turn.
+        # Send signed reasoning back to the model on the next turn; drop unsigned reasoning.
         return super()._prepare_inputs(gateway_messages(messages), *args, **kwargs)
 
 
