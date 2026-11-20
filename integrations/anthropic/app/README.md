@@ -206,8 +206,9 @@ Genie One also needs `EXECUTE` on the `system.ai.genie_one_mcp` MCP service (sec
 - **Caps.** `CMA_MAX_SESSIONS_PER_USER` counts a user's bindings over their lifetime (bindings are never deleted in this
   version); the check and the bind are not atomic. Sessions carry whatever budget they were created with in the
   Console.
-- **Token revocation.** A revoked consent is refused on the next request, but the principal cache can keep serving the
-  caller for up to 60 s, and a ticket already left for a session can still launch it until it expires.
+- **Token revocation.** A revoked consent is refused on the next request. The 60 s identity cache only serves the
+  page view; the confirm step always re-checks the token. A ticket already left for a session can still launch it
+  until it expires.
 - **Restarts** drop tickets (they're in memory): the session's next tool call gets a new link.
 
 ## Operate
