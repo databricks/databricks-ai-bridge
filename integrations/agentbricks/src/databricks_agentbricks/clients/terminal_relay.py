@@ -64,6 +64,7 @@ def run(
     on_ready: Optional[Callable[[], None]],
     quiet_status: Callable[[float], str],
     on_exit: Optional[Callable[[int], None]] = None,
+    isolated: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` on a pseudo-terminal, relaying its output to ours unchanged.
 
@@ -78,9 +79,15 @@ def run(
     _copy_window_size(master)
     previous_winch = signal.signal(signal.SIGWINCH, lambda *_: _copy_window_size(master))
     try:
-        # stdin stays the real terminal, so typed input (e.g. at a debugger prompt) still reaches
-        # the app; the process group is unchanged, so Ctrl+C reaches it as before.
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=slave, stderr=slave)
+        # Keep stdin attached so an agent's debugger can read terminal input.
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=isolated and os.name == "posix",
+        )
     except BaseException:
         os.close(master)
         os.close(slave)
@@ -113,6 +120,12 @@ def run(
         relay.clear_status()
     except KeyboardInterrupt:
         relay.clear_status()
+        if isolated:
+            from databricks_agentbricks.clients.process_runner import stop_process
+
+            stop_process(proc, isolated=True, signum=signal.SIGINT)
+            relay.drain(_OUTPUT_GRACE_S)
+            raise
         # Ctrl+C reaches the child too. Keep relaying its shutdown output, give it a moment to exit
         # cleanly as `subprocess.run` does, then make sure it is gone.
         deadline = time.monotonic() + _SIGINT_WAIT_S
@@ -129,6 +142,10 @@ def run(
     finally:
         signal.signal(signal.SIGWINCH, previous_winch)
         os.close(master)
+        if isolated:
+            from databricks_agentbricks.clients.process_runner import stop_process
+
+            stop_process(proc, isolated=True)
         proc.wait()
         if on_exit is not None:
             on_exit(proc.returncode)
