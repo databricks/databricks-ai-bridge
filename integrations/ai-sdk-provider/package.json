@@ -5,17 +5,12 @@
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
-  "types": "./dist/index.d.cts",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
     }
   },
   "files": [
@@ -29,6 +24,7 @@
     "dev": "tsdown --watch",
     "clean": "rm -rf dist",
     "test": "vitest run",
+    "test:genie:live": "RUN_GENIE_LIVE_TEST=1 vitest run tests/genie-live-smoke.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
@@ -44,25 +40,55 @@
   },
   "peerDependencies": {
     "@ai-sdk/provider": "^3.0.5",
-    "@ai-sdk/provider-utils": "^4.0.10"
+    "@ai-sdk/provider-utils": "^4.0.10",
+    "ai": "^6.0.0"
   },
   "dependencies": {
-    "zod": "^4.3.5"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "0.15.4",
-    "@types/node": "22.19.3",
-    "@typescript-eslint/eslint-plugin": "7.18.0",
-    "@typescript-eslint/parser": "7.18.0",
-    "@vitest/coverage-v8": "4.0.18",
-    "@vitest/ui": "4.0.18",
+    "@ai-sdk/provider": "^3.0.5",
+    "@ai-sdk/provider-utils": "^4.0.10",
+    "@arethetypeswrong/cli": "0.18.2",
+    "@types/node": "25.6.0",
+    "@typescript-eslint/eslint-plugin": "8.58.1",
+    "@typescript-eslint/parser": "8.58.1",
+    "@vitest/coverage-v8": "4.1.4",
+    "@vitest/ui": "4.1.4",
+    "ai": "^6.0.0",
+    "dotenv": "^17.4.2",
     "eslint": "8.57.1",
     "eslint-config-prettier": "9.1.2",
-    "msw": "2.12.7",
-    "prettier": "3.7.4",
-    "tsdown": "0.9.9",
+    "msw": "2.13.2",
+    "prettier": "3.8.2",
+    "tsdown": "0.21.7",
     "typescript": "5.9.3",
-    "vitest": "4.0.18"
+    "vitest": "4.1.4"
+  },
+  "overrides": {
+    "ajv": "6.14.0",
+    "flatted": "3.4.2",
+    "minimatch@3": {
+      "brace-expansion": "1.1.14"
+    },
+    "minimatch@9": {
+      "brace-expansion": "2.0.3"
+    },
+    "micromatch": {
+      "picomatch": "2.3.2"
+    },
+    "vite": {
+      "picomatch": "4.0.4"
+    },
+    "tinyglobby": {
+      "picomatch": "4.0.4"
+    },
+    "unplugin": {
+      "picomatch": "4.0.4"
+    },
+    "vitest": {
+      "picomatch": "4.0.4"
+    }
   },
   "author": {
     "name": "Databricks",
