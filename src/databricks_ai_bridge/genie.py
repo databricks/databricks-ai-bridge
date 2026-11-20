@@ -331,7 +331,7 @@ class Genie:
                     time.sleep(ITERATION_FREQUENCY)
                 else:
                     return GenieResponse(
-                        f"No query result: {resp['state']}",
+                        f"No query result: {state}",
                         query_str,
                         description,
                         returned_conversation_id,
