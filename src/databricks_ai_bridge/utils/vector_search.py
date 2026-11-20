@@ -137,10 +137,12 @@ def parse_vector_search_response(
     ignore_cols: list[str] | None = None,
     document_class: DocType[T] = dict,  # ty:ignore[invalid-parameter-default]
     include_score: bool = False,
+    min_score: float | None = None,
 ) -> list[tuple[T, float]]:
     """
     Parse the search response into a list of Documents with score.
     The document_class parameter is used to specify the class of the document to be created.
+    Results scoring below ``min_score`` are dropped.
     """
     if ignore_cols is None:
         ignore_cols = []
@@ -163,6 +165,8 @@ def parse_vector_search_response(
         metadata = get_metadata(columns, result, retriever_schema, ignore_cols, include_score)
 
         score = result[-1]
+        if min_score and score < min_score:
+            continue
         doc = document_class(page_content=page_content, metadata=metadata)
         docs_with_score.append((doc, score))
 
