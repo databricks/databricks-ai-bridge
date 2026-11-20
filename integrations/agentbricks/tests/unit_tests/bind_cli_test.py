@@ -97,3 +97,54 @@ def test_unbind_when_nothing_bound_is_graceful(tmp_path):
     assert r.exit_code == 0
     assert "No memory store binding" in r.output
     assert AgentProject.load(project).memory_store is None
+
+
+def test_sessions_unbind_json_reports_removal_and_preserves_other_settings(tmp_path):
+    project = _project(tmp_path)
+    for group, args in ((memory, ["bind", "my-mem"]), (sessions, ["bind", "my-sess"])):
+        r = CliRunner().invoke(group, [*args, "--source", str(project)], obj=_Ctx())
+        assert r.exit_code == 0, r.output
+    before = AgentProject.load(project)
+
+    result = CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx("json"))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "session_store": None,
+        "removed": True,
+        "manifest": str(project / "agent.toml"),
+    }
+    after = AgentProject.load(project)
+    assert after.session_store is None
+    assert after.memory_store == before.memory_store == "my-mem"
+    assert "[session_store]" not in (project / "agent.toml").read_text()
+
+
+def test_sessions_unbind_json_when_nothing_bound(tmp_path):
+    project = _project(tmp_path)
+    CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx())
+    manifest_before = (project / "agent.toml").read_text()
+
+    result = CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx("json"))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "session_store": None,
+        "removed": False,
+        "manifest": str(project / "agent.toml"),
+    }
+    assert (project / "agent.toml").read_text() == manifest_before
+
+
+def test_sessions_unbind_text_output_is_unchanged(tmp_path):
+    project = _project(tmp_path)
+    CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
+
+    removed = CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx())
+    assert removed.exit_code == 0, removed.output
+    assert "Removed session store binding" in removed.output
+    assert "agentbricks deploy <name>" in removed.output
+
+    again = CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx())
+    assert again.exit_code == 0, again.output
+    assert f"No session store binding in {project / 'agent.toml'}." in again.output
