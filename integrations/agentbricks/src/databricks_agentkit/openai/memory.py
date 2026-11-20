@@ -79,7 +79,8 @@ def _session(session_id: Optional[str]) -> Optional[str]:
 
 
 def _label(memory: "Memory") -> str:
-    return f"{memory.path} [session {memory.session_id}]" if memory.session_id else memory.path
+    path = memory.path if memory.path is not None else memory.name
+    return f"{path} [session {memory.session_id}]" if memory.session_id else path
 
 
 def _format_recall(results: "list[MemorySearchResult]") -> str:

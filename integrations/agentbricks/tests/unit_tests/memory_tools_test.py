@@ -307,6 +307,28 @@ async def test_recall_shows_each_hit_path_session_and_content(framework, api):
     )
 
 
+@pytest.mark.parametrize("session_id", [None, "s1"])
+@pytest.mark.asyncio
+async def test_recall_labels_an_entry_without_a_path_by_its_name(framework, api, session_id):
+    name = f"memory-stores/{STORE}/entries/e1"
+    api.search_response = {
+        "results": [
+            {
+                "managed_memory_entry": {
+                    "name": name,
+                    "session_id": session_id,
+                    "content": "User prefers email.",
+                }
+            }
+        ]
+    }
+
+    result = await _invoke(_tools(framework)["recall"], {"query": "prefs"}, framework)
+
+    label = f"{name} [session s1]" if session_id else name
+    assert result == f"{label}:\n  User prefers email."
+
+
 @pytest.mark.asyncio
 async def test_recall_falls_back_to_the_deprecated_entries_field(framework, api):
     api.search_response = {
