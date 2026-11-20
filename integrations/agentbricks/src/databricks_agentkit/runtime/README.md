@@ -125,6 +125,28 @@ the input payload, a handler response, or `X-Routing-Key`.
   Add `stream: true` to include an events URL in the response.
 - **Reconnect:** Read stored events with `GET .../events?after=<last-event-id>`.
 
+### SDK suspension capability
+
+An application that owns its approval or tool-result validation can opt into suspension at the
+lower-level `Runtime` API. Its executor returns `InvocationSuspension(continuation)` where
+`continuation` is an opaque JSON object. A host-provided store adapter implementing
+`SuspensionRuntimeStore` saves the waiting state with status `AWAITING_RESOLUTION`; the attempt
+ends, and a later invocation in the same session stays queued. The application reads the
+waiting snapshot, validates the external result, then calls
+`await runtime.resolve(invocation_id, expected, updated_continuation, resume=True)`. `expected` is
+the continuation from the snapshot and is compared atomically, so a concurrent resolution can win
+only once. `resume=False` updates the waiting state while more results are pending. A resumed attempt
+keeps the invocation ID and receives `context.continuation`.
+
+`Runtime.wait()` raises `InvocationAwaitingResolutionError` when it encounters a waiting invocation.
+The managed HTTP server returns `202` for a synchronous POST that suspends, reports
+`awaiting_resolution` from its status endpoint, and closes the SSE stream after
+`run.awaiting_resolution`. The SDK does not provide approval or resolution HTTP endpoints; an
+application using this capability must supply its own authenticated, validated resolution path.
+The host adapter owns durable continuation storage. The SDK supplies an in-memory implementation
+for local development and tests; the built-in Lakebase store does not support suspension.
+The bundled framework adapters do not use suspension automatically.
+
 These examples use an agent that returns `{"answer":"Hello"}` and emits `delta` events. The input,
 output, and application event payloads are defined by your agent or framework adapter.
 

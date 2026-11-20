@@ -16,15 +16,18 @@ from databricks_agentkit.runtime.execution import (
 from databricks_agentkit.runtime.store import (
     InMemoryRuntimeStore,
     RuntimeStore,
+    SuspensionRuntimeStore,
     runtime_store_from_environment,
 )
 from databricks_agentkit.runtime.types import (
     Invocation,
+    InvocationAwaitingResolutionError,
     InvocationEvent,
     InvocationExecutorFn,
     InvocationFailedError,
     InvocationNotFoundError,
     InvocationStatus,
+    JsonObject,
     JsonValue,
 )
 
@@ -219,6 +222,24 @@ class Runtime:
         self.executor.ensure_scheduled(state)
         return state
 
+    async def resolve(
+        self, invocation_id: str, expected: JsonObject, continuation: JsonObject, *, resume: bool
+    ) -> Invocation | None:
+        """Atomically save host-validated resolution state and schedule it when ready."""
+        self._require_started()
+        if not isinstance(self.runtime_store, SuspensionRuntimeStore):
+            raise TypeError("This Runtime Store does not support invocation suspension")
+        copied_expected = copy_json_value(expected, "expected")
+        copied_continuation = copy_json_value(continuation, "continuation")
+        if not isinstance(copied_expected, dict) or not isinstance(copied_continuation, dict):
+            raise TypeError("expected and continuation must be JSON objects")
+        state = await self.runtime_store.resolve(
+            invocation_id, copied_expected, copied_continuation, resume=resume
+        )
+        if state is not None and resume:
+            self.executor.ensure_scheduled(state)
+        return state
+
     def owns_invocation(self, state: Invocation) -> bool:
         """Whether this worker owns the invocation, including legacy unassigned rows."""
         return state.worker_id is None or state.worker_id == getattr(
@@ -270,6 +291,8 @@ class Runtime:
                     return copy.deepcopy(state.response)
                 if state.status == InvocationStatus.FAILED:
                     raise InvocationFailedError(invocation_id)
+                if state.status == InvocationStatus.AWAITING_RESOLUTION:
+                    raise InvocationAwaitingResolutionError(invocation_id)
                 await asyncio.sleep(self.poll_seconds)
 
         if timeout is None:

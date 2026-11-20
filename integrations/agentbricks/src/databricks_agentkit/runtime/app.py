@@ -29,6 +29,7 @@ from databricks_agentkit.runtime.store import RuntimeStore
 from databricks_agentkit.runtime.types import (
     Invocation,
     InvocationAttemptContext,
+    InvocationAwaitingResolutionError,
     InvocationConflictError,
     InvocationContext,
     InvocationFailedError,
@@ -279,6 +280,13 @@ class DurableAgentServer(FastAPI):
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
+        except InvocationAwaitingResolutionError:
+            state = await self._runtime.get_invocation(runtime_invocation_id)
+            assert state is not None
+            return JSONResponse(
+                self._accepted_payload(state, stream=False, invocation_id=invocation_id),
+                status_code=202,
+            )
         except InvocationFailedError:
             state = await self._runtime.get_invocation(runtime_invocation_id)
             error, status_code, from_agent = self._failure_response(state)
@@ -339,7 +347,11 @@ class DurableAgentServer(FastAPI):
                     event_type = event.event.get("type", "message")
                     yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-                if state is None or state.is_terminal:
+                if (
+                    state is None
+                    or state.is_terminal
+                    or state.status == InvocationStatus.AWAITING_RESOLUTION
+                ):
                     return
                 try:
                     # Other workers and terminal state changes retain the polling fallback.
