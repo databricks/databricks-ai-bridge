@@ -1,12 +1,10 @@
 """Bounded file read-ahead for first-party Python imports on cold sandbox disks."""
 
-import csv
 import importlib.util
 import json
 import os
 import stat
 import sys
-import sysconfig
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,40 +18,6 @@ MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 _prefetched = False
 
 
-def _inventory(prefix):
-    # New installations already have warm source files. Reading them again
-    # competes with compilation; only prefetch native extensions until learned.
-    library = Path(sysconfig.get_path("purelib"))
-    if not library.is_relative_to(prefix):
-        return []
-    paths = set()
-    deadline, scanned = time.monotonic() + 1, 0
-    for index, record in enumerate(library.glob("*.dist-info/RECORD")):
-        if index >= 512 or time.monotonic() >= deadline:
-            break
-        try:
-            size = record.stat().st_size
-            scanned += size
-            if scanned > 8 * MAX_MANIFEST_BYTES:
-                break
-            if size > MAX_MANIFEST_BYTES:
-                continue
-            with record.open(newline="") as handle:
-                for row in csv.reader(handle):
-                    if time.monotonic() >= deadline:
-                        return sorted(paths)
-                    if not row:
-                        continue
-                    path = library / row[0]
-                    if path.suffix == ".so" and ".." not in path.parts:
-                        paths.add(str(path.relative_to(prefix)))
-                    if len(paths) >= MAX_FILES:
-                        return sorted(paths)
-        except (OSError, ValueError, csv.Error):
-            continue
-    return sorted(paths)
-
-
 def _paths(manifest, prefix):
     try:
         if manifest.stat().st_size <= MAX_MANIFEST_BYTES:
@@ -63,7 +27,9 @@ def _paths(manifest, prefix):
                 return paths[:MAX_FILES]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return _inventory(prefix)
+    # A fresh install already read/wrote its files. Discovering every distribution
+    # here delays readiness; retained workers can use the learned import list.
+    return []
 
 
 @contextmanager
@@ -139,13 +105,19 @@ def warm_imports(state_dir, timings):
             # Remember actual imports on retained disk; /tmp is cleared on Stop.
             try:
                 paths = set()
+                prefix_text = str(prefix) + os.sep
                 for module in tuple(sys.modules.values()):
                     attributes = vars(module) if module is not None else {}
                     name = attributes.get("__cached__") or attributes.get("__file__")
-                    if isinstance(name, str):
-                        path = Path(name)
-                        if path.is_relative_to(prefix) and path.suffix in {".py", ".pyc", ".so"}:
-                            paths.add(str(path.relative_to(prefix)))
+                    if (
+                        isinstance(name, str)
+                        and name.startswith(prefix_text)
+                        and name.endswith((".py", ".pyc", ".so"))
+                    ):
+                        # Normal import paths already use the interpreter prefix.
+                        # Avoid thousands of Path objects on the readiness path;
+                        # read() still resolves and validates every cached entry.
+                        paths.add(name[len(prefix_text) :])
                 state_dir.mkdir(parents=True, exist_ok=True)
                 temporary = manifest.with_suffix(".tmp")
                 temporary.write_text(

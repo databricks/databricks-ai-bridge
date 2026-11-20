@@ -1769,6 +1769,10 @@ lockfiles are preserved; `--git-revision` requires a lockfile in the selected co
 Configure private package indexes in the project's `pyproject.toml` or `uv.toml` so the
 sandbox can use the same configuration with `uv sync --locked`.
 Progress identifies the agent: `Deploying agent <app-name> to agentbricks runtime`.
+Install the CLI with its `sandbox` extra. A published installation stages its exact
+matching `databricks-agentkit-runtime[sandbox]` version from `--pip-index-url`, which
+must contain that version. An editable installation builds matching SDK/CLI wheels
+from its checkout. The agent project's dependencies remain defined by its lockfile.
 
 `--sandbox-idle-timeout SECONDS` defaults to 900 (range 60–86400), and applies to new
 sandboxes and existing ones on their next prepare/invoke after redeploy. It does not

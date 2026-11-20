@@ -212,7 +212,7 @@ import importlib.abc
 import sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, *args):
-        if fullname.split('.')[0] in {'psycopg', 'fastapi', 'paramiko', 'grpc', 'agents', 'langgraph'}:
+        if fullname.split('.')[0] in {'databricks_agentbricks', 'psycopg', 'fastapi', 'paramiko', 'grpc', 'agents', 'langgraph'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
 from databricks_agentkit.sandbox.session_lifecycle import SessionSandboxManager

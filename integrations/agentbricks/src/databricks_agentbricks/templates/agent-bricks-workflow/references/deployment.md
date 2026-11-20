@@ -81,6 +81,10 @@ the agreed checks pass, or report the concrete failure and remaining limitation.
 
 ## Experimental sandbox deployment
 
+Install the CLI with its `sandbox` extra. Published installs stage the matching SDK
+from the configured package index, which must contain that version; editable
+installs build paired SDK/CLI wheels. Agent dependencies still come from `uv.lock`.
+
 Use `agentbricks deploy APP --sandbox --source PROJECT` to upload
 source and deploy the generic App orchestrator in one command. No `environment create`
 step is required. Deploy generates a missing `uv.lock` using Python 3.12 before source

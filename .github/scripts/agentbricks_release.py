@@ -24,6 +24,10 @@ TEMPLATE_DEPENDENCY_PATTERN = re.compile(
     r'(?P<suffix>")'
 )
 PACKAGE_PATH = Path("integrations/agentbricks/pyproject.toml")
+RUNTIME_PATH = Path("integrations/agentbricks/src/pyproject.toml")
+RUNTIME_DEPENDENCY_PATTERN = re.compile(
+    r'(?P<prefix>"databricks-agentkit-runtime==)[^"]+(?P<suffix>")'
+)
 TEMPLATE_BASE_PATH = Path("integrations/agentbricks/src/databricks_agentbricks/templates")
 PACKAGE_ROOT = Path("integrations/agentbricks")
 TAG_PREFIX = "databricks-agentbricks-v"
@@ -92,6 +96,15 @@ def stamp_release(root: Path, version: str, *, templates: bool = False) -> None:
     parse_version(version, allow_dev=not templates)
     package_path = root / PACKAGE_PATH
     updates = {package_path: _replace_package_version(package_path.read_text(), version)}
+    runtime_path = root / RUNTIME_PATH
+    # The release cutter also runs on release branches predating the package split.
+    if runtime_path.is_file():
+        updates[runtime_path] = _replace_package_version(runtime_path.read_text(), version)
+        updates[package_path], count = RUNTIME_DEPENDENCY_PATTERN.subn(
+            lambda match: f"{match['prefix']}{version}{match['suffix']}", updates[package_path]
+        )
+        if count != 1:
+            raise ValueError("expected exactly one paired AgentKit runtime dependency")
     if templates:
         template_paths = sorted((root / TEMPLATE_BASE_PATH).glob("*/pyproject.toml"))
         if not template_paths:

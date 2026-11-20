@@ -197,8 +197,12 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
         connections.append(connection)
         yield session
 
-    monkeypatch.setattr(adapter, "DatabricksMultiServerMCPClient", Client)
-    monkeypatch.setattr(adapter, "create_session", create_session)
+    monkeypatch.setattr(
+        sys.modules["databricks_langchain"], "DatabricksMultiServerMCPClient", Client
+    )
+    monkeypatch.setattr(
+        sys.modules["langchain_mcp_adapters.sessions"], "create_session", create_session
+    )
     asyncio.run(adapter.mcp_tools(workspace_client_for=resolver))
     adapter.load_tools.side_effect = AssertionError("manifest must not be reloaded mid-request")
     request = SimpleNamespace(server_name="sandbox", name="python", args={})
@@ -253,7 +257,9 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
         async def create_session(connection):
             yield session
 
-        monkeypatch.setattr(adapter, "create_session", create_session)
+        monkeypatch.setattr(
+            sys.modules["langchain_mcp_adapters.sessions"], "create_session", create_session
+        )
         request = SimpleNamespace(
             server_name="sandbox", name="run_code", args={"code": "print('ok')"}
         )
@@ -383,7 +389,7 @@ def test_configured_discovery_permission_errors_are_not_hidden(adapter, monkeypa
 
     adapter.load_tools.return_value = [tool("user")]
     monkeypatch.setattr(
-        adapter.DatabricksMultiServerMCPClient,
+        sys.modules["databricks_langchain"].DatabricksMultiServerMCPClient,
         "get_tools",
         AsyncMock(side_effect=PermissionError("secret")),
     )

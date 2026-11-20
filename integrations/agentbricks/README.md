@@ -1685,6 +1685,11 @@ Sandbox invocations use the existing `/api/invocations` request/status contract,
 session preparation. Capacity defaults and hidden operator overrides are in the
 [deploy reference](cli.md).
 
+The SDK is a separate `databricks-agentkit-runtime` wheel,
+built from `src/pyproject.toml`. The CLI keeps its package name and depends on it;
+ordinary installs retain the CLI's management dependencies. See the
+[local development instructions](CONTRIBUTING.md) for the unpublished paired install.
+
 The deployment workflow tracks phases and readiness internally; these observations are not
 logged as separate telemetry fields. Network errors are retried within the existing readiness budget; if the final probe remains unreachable,
 the deployed app has unverified readiness rather than a reported application failure. These

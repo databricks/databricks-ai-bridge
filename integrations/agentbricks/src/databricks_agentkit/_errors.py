@@ -1,0 +1,159 @@
+"""Shared AgentKit client errors and mapping from Databricks REST errors.
+
+`AgentCliError` extends `click.ClickException` so a raised error prints as a clean
+one-liner (plus an optional hint) and exits non-zero, instead of dumping a traceback.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Optional
+
+import click
+
+# Error codes indicating that a preview API is not deployed to the workspace's region or shard.
+_PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED"})
+
+# Error code for a workspace whose feature preview is turned off. The API returns HTTP 404 for it, so
+# callers must check this code rather than the status, which also means a missing resource.
+FEATURE_DISABLED = "FEATURE_DISABLED"
+
+# gRPC-style status codes the backend returns for transient failures (a cancelled or
+# deadline-exceeded RPC, a briefly unavailable service). Shared with the client, which
+# retries these before surfacing them. `client._do` retries; the hint here covers the
+# case where retries are still exhausted.
+TRANSIENT_ERROR_CODES = frozenset({"CANCELLED", "UNAVAILABLE", "DEADLINE_EXCEEDED", "ABORTED"})
+
+# Process-global output mode, set once by the root CLI group. When "json", errors are
+# emitted as a machine-readable JSON object instead of the styled text one-liner, so a
+# script driving `agentbricks -o json` can parse failures instead of scraping human text.
+_OUTPUT_MODE = "text"
+_renderer = None
+
+
+def _set_renderer(renderer):
+    """CLI installs optional styling; the SDK has no dependency on CLI modules."""
+    global _renderer
+    _renderer = renderer
+
+
+def get_output_mode() -> str:
+    return _OUTPUT_MODE
+
+
+def set_output_mode(mode: str) -> None:
+    """Record the CLI's --output mode so errors can render to match it."""
+    global _OUTPUT_MODE
+    _OUTPUT_MODE = mode
+
+
+# Usage errors may precede callbacks; the raw command line's output flag wins.
+_USAGE_OUTPUT_MODE: Optional[str] = None
+
+
+def set_usage_output_mode(mode: Optional[str]) -> None:
+    """Record the raw command line's output mode for error rendering."""
+    global _USAGE_OUTPUT_MODE
+    _USAGE_OUTPUT_MODE = mode
+
+
+def error_output_mode() -> str:
+    """Use the raw command line mode when available, otherwise the parsed mode."""
+    return _USAGE_OUTPUT_MODE or _OUTPUT_MODE
+
+
+_PREVIEW_HINT = (
+    "These 2.0 agents APIs are in preview and gated per workspace. This handler is "
+    "not enabled on the target workspace yet — try a different --profile or contact "
+    "your workspace administrator."
+)
+
+# The server's message names the disabled preview, so the hint only says how to turn it on.
+_FEATURE_DISABLED_HINT = (
+    "A workspace admin can enable this preview in Settings > Feature Previews. After it is "
+    "enabled, it can take a few minutes to take effect."
+)
+
+_TRANSIENT_HINT = (
+    "This is usually a transient backend issue — re-running the command often succeeds."
+)
+
+
+class AgentCliError(click.ClickException):
+    """A user-facing CLI error rendered without a Python traceback."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: Optional[str] = None,
+        hint: Optional[str] = None,
+        error_category: str | None = None,
+        subprocess_exit_code: int | None = None,
+        failure_detail: str | None = None,
+    ):
+        super().__init__(message)
+        self.error_code = error_code
+        self.hint = hint
+        self.error_category = error_category
+        self.subprocess_exit_code = subprocess_exit_code
+        self.failure_detail = failure_detail
+
+    def show(self, file=None) -> None:
+        if error_output_mode() == "json":
+            payload: dict = {"message": self.message}
+            if self.error_code:
+                payload["code"] = self.error_code
+            if self.hint:
+                payload["hint"] = self.hint
+            click.echo(json.dumps({"error": payload}, indent=2), err=True)
+            return
+        if _renderer is not None:
+            _renderer(self)
+        else:
+            code = f"[{self.error_code}]" if self.error_code else ""
+            click.echo(f"error{code}: {self.message}", err=True)
+            if self.hint:
+                click.echo(f"help: {self.hint}", err=True)
+
+
+def wrap_api_error(exc: Exception) -> AgentCliError:
+    """Convert a databricks-sdk error (or any exception) into an `AgentCliError`.
+
+    The SDK raises `databricks.sdk.errors.DatabricksError` subclasses carrying an
+    `error_code` attribute; we stay duck-typed so we don't couple to the SDK's error
+    hierarchy or version.
+    """
+    # When the SDK exhausts its retry budget it raises a TimeoutError chaining the last underlying
+    # error as __cause__; surface that original service error, not the generic retry wrapper.
+    # __cause__ is typed BaseException, so use a separate BaseException-typed local rather than
+    # reassigning the Exception-typed parameter.
+    effective: BaseException = exc
+    if isinstance(exc, TimeoutError) and exc.__cause__ is not None:
+        effective = exc.__cause__
+    error_code = getattr(effective, "error_code", None)
+    # A message-less DatabricksError wraps `IOError(None)`, so `str(effective)` is the literal
+    # "None". Treat that (and an empty string) as "no detail" so we surface the error code
+    # instead of a bare `Error [CANCELLED]: None`.
+    detail = str(effective).strip()
+    if detail == "None":
+        detail = ""
+    message = detail or _no_detail_message(error_code) or effective.__class__.__name__
+    if error_code == FEATURE_DISABLED:
+        hint = _FEATURE_DISABLED_HINT
+    elif error_code in _PREVIEW_ERROR_CODES:
+        hint = _PREVIEW_HINT
+    # ABORTED stays retryable, but it also signals a concurrency conflict (e.g. a pipeline run
+    # already in progress) where re-running the command fails the same way, so skip the hint.
+    elif error_code in TRANSIENT_ERROR_CODES - {"ABORTED"}:
+        hint = _TRANSIENT_HINT
+    else:
+        hint = None
+    return AgentCliError(message, error_code=error_code, hint=hint)
+
+
+def _no_detail_message(error_code: Optional[str]) -> Optional[str]:
+    """Fallback message when the server returns an error code but no human-readable detail."""
+    if not error_code:
+        return None
+    return f"The server returned {error_code} with no further detail."

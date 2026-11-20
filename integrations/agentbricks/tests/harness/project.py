@@ -26,6 +26,7 @@ class Project:
     # The runtime under test: the wheel built from this checkout, or the one --wheel gives.
     wheel: pathlib.Path
     bridge_wheel: pathlib.Path | None
+    runtime_wheel: pathlib.Path | None = None
 
     @classmethod
     def allocate(cls, run_config: RunConfig) -> Project:
@@ -36,11 +37,17 @@ class Project:
         if run_config.wheel is None:
             # Only the run_config fixture builds it; the bare run config is for cleanup.
             raise E2EError("The run has no runtime wheel to pin projects to.")
-        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel, run_config.bridge_wheel)
+        return cls(
+            path,
+            f"{APP_PREFIX}{name}",
+            run_config.wheel,
+            run_config.bridge_wheel,
+            run_config.runtime_wheel,
+        )
 
     def pin_runtime(self) -> None:
         """Point the project's databricks-agentbricks dependency at the runtime under test."""
-        _pin_project_wheels(self.path, self.wheel, self.bridge_wheel)
+        _pin_project_wheels(self.path, self.wheel, self.bridge_wheel, self.runtime_wheel)
 
     def is_pinned(self) -> bool:
         pyproject = self.path / "pyproject.toml"
@@ -61,7 +68,10 @@ class Project:
 
 
 def _pin_project_wheels(
-    project: pathlib.Path, wheel: pathlib.Path, bridge_wheel: pathlib.Path | None
+    project: pathlib.Path,
+    wheel: pathlib.Path,
+    bridge_wheel: pathlib.Path | None,
+    runtime_wheel: pathlib.Path | None = None,
 ) -> None:
     vendor_dir = project / "agentbricks_e2e_wheels"
     vendor_dir.mkdir()
@@ -71,6 +81,7 @@ def _pin_project_wheels(
     for package, source in (
         ("databricks-agentbricks", wheel),
         ("databricks-ai-bridge", bridge_wheel),
+        ("databricks-agentkit-runtime", runtime_wheel),
     ):
         if source is None:
             continue
@@ -81,4 +92,6 @@ def _pin_project_wheels(
     if bridge_wheel is not None:
         # A source only applies to a direct dependency; the bridge otherwise arrives transitively.
         document["project"]["dependencies"].append("databricks-ai-bridge[memory]")
+    if runtime_wheel is not None:
+        document["project"]["dependencies"].append("databricks-agentkit-runtime")
     pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")

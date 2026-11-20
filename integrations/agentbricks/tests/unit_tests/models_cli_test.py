@@ -973,7 +973,7 @@ def test_upgrade_can_run_locally_without_a_job(tmp_path, stub_job, monkeypatch):
 
 def test_upgrade_with_apply_auto_waits_and_applies(tmp_path, stub_job, stub_promote, monkeypatch):
     # The root `agentbricks -o json` sets this; it keeps the wait spinner out of the JSON.
-    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     project = _project(tmp_path)
     client = _JobClient(life_cycle="TERMINATED", result="SUCCESS")
     result = _invoke(
@@ -990,7 +990,7 @@ def test_upgrade_with_apply_auto_waits_and_applies(tmp_path, stub_job, stub_prom
 def test_waiting_upgrade_applies_its_own_run_when_another_was_submitted_since(
     tmp_path, stub_job, stub_promote, monkeypatch
 ):
-    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     project = _project(tmp_path)
     finished = SimpleNamespace(life_cycle_state="TERMINATED", result_state="SUCCESS")
     pending = SimpleNamespace(life_cycle_state="PENDING", result_state=None)

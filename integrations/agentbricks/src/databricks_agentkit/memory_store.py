@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._errors import AgentCliError
 from databricks_agentkit._pagination import validate_limit, validate_page_size
 from databricks_agentkit._permissions import MAX_PERMISSION_PAGE_SIZE, StorePermission
 from databricks_agentkit.timefmt import parse_timestamp

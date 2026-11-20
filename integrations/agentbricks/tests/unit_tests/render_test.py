@@ -235,21 +235,19 @@ def test_detail_renders_breadcrumb_status_and_snippet():
 
 def test_status_skips_spinner_in_json_mode(monkeypatch):
     # Under -o json the spinner must not render, so no control chars pollute machine output.
-    from databricks_agentbricks import errors
 
     con, buf = _console()
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     with render.status("working…", con=con):
         pass
     assert buf.getvalue() == ""  # nothing emitted in json mode
 
 
 def test_status_renders_spinner_in_text_mode(monkeypatch):
-    from databricks_agentbricks import errors
 
     # A TTY-backed console renders the spinner; a plain StringIO console is not a terminal, so
     # assert the body still runs and the call is a no-op-safe context manager.
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     con, buf = _console()
     ran = []
     with render.status("working…", con=con):
@@ -260,9 +258,8 @@ def test_status_renders_spinner_in_text_mode(monkeypatch):
 def test_progress_prints_persistent_line_in_text_mode(monkeypatch):
     # The persistent line must survive even on a non-TTY console (where the spinner doesn't render),
     # so a long wait always leaves visible feedback.
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     con, buf = _console()
     with render.progress("Waiting for app compute…", con=con):
         pass
@@ -270,11 +267,10 @@ def test_progress_prints_persistent_line_in_text_mode(monkeypatch):
 
 
 def test_progress_keeps_stdout_clean_in_json_mode(monkeypatch):
-    from databricks_agentbricks import errors
 
     con, buf = _console()
     err, err_buf = _console()
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     with render.progress("Waiting for app compute…", con=con, err=err):
         pass
     assert buf.getvalue() == ""  # stdout carries only the command's JSON document
@@ -333,9 +329,8 @@ def test_format_elapsed():
 
 
 def test_progress_prints_heartbeats_to_stderr_without_a_tty(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
     con, buf = _console()
     err, err_buf = _console()
@@ -353,9 +348,8 @@ def test_progress_prints_heartbeats_to_stderr_without_a_tty(monkeypatch):
 
 
 def test_status_prints_heartbeats_only_to_stderr_in_json_mode(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
     con, buf = _console()
     err, err_buf = _console()
@@ -367,9 +361,8 @@ def test_status_prints_heartbeats_only_to_stderr_in_json_mode(monkeypatch):
 
 
 def test_short_step_prints_no_heartbeat(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     con, _ = _console()
     err, err_buf = _console()
     with render.status("Reconciling memory store 'm'…", con=con, err=err):
@@ -378,9 +371,8 @@ def test_short_step_prints_no_heartbeat(monkeypatch):
 
 
 def test_tty_progress_shows_elapsed_in_spinner_without_extra_lines(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
     updates: list[str] = []
     original_update = Status.update
@@ -407,10 +399,9 @@ def test_tty_progress_shows_elapsed_in_spinner_without_extra_lines(monkeypatch):
 def test_reporter_note_prints_through_a_live_tty_spinner(monkeypatch):
     # A busy-App retry notice arrives while the deploy's spinner is live; rich only keeps a line
     # clear of the spinner's redraw when it goes through the sys.stderr proxy the spinner installs.
-    from databricks_agentbricks import errors
     from databricks_agentbricks.presentation.reporter import ClickReporter
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     buf = io.StringIO()
     con = Console(file=buf, width=200, force_terminal=True, no_color=True)
     notice = "App is busy (another operation in progress); retrying in 5s…"
@@ -429,9 +420,8 @@ def test_format_duration(seconds, expected):
 
 
 def test_progress_with_done_message_prints_the_total_wait(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     now = [100.0]
     con, buf = _console()
     err, _ = _console()
@@ -450,9 +440,8 @@ def test_progress_with_done_message_prints_the_total_wait(monkeypatch):
 
 
 def test_progress_with_done_message_prints_nothing_more_on_failure(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
     con, buf = _console()
     with pytest.raises(RuntimeError):
         with render.progress("Waiting…", con=con, done_message="Agent compute is running"):
@@ -461,9 +450,8 @@ def test_progress_with_done_message_prints_nothing_more_on_failure(monkeypatch):
 
 
 def test_progress_done_message_goes_to_stderr_in_json_mode(monkeypatch):
-    from databricks_agentbricks import errors
 
-    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
     con, buf = _console()
     err, err_buf = _console()
     with render.progress("Waiting…", con=con, err=err, done_message="Agent compute is running"):

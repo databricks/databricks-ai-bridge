@@ -55,7 +55,7 @@ re-run:
 ```sh
 git clone https://github.com/databricks/databricks-ai-bridge.git
 cd databricks-ai-bridge
-pip install -e integrations/agentbricks     # editable install of the CLI
+pip install -e integrations/agentbricks/src -e integrations/agentbricks  # SDK and CLI
 agentbricks init /tmp/scratch-agent         # scaffolds from your working-tree template
 cd /tmp/scratch-agent && agentbricks dev
 ```
@@ -65,13 +65,30 @@ rebuild or commit. Switching branches needs no reinstall, **except** when a bran
 dependency in `integrations/agentbricks/pyproject.toml`:
 
 ```sh
-pip install -e integrations/agentbricks     # only when dependencies changed
+pip install -e integrations/agentbricks/src -e integrations/agentbricks  # dependencies changed
 ```
 
 Editing a template in the repo only affects **future** `agentbricks init` runs. An existing scaffold has
 its own copy of the template, so to iterate on a scaffolded project edit that copy (or re-init).
 
+The SDK wheel is built from `src/pyproject.toml` as `databricks-agentkit-runtime`;
+the parent project builds the CLI/templates as `databricks-agentbricks`. Both keep
+their existing import namespaces. Their versions must be released together. In
+this unpublished prototype, install both editable projects explicitly (`uv sync`
+from this directory also resolves the SDK through `tool.uv.sources`). A worker
+can depend directly on `databricks-agentkit-runtime[langgraph]` or `[openai]`;
+ordinary templates retain `databricks-agentbricks[FRAMEWORK]` and management APIs.
+Release stamping updates both versions and the CLI's exact SDK dependency.
+Publishing both artifacts still requires paired release-workflow wiring; automated
+publishing remains disabled. The suite harness builds and vendors both wheels;
+when supplying `--wheel`, keep its matching SDK beside it or pass `--runtime-wheel`.
+Published CLI installs stage the matching SDK from the configured package index
+for sandbox deployment. Editable installs build paired source snapshots instead.
+
 ## Testing SDK / runtime changes in a scaffold
+
+For an unpublished paired SDK override, also declare `databricks-agentkit-runtime==0.11.0.dev0`
+as a direct project dependency: `uv.sources` overrides apply to direct requirements.
 
 A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `agentbricks dev` and `agentbricks deploy`
 install the **released** SDK - editing the runtime and adapter implementation under `databricks_agentkit` in your
@@ -84,6 +101,7 @@ ship it in a real deployment.
 ```toml
 [tool.uv.sources]
 databricks-agentbricks = { path = "/abs/path/to/databricks-ai-bridge/integrations/agentbricks", editable = true }
+databricks-agentkit-runtime = { path = "/abs/path/to/databricks-ai-bridge/integrations/agentbricks/src", editable = true }
 ```
 
 `agentbricks dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
@@ -95,6 +113,7 @@ changing the pin or the scaffold's dependencies, rebuild once with `agentbricks 
 ```toml
 [tool.uv.sources]
 databricks-agentbricks = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/agentbricks" }
+databricks-agentkit-runtime = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/agentbricks/src" }
 ```
 
 Commit and push first - the Apps build clones that commit. A `path` or `file://` pin won't resolve
@@ -105,7 +124,7 @@ override):
 
 ```sh
 # local: the source uv resolved into the agent venv
-cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dist-info/direct_url.json
+cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit_runtime-*.dist-info/direct_url.json
 # deployed: watch the build/install logs
 agentbricks deployments logs agent-bricks-<name>
 ```

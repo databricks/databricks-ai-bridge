@@ -153,7 +153,10 @@ def test_deployment_packages_orchestrator_without_agent_source(tmp_path, monkeyp
 
     def build(args, **kwargs):
         assert "--wheel" in args
-        (tmp_path / "databricks_agentbricks-0.3.0-py3-none-any.whl").write_bytes(b"sdk")
+        name = (
+            "databricks_agentkit_runtime" if args[-1].endswith("/src") else "databricks_agentbricks"
+        )
+        (tmp_path / f"{name}-0.3.0-py3-none-any.whl").write_bytes(b"sdk")
 
     monkeypatch.setattr(prepared_deploy.subprocess, "run", build)
     prepared_deploy.stage_runtime(
@@ -166,6 +169,7 @@ def test_deployment_packages_orchestrator_without_agent_source(tmp_path, monkeyp
     )
     assert {p.name for p in tmp_path.iterdir()} == {
         "databricks_agentbricks-0.3.0-py3-none-any.whl",
+        "databricks_agentkit_runtime-0.3.0-py3-none-any.whl",
         "requirements.txt",
         "environment.json",
         "app.yaml",
@@ -202,6 +206,9 @@ def test_runtime_wheel_version_tracks_source_without_modifying_checkout(tmp_path
     metadata = package / "pyproject.toml"
     original = '[project]\nname="databricks-agentbricks"\nversion="0.10.0.dev0"\n'
     metadata.write_text(original)
+    (package / "src/pyproject.toml").write_text(
+        original.replace("databricks-agentbricks", "databricks-agentkit-runtime")
+    )
     monkeypatch.setattr(
         prepared_deploy,
         "__file__",
@@ -213,9 +220,11 @@ def test_runtime_wheel_version_tracks_source_without_modifying_checkout(tmp_path
         snapshot = Path(args[-1])
         assert snapshot != package
         version = tomli.loads((snapshot / "pyproject.toml").read_text())["project"]["version"]
-        versions.append(version)
+        if snapshot.name != "src":
+            versions.append(version)
         destination = Path(args[args.index("--out-dir") + 1])
-        (destination / f"databricks_agentbricks-{version}-py3-none-any.whl").write_bytes(b"sdk")
+        name = "databricks_agentkit_runtime" if snapshot.name == "src" else "databricks_agentbricks"
+        (destination / f"{name}-{version}-py3-none-any.whl").write_bytes(b"sdk")
 
     monkeypatch.setattr(prepared_deploy.subprocess, "run", build)
     manifest = {"namespace": "test", "lakebase": {"endpoint": "e", "host": "h", "database": "d"}}

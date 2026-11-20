@@ -58,3 +58,4 @@ class RunConfig:
     wheel: pathlib.Path | None
     # The databricks-ai-bridge wheel projects install; None keeps the release on the package index.
     bridge_wheel: pathlib.Path | None
+    runtime_wheel: pathlib.Path | None = None

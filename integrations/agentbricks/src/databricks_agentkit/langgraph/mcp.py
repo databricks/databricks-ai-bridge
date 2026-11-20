@@ -15,11 +15,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from databricks_langchain import DatabricksMCPServer, DatabricksMultiServerMCPClient
-from langchain_mcp_adapters.sessions import create_session
-
 if TYPE_CHECKING:
-    from databricks_langchain import MCPServer
+    from databricks_langchain import DatabricksMCPServer, DatabricksMultiServerMCPClient, MCPServer
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
@@ -38,6 +35,8 @@ def _server_from_tool(
 ) -> DatabricksMCPServer | None:
     if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
         return None
+    from databricks_langchain import DatabricksMCPServer
+
     mode = tool.auth or "app"
     client = mcp_auth.resolve_mcp_workspace_client(
         mode, tool.id, workspace_client_for, workspace_client
@@ -101,6 +100,8 @@ def _sandbox_interceptor(
                 server = _server_from_tool(tool, workspace_client_for=workspace_client_for)
                 if server is None:
                     raise RuntimeError(f"Could not build sandbox MCP server {tool.id!r}.")
+                from langchain_mcp_adapters.sessions import create_session
+
                 async with create_session(server.to_connection_dict()) as session:
                     await session.initialize()
                     result = await session.call_tool(
@@ -139,6 +140,8 @@ def mcp_client(
     regardless of how the caller drives the returned client (``get_tools`` or otherwise). Callers who
     build their own client instead take on applying downscoping themselves.
     """
+    from databricks_langchain import DatabricksMultiServerMCPClient
+
     snapshot = tuple(load_tools(expected_framework="langgraph")) if tools is None else tools
     interceptors = (
         [_sandbox_interceptor(snapshot, workspace_client_for=workspace_client_for)]

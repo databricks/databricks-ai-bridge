@@ -333,7 +333,7 @@ def test_trailing_spacer_prints_one_blank_line_on_a_tty(monkeypatch):
     calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(cli.click, "echo", lambda *a, **k: calls.append((a, k)))
     monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(cli.errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "text")
 
     cli._emit_trailing_spacer()
 
@@ -365,7 +365,7 @@ def test_trailing_spacer_is_suppressed_in_json_mode(monkeypatch):
     calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(cli.click, "echo", lambda *a, **k: calls.append((a, k)))
     monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(cli.errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr("databricks_agentkit._errors._OUTPUT_MODE", "json")
 
     cli._emit_trailing_spacer()
 
