@@ -164,8 +164,9 @@ Use `agentbricks init --framework openai --disable-chat-app` for API-only output
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
 - Bind long-term memory with `agentbricks memory bind <store>`; `agentbricks deploy` creates the
   store if it doesn't exist. Memory and session stores are off by default in `agentbricks dev` (the
-  chat app shows "Not connected" for memory locally) and connect after deploy. To start with
-  memories already in the store, create it and add entries before you bind and deploy:
+  chat app labels a bound store "Bound · active after deploy" locally) and connect after deploy.
+  To start with memories already in the store, create it and add entries before you bind and
+  deploy:
 
   ```bash
   agentbricks memory stores create --name <store>    # prints a Store ID
