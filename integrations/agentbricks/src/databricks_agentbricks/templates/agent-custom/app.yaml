@@ -1,0 +1,3 @@
+command: ["uv", "run", "start-server"]
+# agentbricks deploy resolves store bindings from agent.toml into
+# AGENT_SESSION_STORE and AGENT_MEMORY_STORE. Keep credentials out of this file.
