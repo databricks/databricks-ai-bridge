@@ -64,7 +64,8 @@ class InvocationAuthPolicy:
             document = tomllib.load(source)
         tools = parse_tools(
             document,
-            expected_framework=document.get("agent", {}).get("framework", ""),
+            # None when a hand-written agent omits the framework (see agent.toml's `framework`).
+            expected_framework=document.get("agent", {}).get("framework"),
         )
         user_auth = parse_user_auth(document)
         return cls(

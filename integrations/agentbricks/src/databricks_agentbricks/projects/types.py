@@ -27,6 +27,11 @@ class AgentServer(str, Enum):
         return self.value
 
 
+# agent.toml's `framework` value for a hand-written agent that uses no framework adapter. Allowed only
+# with `server = "agentbricks"`; not an AgentFramework, since no template or adapter exists for it.
+CUSTOM_FRAMEWORK = "custom"
+
+
 def parse_framework(value: object) -> AgentFramework:
     """Validate a framework selection without exposing Enum errors to CLI users."""
     if isinstance(value, str):

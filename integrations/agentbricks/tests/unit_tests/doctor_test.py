@@ -867,3 +867,44 @@ def test_deployment_name_failure_with_other_failures_keeps_migration_step(tmp_pa
 
     assert _deployment_name_check(report)["status"] == "fail"
     assert report["next_step"].startswith("agentbricks init --framework")
+
+
+def test_framework_less_project_needs_only_a_plain_agentbricks_dependency(tmp_path: pathlib.Path):
+    _write_onboarded_project(tmp_path, "langgraph")
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "custom"\nserver = "agentbricks"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "echo"\ndependencies = ["databricks-agentbricks>=0.3"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "agent" / "agent.py").unlink()
+
+    report = doctor_module.inspect_project(tmp_path)
+    checks = {check["id"]: check for check in report["checks"]}
+
+    assert report["framework"] == "custom"
+    passing = (
+        "agent_manifest",
+        "agentbricks_server",
+        "agentbricks_dependency",
+        "framework_adapter",
+    )
+    for check_id in passing:
+        assert checks[check_id]["status"] == "pass", checks[check_id]
+    assert "--framework <langgraph|openai>" in report["next_step"]
+
+
+def test_manifest_check_lists_every_problem_with_allowed_values(tmp_path: pathlib.Path):
+    _write_onboarded_project(tmp_path, "langgraph")
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 2\n\n[agent]\nframework = "durable"\n', encoding="utf-8"
+    )
+
+    checks = {check["id"]: check for check in doctor_module.inspect_project(tmp_path)["checks"]}
+
+    detail = checks["agent_manifest"]["detail"]
+    assert "schema_version: 2 is not supported; use 1" in detail
+    assert 'agent.framework: "durable" is not valid; use langgraph, openai, or custom' in detail
+    assert "agent.server: missing; use agentbricks or custom" in detail

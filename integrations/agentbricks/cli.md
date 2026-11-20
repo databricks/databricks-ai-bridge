@@ -183,7 +183,7 @@ _Arguments_
 
 Run your agent locally so you can try it before deploying.
 
-Starts the agent on a local server - by default http://localhost:8000 - and, once it answers, prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API. If the agent fails to start, you get an error instead.
+Starts the agent on a local server - by default http://localhost:8000 - and, once it answers, prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API. If the agent fails to start, you get an error instead. Checks agent.toml first and lists every problem it finds.
 
 Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
 
@@ -201,7 +201,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
-| `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
+| `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment before running: `uv sync` for a pyproject with a `[project]` table (and no requirements.txt), otherwise `apps run-local --prepare-environment`. Default: build only if no .venv exists yet. Requires uv. |
 | `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
 
 ### `agentbricks memory`
