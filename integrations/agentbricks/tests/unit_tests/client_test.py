@@ -168,6 +168,42 @@ def test_create_memory_store_uses_transitional_request(workspace_client):
     )
 
 
+@pytest.mark.parametrize("kind", ["memory", "session"])
+def test_store_create_permission_error_has_current_recovery_commands(kind):
+    workspace_client = mock.Mock()
+    workspace_client.api_client.do.side_effect = AgentCliError(
+        "Lakebase project creation is restricted", error_code="PERMISSION_DENIED"
+    )
+    client = _AgentBricksApiClient(workspace_client=workspace_client)
+
+    with pytest.raises(AgentCliError) as raised:
+        getattr(client, f"create_{kind}_store")("restricted-store")
+
+    error = raised.value
+    assert error.error_code == "PERMISSION_DENIED"
+    assert error.hint is not None
+    assert "Lakebase" in error.hint and "workspace admin" in error.hint
+    command = "memory" if kind == "memory" else "sessions"
+    assert f"agentbricks {command} bind <existing-store>" in error.hint
+    assert "--no-create-stores" not in error.hint
+    workspace_client.api_client.do.assert_called_once()
+
+
+@pytest.mark.parametrize("kind", ["memory", "session"])
+@pytest.mark.parametrize("code", ["ALREADY_EXISTS", "INVALID_PARAMETER_VALUE"])
+def test_store_create_does_not_rewrite_other_errors(kind, code):
+    workspace_client = mock.Mock()
+    workspace_client.api_client.do.side_effect = AgentCliError("original detail", error_code=code)
+    client = _AgentBricksApiClient(workspace_client=workspace_client)
+
+    with pytest.raises(AgentCliError, match="original detail") as raised:
+        getattr(client, f"create_{kind}_store")("example-store")
+
+    assert raised.value.error_code == code
+    assert raised.value.hint is None
+    workspace_client.api_client.do.assert_called_once()
+
+
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_create_runtime_store_uses_v2_api_and_app_owner(workspace_client):
     client, do = _client(workspace_client)
