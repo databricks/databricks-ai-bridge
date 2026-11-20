@@ -72,6 +72,8 @@ class DevPreview:
     session_store: str | None
     trace_experiment: str | None
     has_chat_ui: bool
+    # agent.toml's [agent].deployment_name, which a bare `agentbricks deploy` uses.
+    deployment_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,7 @@ class DevService:
                     session_store=session_store,
                     trace_experiment=trace_experiment,
                     has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
+                    deployment_name=project.deployment_name if project else None,
                 )
                 app_port = self._free_port()
             yield DevPlan(

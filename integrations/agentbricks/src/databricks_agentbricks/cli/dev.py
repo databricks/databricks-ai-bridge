@@ -117,6 +117,7 @@ def dev(
                     plan.preview.server,
                     local_trace_label(plan.preview),
                     has_chat_ui=plan.preview.has_chat_ui,
+                    deployment_name=plan.preview.deployment_name,
                 ),
                 # A spinner in the quiet stretches before the agent answers (e.g. while it imports
                 # its libraries), so a long wait doesn't look like a hang.

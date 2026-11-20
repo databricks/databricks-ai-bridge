@@ -10,6 +10,7 @@ from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import agent_invoke_step
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import format_elapsed
+from databricks_agentbricks.services.deployment.names import _prefixed_name
 from databricks_agentbricks.services.dev_service import DevPreview
 
 
@@ -77,10 +78,16 @@ def announce_local_url(
     trace_url: str | None = None,
     *,
     has_chat_ui: bool | None = None,
+    deployment_name: str | None = None,
 ) -> None:
     """Show the chat URL or an invocation example once the local agent is answering."""
     base = f"http://localhost:{port}"
-    deploy_name = source_dir.resolve().name
+    # A bare `deploy` uses agent.toml's recorded name; passing a NAME would replace it.
+    deploy_step = (
+        ("agentbricks deploy", f"Deploy it to Databricks as {_prefixed_name(deployment_name)}")
+        if deployment_name
+        else (f"agentbricks deploy {source_dir.resolve().name}", "Deploy it to Databricks")
+    )
     if has_chat_ui is None:
         has_chat_ui = (source_dir / "runtime" / "ui.py").is_file()
     tool_step: str | tuple[str, str] = (
@@ -101,7 +108,7 @@ def announce_local_url(
                 f"Open {base} to chat with your agent",
                 tool_step,
                 ("agentbricks memory bind <store>", "Attach a memory / session store"),
-                (f"agentbricks deploy {deploy_name}", "Deploy it to Databricks"),
+                deploy_step,
                 invoke_step,
             ],
         )
@@ -123,7 +130,7 @@ def announce_local_url(
             next_steps=[
                 (sample, "Send a test request"),
                 tool_step,
-                (f"agentbricks deploy {deploy_name}", "Deploy it to Databricks"),
+                deploy_step,
                 invoke_step,
             ],
         )

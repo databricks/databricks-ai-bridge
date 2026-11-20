@@ -41,7 +41,9 @@ env:
     value: stale-memory
 """
     )
-    project = SimpleNamespace(server=AgentServer.AGENTBRICKS, tools=[], allowed_origins=())
+    project = SimpleNamespace(
+        server=AgentServer.AGENTBRICKS, tools=[], allowed_origins=(), deployment_name="my-agent"
+    )
 
     resolver = Mock(spec=ProjectResolver)
     resolver.load.return_value = project
@@ -133,6 +135,7 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         assert plan.preview.session_store == "sessions"
         assert plan.preview.trace_experiment == "/Shared/traces"
         assert plan.preview.has_chat_ui is False
+        assert plan.preview.deployment_name == "my-agent"
         assert plan.prepare_environment is True  # no .venv: auto-prepare
         assert plan.app_port == 54321
         assert plan.entry_point.name == "app.agentbricksdev.yaml"
