@@ -278,7 +278,9 @@ def diagnostic(
     # message and the fix stay at the terminal's default foreground so they're fully legible.
     con.print(Text.assemble((keyword, _SEVERITY_STYLE[severity]), (f": {message}", "")))
     if help:
-        con.print(Text.assemble(("  help:", "bold"), (f" {help}", "")))
+        # Continuation lines of a multi-line fix line up under the first one, past `  help: `.
+        fix = "\n        ".join(help.splitlines())
+        con.print(Text.assemble(("  help:", "bold"), (f" {fix}", "")))
 
 
 # --- list view ---------------------------------------------------------------

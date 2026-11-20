@@ -182,6 +182,13 @@ def test_diagnostic_renders_severity_keyword_and_help_line():
     assert "  help: pass --active to target the active environment" in out
 
 
+def test_diagnostic_indents_continuation_lines_of_a_multi_line_help():
+    con, buf = _console()
+    render.diagnostic("error", "uv missing", help="Install it: x\nThen verify.", con=con)
+    # Later lines of the fix line up under the first, past `  help: `.
+    assert "  help: Install it: x\n        Then verify.\n" in buf.getvalue()
+
+
 def test_diagnostic_error_uses_cargo_code_form():
     con, buf = _console()
     render.diagnostic("error", "store not found", code="NOT_FOUND", con=con)
