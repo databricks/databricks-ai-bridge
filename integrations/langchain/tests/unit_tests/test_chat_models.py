@@ -1288,6 +1288,46 @@ def test_convert_responses_api_response_to_chat_result_with_error():
         llm._convert_responses_api_response_to_chat_result(response)
 
 
+def test_responses_api_tool_call_round_trip_sends_each_function_call_once():
+    """A parsed Responses tool call replays once, after its reasoning item, on the next turn."""
+    llm = ChatDatabricks(model="test-model", use_responses_api=True)
+    response = Response.model_construct(
+        id="resp_123",
+        output=[
+            ResponseReasoningItem.model_construct(id="rs_123", type="reasoning", summary=[]),
+            ResponseFunctionToolCall.model_construct(
+                id="fc_call_123",
+                type="function_call",
+                name="get_weather",
+                arguments='{"location": "SF"}',
+                call_id="call_123",
+            ),
+        ],
+    )
+    ai_message = llm._convert_responses_api_response_to_chat_result(response).generations[0].message
+
+    result = _convert_lc_messages_to_responses_api(
+        [
+            HumanMessage(content="What's the weather in SF?"),
+            ai_message,
+            ToolMessage(content="Sunny, 72°F", tool_call_id="call_123"),
+        ]
+    )
+
+    assert result == [
+        {"role": "user", "content": "What's the weather in SF?"},
+        {"id": "rs_123", "type": "reasoning", "summary": []},
+        {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": '{"location": "SF"}',
+            "call_id": "call_123",
+            "id": "fc_call_123",
+        },
+        {"type": "function_call_output", "call_id": "call_123", "output": "Sunny, 72°F"},
+    ]
+
+
 def test_convert_chatagent_response_to_chat_result():
     """Test _convert_chatagent_response_to_chat_result method."""
     llm = ChatDatabricks(model="test-model")
