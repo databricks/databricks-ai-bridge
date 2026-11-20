@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import BaseTool, tool
 
 from databricks_agentkit.runtime.auth import AuthError
-from databricks_agentkit.runtime.genie import GenieAgent
 from databricks_agentkit.runtime.tool_manifest import load_tools
 
 if TYPE_CHECKING:
@@ -38,6 +37,8 @@ def genie_tools(
                 "This deployed Genie integration requires request-user authorization.",
                 integration_id=record.id,
             )
+        from databricks_agentkit.runtime.genie import GenieAgent
+
         agent = GenieAgent(
             record.space_id or "",
             auth=record.auth or "app",

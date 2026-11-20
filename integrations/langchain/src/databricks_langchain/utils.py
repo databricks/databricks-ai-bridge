@@ -1,7 +1,6 @@
-from typing import Any, List, Union
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-import numpy as np
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 from openai import AsyncOpenAI, OpenAI
 
@@ -58,78 +57,20 @@ def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpen
         return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
 
 
-# Utility function for Maximal Marginal Relevance (MMR) reranking.
-# Copied from langchain_community/vectorstores/utils.py to avoid cross-dependency
-Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
+if TYPE_CHECKING:
+    from databricks_langchain._vector_utils import Matrix as Matrix
+    from databricks_langchain._vector_utils import cosine_similarity as cosine_similarity
+    from databricks_langchain._vector_utils import (
+        maximal_marginal_relevance as maximal_marginal_relevance,
+    )
 
 
-def maximal_marginal_relevance(
-    query_embedding: np.ndarray,
-    embedding_list: list,
-    lambda_mult: float = 0.5,
-    k: int = 4,
-) -> List[int]:
-    """Calculate maximal marginal relevance.
+def __getattr__(name: str) -> object:
+    # Preserve the existing utility imports without loading numerical libraries for chat.
+    if name not in {"Matrix", "cosine_similarity", "maximal_marginal_relevance"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from databricks_langchain import _vector_utils
 
-    Args:
-        query_embedding: Query embedding.
-        embedding_list: List of embeddings to select from.
-        lambda_mult: Number between 0 and 1 that determines the degree
-                of diversity among the results with 0 corresponding
-                to maximum diversity and 1 to minimum diversity.
-                Defaults to 0.5.
-        k: Number of Documents to return. Defaults to 4.
-
-    Returns:
-        List of indices of embeddings selected by maximal marginal relevance.
-    """
-    if min(k, len(embedding_list)) <= 0:
-        return []
-    if query_embedding.ndim == 1:
-        query_embedding = np.expand_dims(query_embedding, axis=0)
-    similarity_to_query = cosine_similarity(query_embedding, embedding_list)[0]
-    most_similar = int(np.argmax(similarity_to_query))
-    idxs = [most_similar]
-    selected = np.array([embedding_list[most_similar]])
-    while len(idxs) < min(k, len(embedding_list)):
-        best_score = -np.inf
-        idx_to_add = -1
-        similarity_to_selected = cosine_similarity(embedding_list, selected)
-        for i, query_score in enumerate(similarity_to_query):
-            if i in idxs:
-                continue
-            redundant_score = max(similarity_to_selected[i])
-            equation_score = lambda_mult * query_score - (1 - lambda_mult) * redundant_score
-            if equation_score > best_score:
-                best_score = equation_score
-                idx_to_add = i
-        idxs.append(idx_to_add)
-        selected = np.append(selected, [embedding_list[idx_to_add]], axis=0)
-    return idxs
-
-
-def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
-    """Row-wise cosine similarity between two equal-width matrices.
-
-    Raises:
-        ValueError: If the number of columns in X and Y are not the same.
-    """
-    if len(X) == 0 or len(Y) == 0:
-        return np.array([])
-
-    X = np.array(X)
-    Y = np.array(Y)
-    if X.shape[1] != Y.shape[1]:
-        raise ValueError(
-            "Number of columns in X and Y must be the same. X has shape"
-            f"{X.shape} "
-            f"and Y has shape {Y.shape}."
-        )
-
-    X_norm = np.linalg.norm(X, axis=1)
-    Y_norm = np.linalg.norm(Y, axis=1)
-    # Ignore divide by zero errors run time warnings as those are handled below.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        similarity = np.dot(X, Y.T) / np.outer(X_norm, Y_norm)
-    similarity[np.isnan(similarity) | np.isinf(similarity)] = 0.0
-    return similarity
+    value = getattr(_vector_utils, name)
+    globals()[name] = value
+    return value

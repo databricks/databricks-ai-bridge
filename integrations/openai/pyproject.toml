@@ -14,7 +14,7 @@ dependencies = [
     # OpenAI 3 and openai-agents 0.21 use httpx2; this integration provides httpx clients.
     "openai>=1.99.9,<3",
     "pydantic>2.10.0",
-    "mlflow>=3.10.1",
+    "mlflow-skinny>=3.10.1",
     "unitycatalog-openai[databricks]>=0.2.0",
     "databricks-mcp>=0.4.0",
     "openai-agents>=0.5.0,<0.21",
@@ -49,6 +49,9 @@ tests = [
     "pytest-asyncio==1.3.0",
     "pytest-timeout==2.3.1",
     "pytest-cov==4.1.0",
+    # Unit trace readback uses MLflow's local SQLite backend, beyond the Skinny REST client.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [build-system]
