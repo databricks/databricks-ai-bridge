@@ -497,7 +497,7 @@ async def _run_memory_pipeline(pipeline: str) -> dict | JSONResponse:
 
 
 async def _local_history(session_id: str, actor: str | None = None) -> dict[str, Any]:
-    from databricks_agentkit.openai import read_history
+    from agent.agent import read_history
 
     return await read_history(session_id, actor)
 
@@ -728,7 +728,6 @@ def install_ui(app: FastAPI) -> None:
                 return {**result, "session_id": session_id}
             finally:
                 auth.close()
-        if _session_store():
-            result = await _managed_call(_state_client().list_session_items, session_id)
-            return _chat_session_items(result)
-        return await _local_history(session_id)
+        # The native adapter owns transcript serialization for both local and managed history.
+        # In particular, MAF stores native `contents`, while OpenAI stores Responses items.
+        return _chat_session_items(await _local_history(session_id, _request_actor(request)))
