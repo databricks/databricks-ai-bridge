@@ -79,6 +79,13 @@ export async function convertToResponsesInput({
             switch (part.type) {
               case 'text':
                 return { type: 'input_text', text: part.text }
+              case 'file':
+                if (part.mediaType.startsWith('image/')) {
+                  return { type: 'input_image', image_url: toImageUrl(part.data, part.mediaType) }
+                }
+                throw new UnsupportedFunctionalityError({
+                  functionality: `file part with mediaType ${part.mediaType}`,
+                })
               default:
                 throw new UnsupportedFunctionalityError({
                   functionality: `part ${JSON.stringify(part)}`,
@@ -215,6 +222,24 @@ const ProviderOptionsSchema = z.object({
 })
 
 export type ProviderOptions = z.infer<typeof ProviderOptionsSchema>
+
+const toImageUrl = (data: URL | string | Uint8Array, mediaType: string): string => {
+  if (data instanceof URL) return data.toString()
+  if (typeof data === 'string') {
+    if (data.startsWith('http://') || data.startsWith('https://') || data.startsWith('data:')) {
+      return data
+    }
+    return `data:${mediaType};base64,${data}`
+  }
+  // Uint8Array: encode as a base64 data URL, in chunks so large images
+  // do not blow the stack through argument spreading.
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < data.length; i += chunkSize) {
+    binary += String.fromCharCode(...data.subarray(i, i + chunkSize))
+  }
+  return `data:${mediaType};base64,${btoa(binary)}`
+}
 
 const convertToolResultOutputToString = (
   output: LanguageModelV3ToolResultPart['output']
