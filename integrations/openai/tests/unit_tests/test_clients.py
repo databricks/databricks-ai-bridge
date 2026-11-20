@@ -9,6 +9,7 @@ from httpx import Request
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai._types import NOT_GIVEN, Omit
 from openai.resources.chat.completions import AsyncCompletions, Completions
+from openai.resources.conversations import AsyncConversations, Conversations
 from openai.resources.responses import AsyncResponses, Responses
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
@@ -804,6 +805,130 @@ class TestOpenAIApiKey:
     def test_falls_back_to_no_token_when_empty_string(self):
         with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
             assert _get_openai_api_key() == "no-token"
+
+
+class TestDatabricksConversationsMemory:
+    """Tests for memory store kwargs on conversations.create."""
+
+    def test_memory_kwargs_translated_to_extra_body(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope="user-123",
+            )
+
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs["extra_body"] == {
+                "memory_store": {"name": "main.default.support_agent_memory"},
+                "scope": {"kind": "user", "value": "user-123"},
+            }
+            assert "store" not in call_kwargs
+            assert "scope" not in call_kwargs
+
+    def test_workspace_client_scope_extracts_user_id(self, mock_workspace_client):
+        user_client = MagicMock(spec=WorkspaceClient)
+        user_client.current_user.me.return_value.user_name = "jenny@databricks.com"
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope=user_client,
+            )
+
+            extra_body = mock_create.call_args.kwargs["extra_body"]
+            assert extra_body["scope"] == {"kind": "user", "value": "jenny@databricks.com"}
+
+    def test_scope_kind_override(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope="acct-42",
+                scope_kind="account",
+            )
+
+            extra_body = mock_create.call_args.kwargs["extra_body"]
+            assert extra_body["scope"] == {"kind": "account", "value": "acct-42"}
+
+    def test_memory_kwargs_merge_with_existing_extra_body(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope="user-123",
+                extra_body={"custom_field": "value", "scope": {"kind": "user", "value": "old"}},
+            )
+
+            extra_body = mock_create.call_args.kwargs["extra_body"]
+            assert extra_body["custom_field"] == "value"
+            # Explicit kwargs take precedence over extra_body entries
+            assert extra_body["scope"] == {"kind": "user", "value": "user-123"}
+
+    def test_create_without_memory_kwargs_passes_through(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(metadata={"topic": "support"})
+
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs == {"metadata": {"topic": "support"}}
+
+    def test_raw_extra_body_still_works(self, mock_workspace_client):
+        """The original extra_body-based usage keeps working unchanged."""
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                extra_body={
+                    "memory_store": {"name": "main.default.support_agent_memory"},
+                    "scope": {"kind": "user", "value": "user-123"},
+                },
+            )
+
+            extra_body = mock_create.call_args.kwargs["extra_body"]
+            assert extra_body["memory_store"] == {"name": "main.default.support_agent_memory"}
+            assert extra_body["scope"] == {"kind": "user", "value": "user-123"}
+
+    def test_conversations_items_resource_still_accessible(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+        assert client.conversations.items is not None
+
+    @pytest.mark.asyncio
+    async def test_async_memory_kwargs_translated_to_extra_body(self, mock_workspace_client):
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(AsyncConversations, "create", new_callable=AsyncMock) as mock_create:
+            await client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope="user-123",
+            )
+
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs["extra_body"] == {
+                "memory_store": {"name": "main.default.support_agent_memory"},
+                "scope": {"kind": "user", "value": "user-123"},
+            }
+
+    @pytest.mark.asyncio
+    async def test_async_create_without_memory_kwargs_passes_through(self, mock_workspace_client):
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(AsyncConversations, "create", new_callable=AsyncMock) as mock_create:
+            await client.conversations.create(metadata={"topic": "support"})
+
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs == {"metadata": {"topic": "support"}}
 
 
 class TestDatabricksOpenAIWithGateway:
