@@ -294,6 +294,7 @@ def stores_get(obj, name) -> None:
         raise AgentCliError(
             f"No session store named '{name}'",
             hint=(
+                "Stores in agent.toml are created on the first agentbricks deploy. "
                 "Search by part of the name: "
                 f"agentbricks sessions stores list --name {shlex.quote(name)}"
             ),
