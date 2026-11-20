@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from databricks_agentkit.langgraph.mcp import mcp_tools
     from databricks_agentkit.langgraph.memory import memory_tools
     from databricks_agentkit.langgraph.session_store import checkpointer, thread_config
+    from databricks_agentkit.langgraph.store import memory_store
     from databricks_agentkit.runtime import (
         start_trace,
         workspace_client,
@@ -63,6 +64,9 @@ __all__ = [
     "mcp_tools",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
+    # LangGraph BaseStore backed by managed memory (store= or AGENT_MEMORY_STORE; an in-process
+    # stand-in for local runs without one).
+    "memory_store",
     # Session persistence — pass checkpointer() to create_agent(checkpointer=...) and
     # thread_config(session_id) as the per-request run config.
     "checkpointer",
@@ -84,6 +88,7 @@ _MODULE_BY_NAME = {
     "genie_tools": "databricks_agentkit.langgraph.genie",
     "mcp_tools": "databricks_agentkit.langgraph.mcp",
     "memory_tools": "databricks_agentkit.langgraph.memory",
+    "memory_store": "databricks_agentkit.langgraph.store",
     "checkpointer": "databricks_agentkit.langgraph.session_store",
     "thread_config": "databricks_agentkit.langgraph.session_store",
     "read_history": "databricks_agentkit.langgraph.history",

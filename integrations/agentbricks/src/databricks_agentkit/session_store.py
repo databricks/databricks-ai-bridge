@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from databricks_agentkit._actors import check_actor
 from databricks_agentkit._pagination import validate_page_size
 from databricks_agentkit._permissions import MAX_PERMISSION_PAGE_SIZE, StorePermission
 from databricks_agentkit.timefmt import parse_timestamp
@@ -307,7 +308,7 @@ class SessionStores:
     ) -> Session:
         response = self._api.create_session(
             store.name,
-            actor_id,
+            check_actor(actor_id),
             session_id=session_id,
             parent_session_id=parent_session_id,
             metadata=metadata,
@@ -372,7 +373,7 @@ class SessionStores:
         response = self._api.fork_session(
             session.store_name,
             session.session_id,
-            actor_id,
+            check_actor(actor_id),
             up_to_item_id=up_to_item_id,
             session_id=session_id,
             metadata=metadata,
