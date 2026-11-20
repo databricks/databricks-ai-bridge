@@ -50,15 +50,21 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
         from databricks.ai_search.client import VectorSearchClient
         from databricks.ai_search.utils import CredentialStrategy
 
-        credential_strategy = None
-        if (
-            self.workspace_client is not None
-            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
-        ):
-            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-        self._index = VectorSearchClient(
-            disable_notice=True, credential_strategy=credential_strategy
-        ).get_index(index_name=self.index_name)
+        client_args: dict[str, Any] = {"disable_notice": True, "credential_strategy": None}
+        if self.workspace_client is not None:
+            config = self.workspace_client.config
+            if config.auth_type == "model_serving_user_credentials":
+                client_args["credential_strategy"] = (
+                    CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                )
+            elif config.auth_type == "pat":
+                client_args["workspace_url"] = config.host
+                client_args["personal_access_token"] = config.token
+            elif config.auth_type == "oauth-m2m":
+                client_args["workspace_url"] = config.host
+                client_args["service_principal_client_id"] = config.client_id
+                client_args["service_principal_client_secret"] = config.client_secret
+        self._index = VectorSearchClient(**client_args).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
 
         # Validate columns
