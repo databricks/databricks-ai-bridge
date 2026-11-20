@@ -10,3 +10,8 @@ Databricks AI Bridge Python API
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: databricks_ai_bridge.lakebase
+   :members:
+   :undoc-members:
+   :show-inheritance:
