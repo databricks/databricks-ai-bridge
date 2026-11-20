@@ -21,8 +21,10 @@ from databricks_ai_bridge.long_running.repository import (
     create_response,
     get_messages,
     get_response,
+    resolve_conversation_alias,
     update_response_status,
     update_response_trace_id,
+    upsert_conversation_alias,
 )
 
 
@@ -204,6 +206,47 @@ async def test_get_response_not_found(mock_session):
 
     result = await get_response("resp_missing")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Conversation alias tests (Option B: server-side rotation resolution)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_conversation_alias_returns_current_when_present(mock_session):
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = "chat-123::r-abcdef01-2"
+    mock_session.execute.return_value = result_mock
+
+    out = await resolve_conversation_alias("chat-123")
+    assert out == "chat-123::r-abcdef01-2"
+
+
+@pytest.mark.asyncio
+async def test_resolve_conversation_alias_passthrough_when_absent(mock_session):
+    """A miss is the common case for fresh conversations — return the input
+    so the caller can dispatch with the client-sent id unchanged."""
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    mock_session.execute.return_value = result_mock
+
+    out = await resolve_conversation_alias("chat-fresh")
+    assert out == "chat-fresh"
+
+
+@pytest.mark.asyncio
+async def test_upsert_conversation_alias_executes_and_commits(mock_session):
+    await upsert_conversation_alias("chat-123", "chat-123::r-abcdef01-2")
+    mock_session.execute.assert_awaited_once()
+    mock_session.commit.assert_awaited_once()
+    # SQL is an INSERT ... ON CONFLICT DO UPDATE so a second crash on the same
+    # conversation overwrites rather than duplicating the row.
+    sql_text = str(mock_session.execute.await_args.args[0])
+    assert "INSERT" in sql_text.upper()
+    assert "ON CONFLICT" in sql_text.upper()
+    bind_params = mock_session.execute.await_args.args[1]
+    assert bind_params == {"base": "chat-123", "current": "chat-123::r-abcdef01-2"}
 
 
 # ---------------------------------------------------------------------------
