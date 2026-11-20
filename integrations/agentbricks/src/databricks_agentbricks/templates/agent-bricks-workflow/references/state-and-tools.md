@@ -39,8 +39,8 @@ repeat with the returned `next_page_token` and unchanged filters until the token
 `memory changes get <change-id> --store <Store ID>` returns one whole change: its header and the
 entry versions it wrote. Use `-o json` for complete structured responses.
 
-For a before/after comparison, add `--diff` to `changes get` (text output), or run
-`changes get` on an entry's `previous_change_id`. For an
+Text `changes get` shows each entry's content as a diff against its previous version. To compare
+in JSON, run `changes get` on an entry's `previous_change_id`. For an
 entry's whole history, run `changes list --memory-entry-id` with the final segment of its
 `memory_entry` resource name. Do not rely on the current path to identify earlier versions: paths
 can change. A missing predecessor marks the start of recorded history, which may be a baseline.

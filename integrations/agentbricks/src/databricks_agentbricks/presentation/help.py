@@ -178,7 +178,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "read a change's entry versions and predecessor links",
         ),
         (
-            "agentbricks memory changes get <change-id> --store <store> --diff",
+            "agentbricks memory changes get <change-id> --store <store>",
             "see what the change did to each entry",
         ),
     ),

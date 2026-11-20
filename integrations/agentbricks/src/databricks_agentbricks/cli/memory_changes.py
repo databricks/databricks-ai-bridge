@@ -75,8 +75,8 @@ def _previous_version(client, store, entry):
 
 
 def _diff_panel(entry, previous) -> Panel:
-    previous_id = entry.get("previous_change_id")
-    title = f"Diff from {previous_id}" if previous_id else "Diff from start of recorded history"
+    # The entry's fields above already name the previous change.
+    title = f"{entry.get('path') or 'Entry'} diff"
     is_delete = entry.get("change_type", "").endswith("_DELETE")
     if "content" not in entry and previous is not None and not is_delete:
         # Without this version's content there is nothing to compare; an all-removed diff would
@@ -202,22 +202,15 @@ def changes_list(
 @changes.command("get")
 @click.argument("change_id")
 @click.option("--store", required=True, help="Store id or resource name.")
-@click.option(
-    "--diff",
-    is_flag=True,
-    help="Show each entry's content as a diff against its previous version (text output).",
-)
 @click.pass_obj
-def changes_get(obj, change_id, store, diff) -> None:
+def changes_get(obj, change_id, store) -> None:
     """Get one change: its header and the entry versions it wrote, including content.
 
-    With --diff, each entry's content is shown as a line diff against the version named by its
-    previous_change_id, at the cost of one extra request per entry. A missing predecessor marks
-    the start of recorded history. Restoring an older version requires a new entry update; these
-    commands only read history.
+    Text output shows each entry's content as a line diff against the version named by its
+    previous_change_id, at the cost of one extra request per entry; JSON returns the change as
+    stored. A missing predecessor marks the start of recorded history. Restoring an older version
+    requires a new entry update; these commands only read history.
     """
-    if diff and obj.output == "json":
-        raise click.UsageError("--diff renders text; drop it with -o json.")
     client = obj.client()
     data = client.get_memory_change(store, change_id)
     if obj.output == "json":
@@ -225,7 +218,7 @@ def changes_get(obj, change_id, store, diff) -> None:
         return
     entries = data.get("entries", [])
     # Read every predecessor before printing, so a failed read cannot leave a partial page.
-    previous = [_previous_version(client, store, entry) for entry in entries] if diff else []
+    previous = [_previous_version(client, store, entry) for entry in entries]
     fields = {
         "Name": data.get("name"),
         "Source": data.get("source_type"),
@@ -249,17 +242,13 @@ def changes_get(obj, change_id, store, diff) -> None:
             "Session": entry.get("session_id"),
             "Previous change ID": entry.get("previous_change_id"),
             "Description": entry.get("description"),
-            "Content": entry.get("content"),
             "Summary": entry.get("summary"),
             "Created": timefmt.absolute(entry.get("create_time")),
         }
-        if diff:
-            # The diff below shows every line of the content.
-            del fields["Content"]
-        render.detail("Entry Version", entry.get("path") or "—", _literal_fields(fields))
-        if diff:
-            render.console().print()
-            render.console().print(_diff_panel(entry, previous[index]))
+        render.detail("Entry", entry.get("path") or "—", _literal_fields(fields))
+        # The diff carries every line of the content, so there is no separate content field.
+        render.console().print()
+        render.console().print(_diff_panel(entry, previous[index]))
     click.echo(f"{len(entries)} entry versions.")
 
 

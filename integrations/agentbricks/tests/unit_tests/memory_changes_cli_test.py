@@ -205,7 +205,7 @@ def test_api_errors_are_nonzero_and_not_hidden(workspace, command, code):
 def test_text_get_renders_every_entry_version_literally(workspace):
     workspace.api_client.do.return_value = {
         "entries": [
-            {"path": "/note.md", "content": "[bold]literal[/bold]", "previous_change_id": "c0"},
+            {"path": "/note.md", "content": "[bold]literal[/bold]"},
             {"path": "/baseline.md", "change_type": "MEMORY_CHANGE_TYPE_BASELINE"},
             {"path": "/deleted.md", "change_type": "MEMORY_CHANGE_TYPE_DELETE"},
         ],
@@ -214,13 +214,13 @@ def test_text_get_renders_every_entry_version_literally(workspace):
     assert result.exit_code == 0, result.output
     for text in [
         "[bold]literal[/bold]",
-        "c0",
         "/baseline.md",
         "/deleted.md",
         "3 entry versions",
     ]:
         assert text in result.stdout
     assert "--page-token" not in result.stdout
+    # None of these entries has a predecessor, so there is nothing more to read.
     assert workspace.api_client.do.call_count == 1
 
 
@@ -367,7 +367,7 @@ def _changes(by_id):
 
 
 def test_diff_shows_what_the_change_did_to_each_entry(workspace):
-    # "What did this change do?" is the question history exists to answer; --diff must answer it
+    # "What did this change do?" is the question history exists to answer; get must answer it
     # from the predecessor's content, not just restate the new content.
     workspace.api_client.do.side_effect = _changes(
         {
@@ -389,10 +389,13 @@ def test_diff_shows_what_the_change_did_to_each_entry(workspace):
             },
         }
     )
-    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    result = run(["get", "c2", "--store", "store-1"], output="text")
     assert result.exit_code == 0, result.output
-    for line in ["Diff from c1", "  Name: Maya", "- Role: engineer", "+ Role: lead"]:
+    for line in ["/profile.md diff", "  Name: Maya", "- Role: engineer", "+ Role: lead"]:
         assert line in result.stdout
+    # The entry's fields already name the previous change; the diff title does not repeat it.
+    assert "Entry  ›  /profile.md" in result.stdout
+    assert result.stdout.count("c1") == 1
     assert "+ [bold]literal[/bold]" in result.stdout
     assert "unrelated" not in result.stdout
 
@@ -400,7 +403,7 @@ def test_diff_shows_what_the_change_did_to_each_entry(workspace):
 @pytest.mark.parametrize(
     "entry,previous,expected",
     [
-        ({"content": "a\nb"}, None, ["start of recorded history", "+ a", "+ b"]),
+        ({"content": "a\nb"}, None, ["+ a", "+ b"]),
         (
             {"change_type": "MEMORY_CHANGE_TYPE_DELETE", "previous_change_id": "c1"},
             {"content": "a\nb"},
@@ -415,7 +418,7 @@ def test_diff_of_a_new_or_deleted_entry_is_all_added_or_all_removed(
     if previous is not None:
         by_id["c1"] = {"entries": [{"memory_entry": ENTRY, **previous}]}
     workspace.api_client.do.side_effect = _changes(by_id)
-    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    result = run(["get", "c2", "--store", "store-1"], output="text")
     assert result.exit_code == 0, result.output
     for line in expected:
         assert line in result.stdout
@@ -432,7 +435,7 @@ def test_diff_fails_instead_of_showing_a_wrong_diff(workspace):
             "c1": {"entries": []},
         }
     )
-    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    result = run(["get", "c2", "--store", "store-1"], output="text")
     assert result.exit_code == 1, result.output
     assert "has no version of" in result.stderr
     assert "+ new" not in result.stdout
@@ -445,13 +448,17 @@ def test_diff_without_this_versions_content_does_not_read_as_a_delete(workspace)
             "c1": {"entries": [{"memory_entry": ENTRY, "content": "kept"}]},
         }
     )
-    result = run(["get", "c2", "--store", "store-1", "--diff"], output="text")
+    result = run(["get", "c2", "--store", "store-1"], output="text")
     assert result.exit_code == 0, result.output
     assert "no content to compare" in result.stdout
     assert "- kept" not in result.stdout
 
 
-def test_diff_is_rejected_for_json_and_get_without_it_makes_one_request(workspace):
-    result = run(["get", "c2", "--store", "store-1", "--diff"])
-    assert result.exit_code == 2, result.output
-    workspace.api_client.do.assert_not_called()
+def test_json_get_does_not_read_predecessors(workspace):
+    # JSON is the stored change; the diff and its extra requests belong to text output only.
+    workspace.api_client.do.return_value = {
+        "entries": [{"memory_entry": ENTRY, "previous_change_id": "c1", "content": "new"}]
+    }
+    result = run(["get", "c2", "--store", "store-1"])
+    assert result.exit_code == 0, result.output
+    assert workspace.api_client.do.call_count == 1
