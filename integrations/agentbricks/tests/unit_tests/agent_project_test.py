@@ -13,6 +13,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import (
     AgentProject,
     Scope,
+    ToolEnvironment,
     ToolPolicy,
     ToolSource,
     ToolSpec,
@@ -206,6 +207,110 @@ def test_unscoped_sandbox_round_trips_and_sends_empty_downscope(
         "downscope": {},
         "databricks_access_token_included": token_included,
     }
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize(
+    "image_uri", ["main.images.sandbox:v1", "main.images.sandbox@sha256:" + "a" * 64]
+)
+def test_sandbox_image_round_trips_and_sends_environment_spec(
+    tmp_path, monkeypatch, framework, image_uri
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(ToolSpec.sandbox("sandbox", image_uri=image_uri))
+    manifest = project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert tomli.loads(manifest.read_text())["tools"][0]["environment"] == {"image_uri": image_uri}
+    loaded = AgentProject.load(tmp_path).tools[0]
+    assert loaded == ToolSpec.sandbox("sandbox", image_uri=image_uri)
+    assert loaded.environment == ToolEnvironment(image_uri)
+    record = load_tools(expected_framework=framework)[0]
+    assert record.image_uri == image_uri
+    assert tool_manifest.sandbox_meta(record) == {
+        "downscope": {},
+        "databricks_access_token_included": True,
+        "com.databricks/environment_spec": {"image_uri": image_uri},
+    }
+
+
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [
+        ('"main.images.sandbox:v1"', "environment must be a table"),
+        ("{}", "must declare image_uri"),
+        (
+            '{ image_uri = "main.images.sandbox:v1", python_dependencies = [] }',
+            "python_dependencies",
+        ),
+        ('{ image_uri = "" }', "non-empty string"),
+        ("{ image_uri = 1 }", "non-empty string"),
+        ('{ image_uri = " main.images.sandbox:v1" }', "whitespace"),
+        ('{ image_uri = "main.images.sandbox:v1\\n" }', "whitespace"),
+    ],
+)
+def test_both_manifest_parsers_reject_invalid_sandbox_environment(
+    tmp_path, monkeypatch, environment, message
+):
+    _write_manifest(
+        tmp_path,
+        f"""schema_version = 1
+
+[agent]
+framework = "langgraph"
+server = "agentbricks"
+
+[[tools]]
+id = "sandbox"
+source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
+environment = {environment}
+""",
+    )
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    with pytest.raises(AgentCliError, match=message):
+        AgentProject.load(tmp_path)
+    with pytest.raises(ToolManifestError, match=message):
+        load_tools(expected_framework="langgraph")
+
+
+def test_both_manifest_parsers_reject_environment_on_non_sandbox_tool(tmp_path, monkeypatch):
+    _write_manifest(
+        tmp_path,
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+server = "agentbricks"
+
+[[tools]]
+id = "search"
+source = { kind = "mcp", service = "system.ai.web_search" }
+environment = { image_uri = "main.images.sandbox:v1" }
+""",
+    )
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    with pytest.raises(AgentCliError, match="Only sandbox bindings accept environment"):
+        AgentProject.load(tmp_path)
+    with pytest.raises(ToolManifestError, match="Only sandbox bindings accept environment"):
+        load_tools(expected_framework="langgraph")
+    with pytest.raises(AgentCliError, match="Only sandbox bindings accept environment"):
+        ToolSpec(
+            id="search",
+            source=ToolSource(kind="mcp", service="system.ai.web_search"),
+            environment=ToolEnvironment("main.images.sandbox:v1"),
+        )
+
+
+def test_add_sandbox_with_different_image_is_not_idempotent(tmp_path: pathlib.Path):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    assert project.add_tool(ToolSpec.sandbox("sandbox", image_uri="main.images.sandbox:v1"))
+    assert not project.add_tool(ToolSpec.sandbox("sandbox", image_uri="main.images.sandbox:v1"))
+
+    with pytest.raises(AgentCliError, match="already exists with a different configuration"):
+        project.add_tool(ToolSpec.sandbox("sandbox", image_uri="main.images.sandbox:v2"))
 
 
 def test_scope_rejects_unsupported_table_resource():

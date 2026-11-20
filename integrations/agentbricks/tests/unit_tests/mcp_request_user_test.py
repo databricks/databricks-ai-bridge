@@ -74,7 +74,13 @@ def adapter(request, monkeypatch):
 
 
 def tool(
-    auth=None, kind="mcp", name="search", *, downscope=(), databricks_access_token_included=False
+    auth=None,
+    kind="mcp",
+    name="search",
+    *,
+    downscope=(),
+    databricks_access_token_included=False,
+    image_uri=None,
 ):
     return SimpleNamespace(
         id=name,
@@ -84,6 +90,7 @@ def tool(
         function="main.tools.lookup",
         downscope=downscope,
         databricks_access_token_included=databricks_access_token_included,
+        image_uri=image_uri,
     )
 
 
@@ -208,8 +215,11 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
     adapter.workspace_client.assert_not_called()
 
 
+@pytest.mark.parametrize("image_uri", [None, "main.images.sandbox:v1"])
 @pytest.mark.parametrize("auth", ["app", "user"])
-def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter, monkeypatch, auth):
+def test_sandbox_metadata_protects_token_env_policy_for_both_identities(
+    adapter, monkeypatch, auth, image_uri
+):
     app = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     user = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     resolver = Mock(side_effect=lambda mode: user if mode == "user" else app)
@@ -221,11 +231,14 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
             SimpleNamespace(kind="volume", value="main.data.files", permission="read_only"),
         ),
         databricks_access_token_included=True,
+        image_uri=image_uri,
     )
     expected_meta = {
         "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
         "databricks_access_token_included": True,
     }
+    if image_uri is not None:
+        expected_meta["com.databricks/environment_spec"] = {"image_uri": image_uri}
     server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)
     assert server.workspace_client is (user if auth == "user" else app)
 
@@ -238,7 +251,14 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
                 server.call_tool(
                     "run_code",
                     {"code": "print('ok')"},
-                    meta={"databricks_access_token_included": False},
+                    meta={
+                        "databricks_access_token_included": False,
+                        **(
+                            {"com.databricks/environment_spec": {"image_uri": "main.other.img:v0"}}
+                            if image_uri is not None
+                            else {}
+                        ),
+                    },
                 )
             )
             is result
