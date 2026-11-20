@@ -45,7 +45,7 @@ def test_explicit_url_skips_app_lookup_auth_and_generated_routing_key() -> None:
     request = transport.send.call_args.args[0]
     assert request.url == "http://localhost:8000/health"
     assert request.headers == {}
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     authenticator.authorization_header.assert_not_called()
 
 
@@ -81,7 +81,7 @@ def test_app_and_url_are_mutually_exclusive() -> None:
             )
         )
 
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     authenticator.authorization_header.assert_not_called()
     transport.send.assert_not_called()
 
@@ -92,19 +92,19 @@ def test_missing_target_fails_before_http() -> None:
     with pytest.raises(AgentCliError, match="Provide a Databricks App name or --url"):
         service.invoke(InvokeRequest(path="/invoke"))
 
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     authenticator.authorization_header.assert_not_called()
     transport.send.assert_not_called()
 
 
 def test_unresolved_app_url_fails_before_http() -> None:
     service, apps, authenticator, transport = _service()
-    apps.get_app_url.return_value = None
+    apps.app_url.side_effect = AgentCliError("No Databricks App named 'agent-bricks-demo'")
 
-    with pytest.raises(AgentCliError, match="Could not resolve a URL for Databricks App"):
+    with pytest.raises(AgentCliError, match="No Databricks App named 'agent-bricks-demo'"):
         service.invoke(InvokeRequest(app="demo", path="/invoke"))
 
-    apps.get_app_url.assert_called_once_with("agent-bricks-demo")
+    apps.app_url.assert_called_once_with("agent-bricks-demo")
     authenticator.authorization_header.assert_not_called()
     transport.send.assert_not_called()
 
@@ -133,7 +133,7 @@ def test_valid_request_propagates_http_fields() -> None:
 @patch("databricks_agentbricks.services.endpoint_service.uuid4")
 def test_app_name_is_prefixed_and_uses_oauth_and_generated_routing_key(uuid4: Mock) -> None:
     service, apps, authenticator, transport = _service()
-    apps.get_app_url.return_value = "https://agent.example/"
+    apps.app_url.return_value = "https://agent.example/"
     uuid4.return_value = "generated-routing-key"
 
     service.invoke(InvokeRequest(app="demo", path="/invoke"))
@@ -144,7 +144,7 @@ def test_app_name_is_prefixed_and_uses_oauth_and_generated_routing_key(uuid4: Mo
         "Authorization": "Bearer test-token",
         "X-Routing-Key": "generated-routing-key",
     }
-    apps.get_app_url.assert_called_once_with("agent-bricks-demo")
+    apps.app_url.assert_called_once_with("agent-bricks-demo")
     authenticator.authorization_header.assert_called_once_with()
 
 
@@ -159,7 +159,7 @@ def test_explicit_auth_mode_overrides_target_default(
     url: str | None, app: str | None, auth: bool, should_auth: bool
 ) -> None:
     service, apps, authenticator, transport = _service()
-    apps.get_app_url.return_value = "https://agent.example"
+    apps.app_url.return_value = "https://agent.example"
 
     service.invoke(InvokeRequest(url=url, app=app, path="/invoke", auth=auth, routing_key="fixed"))
 

@@ -136,7 +136,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
         endpoint_mod,
         "AppsClient",
         lambda profile: type(
-            "FakeAppsClient", (), {"get_app_url": lambda self, name: "https://app.example"}
+            "FakeAppsClient", (), {"app_url": lambda self, name: "https://app.example"}
         )(),
     )
     monkeypatch.setattr(
