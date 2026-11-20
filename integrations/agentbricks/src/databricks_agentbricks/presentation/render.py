@@ -320,6 +320,18 @@ def resource_table(
         i: max([len(columns[i][0])] + [_cell_len(row[i]) for row in rows]) for i in no_wrap_cols
     }
     reserve = sum(reserved.values()) + 3 * len(columns) <= con.width
+    # Left to fit an over-wide table, Rich shrinks the identifier columns to nothing and keeps the
+    # rest. Cap the other columns here instead, widest first, so every column stays on screen.
+    caps: dict[int, int] = {}
+    if reserve and con.is_terminal:
+        caps = {
+            i: max([len(header)] + [_cell_len(row[i]) for row in rows])
+            for i, (header, _) in enumerate(columns)
+            if i not in no_wrap_cols
+        }
+        budget = con.width - sum(reserved.values()) - 3 * (len(columns) - 1)
+        while caps and sum(caps.values()) > budget and max(caps.values()) > 1:
+            caps[max(caps, key=lambda i: caps[i])] -= 1
     for i, (header, justify) in enumerate(columns):
         table.add_column(
             header.upper(),
@@ -330,6 +342,7 @@ def resource_table(
             # to a few characters would spread each row over blank-looking lines.
             no_wrap=bool(no_wrap_cols) and i not in no_wrap_cols,
             min_width=reserved.get(i) if reserve else None,
+            max_width=caps.get(i),
         )
     for row in rows:
         table.add_row(*[_cell(v) for v in row])
