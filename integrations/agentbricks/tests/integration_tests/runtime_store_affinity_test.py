@@ -162,3 +162,20 @@ async def test_initialization_upgrades_legacy_schema_without_reassigning_rows(
     assert claimed is not None
     assert claimed.worker_id == default.worker_id
     assert claimed.attempt == 1
+
+
+async def test_history_query_filters_request_metadata_without_schema_changes(
+    postgres_runtime_store,
+):
+    store = await postgres_runtime_store.create()
+    await store.accept("first", {"agent_id": "a", "extra": None}, session_id="s")
+    await store.accept("second", {"agent_id": "a"}, session_id="s")
+    await store.accept("other", {"agent_id": "b"}, session_id="s")
+    rows = await store.list_invocations(session_id="s", request_filter={"agent_id": "a"})
+    assert [row.invocation_id for row in rows] == ["second", "first"]
+    assert [
+        row.invocation_id for row in await store.list_invocations(request_filter={"extra": None})
+    ] == ["first"]
+    assert len(await store.list_invocations(limit=1)) == 1
+    with pytest.raises(ValueError):
+        await store.list_invocations(limit=1001)

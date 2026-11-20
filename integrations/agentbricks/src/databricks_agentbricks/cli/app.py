@@ -17,6 +17,7 @@ from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
 from databricks_agentbricks.cli.endpoint import endpoint
+from databricks_agentbricks.cli.environment import environment, invoke_deployment
 from databricks_agentbricks.cli.experimental import experimental
 from databricks_agentbricks.cli.init import init
 from databricks_agentbricks.cli.memory import memory
@@ -105,6 +106,8 @@ agentbricks.add_command(tracing)
 agentbricks.add_command(deploy)
 agentbricks.add_command(deployments)
 agentbricks.add_command(endpoint)
+agentbricks.add_command(environment)
+agentbricks.add_command(invoke_deployment)
 agentbricks.add_command(tools)
 agentbricks.add_command(experimental)
 configure_help(agentbricks)

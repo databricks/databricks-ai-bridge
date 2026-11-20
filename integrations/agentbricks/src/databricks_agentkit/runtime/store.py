@@ -199,6 +199,36 @@ class InMemoryRuntimeStore(RuntimeStore):
                 )
             return copy.deepcopy(state) if state is not None else None
 
+    async def list_invocations(
+        self,
+        *,
+        session_id: str | None = None,
+        request_filter: JsonObject | None = None,
+        limit: int = 100,
+    ) -> list[Invocation]:
+        """List up to 1000 records; request filters compare top-level JSON values exactly.
+
+        Session-scoped results are in reverse acceptance order. This optional
+        history API is separate from the RuntimeStore execution protocol.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        async with self._lock:
+            states = [
+                state
+                for state in reversed(list(self.states.values()))
+                if (session_id is None or state.session_id == session_id)
+                and (
+                    not request_filter
+                    or isinstance(state.request, dict)
+                    and all(
+                        key in state.request and state.request[key] == value
+                        for key, value in request_filter.items()
+                    )
+                )
+            ]
+            return copy.deepcopy(states[:limit])
+
     async def claim(self, invocation_id: str) -> Invocation | None:
         _validate_invocation_id(invocation_id)
         async with self._lock:

@@ -96,6 +96,10 @@ from source can scaffold projects that fail to start. To work on Agent Bricks it
 The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.
 
+The runtime and framework adapters use `mlflow-skinny` for tracking and tracing. The `upgrade` extra
+adds full MLflow for model optimization. An agent's own dependencies can also bring in full MLflow;
+installing Skinny alongside it does not remove those dependencies.
+
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
@@ -1017,17 +1021,33 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N] [--no-wait]
+  deploy       [<name>] [--source PATH | --environment NAME] [--instances N] [--no-wait]
                [--allowed-origin ORIGIN ... | --clear-allowed-origins]
   deployments
     wait       [<name>] [--timeout SECONDS] [--source PATH]
     list | get | logs | start | stop | delete
+  environment
+    get | prepare NAME
+    list        (--app APP | --url URL)
+    invoke      NAME --session-id ID --json JSON (--app APP | --url URL)
+                [--invocation-id ID] [--retry] [--no-wait] [--timeout SECONDS]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
     loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
                 [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
                 [--report-dir PATH] [--save-responses FILE]
+  invoke       APP --session-id ID --json JSON [--environment NAME] [--stream]
 ```
+
+## Sandbox deployments
+
+Use `agentbricks deploy NAME --sandbox --source PROJECT` to publish source to Workspace
+and deploy the App orchestrator. Each session gets a dedicated sandbox that installs the
+agent during session preparation or first invocation. See the [CLI reference](cli.md) for
+commands and options, and [CONTRIBUTING.md](CONTRIBUTING.md) for local installation.
+
+Architecture, diagrams, demo walkthroughs and measurements are maintained in the
+[prototype investigation](https://docs.google.com/document/d/13X3RCi46JPWUuB74MOdqCbcaJ5wuVu3fjC2e1Y_aKFw/edit).
 
 ## Bring an existing agent
 
