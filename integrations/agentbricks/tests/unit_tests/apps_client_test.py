@@ -525,16 +525,27 @@ def test_no_wait_calls_pass_the_flag():
     client.start_no_wait("agent-bricks-myapp")
 
     assert [call[0] for call in calls] == [
-        ["apps", "create", "agent-bricks-myapp", "--no-wait"],
+        [
+            "api",
+            "post",
+            "/api/2.0/apps:provisionAgentBricksApp",
+            "--json",
+            json.dumps({"app": {"name": "agent-bricks-myapp"}}),
+        ],
         ["apps", "start", "agent-bricks-myapp", "--no-wait"],
     ]
 
 
-def test_create_blocks_by_default_for_other_callers():
+def test_create_blocks_by_default_for_other_callers(monkeypatch):
     calls = []
-    AppsClient("prof", runner=_runner(calls)).create("agent-bricks-myapp", None)
+    client = AppsClient("prof", runner=_runner(calls))
+    waits = []
+    monkeypatch.setattr(client, "wait_for_active", waits.append)
+    client.create("agent-bricks-myapp", None)
 
-    assert calls[0][0] == ["apps", "create", "agent-bricks-myapp"]
+    assert calls[0][0][:3] == ["api", "post", "/api/2.0/apps:provisionAgentBricksApp"]
+    assert json.loads(calls[0][0][-1]) == {"app": {"name": "agent-bricks-myapp"}}
+    assert waits == ["agent-bricks-myapp"]
 
 
 @pytest.mark.parametrize("detail", ["private failure", "Another operation is in progress"])
@@ -550,3 +561,20 @@ def test_deploy_retains_the_final_child_exit_code(detail):
         client.deploy("agent-bricks-demo", "/Workspace/demo")
     assert raised.value.failure_detail == detail
     assert raised.value.subprocess_exit_code == 17
+
+
+def test_provisioning_failure_never_falls_back_to_generic_apps_creation():
+    calls = []
+
+    def unavailable(args, profile, **kwargs):
+        calls.append(args)
+        raise AgentCliError("Agent Bricks app provisioning is not enabled")
+
+    with pytest.raises(AgentCliError, match="not enabled"):
+        AppsClient("prof", runner=unavailable).create("agent-bricks-app", 2, no_wait=True)
+
+    assert len(calls) == 1
+    assert calls[0][:3] == ["api", "post", "/api/2.0/apps:provisionAgentBricksApp"]
+    assert json.loads(calls[0][-1]) == {
+        "app": {"name": "agent-bricks-app", "compute_min_instances": 2, "compute_max_instances": 2}
+    }

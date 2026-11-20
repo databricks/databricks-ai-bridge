@@ -93,8 +93,8 @@ class AppProvisioner:
     provisioners.
 
     Like the rest of the services layer it talks to the terminal only through the injected
-    :class:`Reporter`. Non-auth Apps use the injected CLI-backed ``AppsClient``; request-user Apps
-    use the SDK-backed scope plan so creation and masked updates retain the required scopes.
+    :class:`Reporter`. New Apps use the CLI-backed Agent Bricks provisioning endpoint;
+    request-user Apps retain SDK-backed scope planning and masked updates.
     """
 
     def __init__(
@@ -122,12 +122,14 @@ class AppProvisioner:
         )
 
     @staticmethod
-    def _reconcile_scoped_app(plan: AppUserScopeUpdatePlan, instance_count: Optional[int]) -> None:
+    def _reconcile_scoped_app(
+        plan: AppUserScopeUpdatePlan, instance_count: Optional[int], *, apps_client: AppsClient
+    ) -> None:
         """Create or update a request-user App with only the required scopes and explicit scale.
 
-        The SDK path is necessary for scoped creation. Existing Apps receive a masked update that
-        preserves unrelated settings; known scope drift fails before that update. Apps has no
-        compare-and-swap contract, so owners must still coordinate concurrent changes.
+        New Apps use Agent Bricks provisioning; masked SDK updates preserve existing App settings.
+        Known scope drift aborts updates, but owners must coordinate concurrent changes because
+        Apps has no compare-and-swap contract.
         """
         if not set(plan.existing_scopes or ()).issubset(plan.scopes):
             raise AgentCliError(
@@ -145,7 +147,7 @@ class AppProvisioner:
             desired.compute_max_instances = instance_count
         try:
             if plan.existing_scopes is None:
-                plan.apps.create(desired)
+                apps_client.provision(desired.as_dict())
             else:
                 validate_app_user_scope_drift(plan)
                 mask = []
@@ -168,7 +170,7 @@ class AppProvisioner:
         auth_plan: AppAuthPlan,
         instance_count: Optional[int],
     ) -> None:
-        """Create or update a request-user App through the SDK, then wait for ACTIVE compute.
+        """Provision or update a request-user App, then wait for ACTIVE compute.
 
         Only the request-user path uses this; every other App starts early through
         :meth:`start_compute` and joins in :meth:`wait_for_compute`. An omitted instance count
@@ -179,7 +181,7 @@ class AppProvisioner:
         if scope_update is None or scope_update.name != name:
             raise AgentCliError("App auth plan does not match the deployment being prepared.")
         with self._reporter.progress("Configuring the agent's request-user access…"):
-            self._reconcile_scoped_app(scope_update, instance_count)
+            self._reconcile_scoped_app(scope_update, instance_count, apps_client=self._apps_client)
         # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
         with self._reporter.progress("Waiting for agent compute to start…"):
             self._apps_client.wait_for_active(name)
@@ -194,7 +196,7 @@ class AppProvisioner:
     ) -> bool:
         """Get the App's compute booting server-side without waiting for it; True if this created it.
 
-        A missing App is created with `--no-wait`. An existing App is scaled first when an instance
+        A missing App is provisioned without waiting. An existing App is scaled first when an instance
         count is given (blocking, as before, so the update can't collide with a starting compute),
         then a STOPPED App is started with `--no-wait`. Any other state needs no call here; the
         deploy service joins on ACTIVE later through :meth:`wait_for_compute`.

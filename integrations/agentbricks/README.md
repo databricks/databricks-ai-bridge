@@ -1679,3 +1679,12 @@ failure-rate denominators and coverage limits.
 Local runs track parent interruption and child exit status internally. A child-only SIGINT or
 explicit exit 130 remains a runtime failure; it is not treated as a confirmed user cancellation.
 Caught parent interruptions use the existing interruption category and omit failure text.
+
+
+### Agent Bricks App provisioning
+
+New deployments use the Agent Bricks provisioning API, which reserves `agent-bricks-` and records
+server-owned provenance. The workspace must have provisioning enabled before using this CLI version;
+creation fails if the endpoint is unavailable, without falling back to generic Apps creation.
+Both ordinary and request-user deployments use this endpoint. Redeployment keeps existing Apps and
+their classification unchanged. An existing prefixed App is not proof of Agent Bricks provenance.

@@ -213,7 +213,7 @@ class _DeployRunner:
             payload = json.loads(args[args.index("--json") + 1])
             if "resources" in payload.get("app", {}):
                 self.resources = payload["app"]["resources"]
-        if args[:2] == ["apps", "create"]:
+        if args[:2] == ["api", "post"]:
             self.exists = True
             self.sp_reads_until_visible = 1
             return types.SimpleNamespace(returncode=0, stdout="App compute", stderr="")
@@ -557,17 +557,23 @@ def test_apps_client_formats_create_and_fixed_scale_update():
         return types.SimpleNamespace(returncode=0, stdout="created", stderr="")
 
     client = AppsClient("prof", runner=runner)
-    assert client.create("agent-bricks-demo", 2) == "created"
+    assert client.create("agent-bricks-demo", 2, no_wait=True) == "created"
     assert client.create_update_instances("agent-bricks-demo", 3) == "created"
 
     assert calls[0][0] == [
-        "apps",
-        "create",
-        "agent-bricks-demo",
-        "--compute-min-instances",
-        "2",
-        "--compute-max-instances",
-        "2",
+        "api",
+        "post",
+        "/api/2.0/apps:provisionAgentBricksApp",
+        "--json",
+        json.dumps(
+            {
+                "app": {
+                    "name": "agent-bricks-demo",
+                    "compute_min_instances": 2,
+                    "compute_max_instances": 2,
+                }
+            }
+        ),
     ]
     update = json.loads(calls[1][0][-1])
     assert update == {
@@ -742,15 +748,20 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
     }
 
     app_calls = [list(event[1]) for event in events if event[0] == "apps"]
-    assert next(call for call in app_calls if call[:2] == ["apps", "create"]) == [
-        "apps",
-        "create",
-        "agent-bricks-demo",
-        "--compute-min-instances",
-        "2",
-        "--compute-max-instances",
-        "2",
-        "--no-wait",
+    assert next(call for call in app_calls if call[:2] == ["api", "post"]) == [
+        "api",
+        "post",
+        "/api/2.0/apps:provisionAgentBricksApp",
+        "--json",
+        json.dumps(
+            {
+                "app": {
+                    "name": "agent-bricks-demo",
+                    "compute_min_instances": 2,
+                    "compute_max_instances": 2,
+                }
+            }
+        ),
     ]
     assert next(call for call in app_calls if call[0] == "sync") == [
         "sync",
@@ -785,7 +796,7 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
     )
     memory_grant_index = event_index(lambda event: event[0] == "memory.grant")
     app_create_index = event_index(
-        lambda event: event[0] == "apps" and event[1][:2] == ("apps", "create")
+        lambda event: event[0] == "apps" and event[1][:2] == ("api", "post")
     )
     memory_create_index = event_index(lambda event: event[0] == "memory.create")
     first_active_index = event_index(lambda event: event == ("apps.state", "ACTIVE"))
@@ -884,7 +895,7 @@ def test_real_cli_deploy_without_agent_manifest_still_rolls_out_source(
         for event in events
     )
     app_calls = [list(event[1]) for event in events if event[0] == "apps"]
-    assert any(call[:2] == ["apps", "create"] for call in app_calls)
+    assert any(call[:2] == ["api", "post"] for call in app_calls)
     assert any(call[0] == "sync" for call in app_calls)
     assert any(call[:2] == ["apps", "deploy"] for call in app_calls)
 
@@ -988,7 +999,7 @@ def test_real_cli_redeploy_scales_existing_app_without_create(
 
     assert result.exit_code == 0, result.output
     app_calls = [list(event[1]) for event in events if event[0] == "apps"]
-    assert not any(call[:2] == ["apps", "create"] for call in app_calls)
+    assert not any(call[:2] == ["api", "post"] for call in app_calls)
     scale_call = next(call for call in app_calls if call[:2] == ["apps", "create-update"])
     assert json.loads(scale_call[-1]) == {
         "app": {"compute_min_instances": 3, "compute_max_instances": 3},
@@ -1090,7 +1101,7 @@ def test_real_cli_redeploy_starts_a_stopped_app_without_waiting(
 
     assert result.exit_code == 0, result.output
     app_calls = [list(event[1]) for event in events if event[0] == "apps"]
-    assert not any(call[:2] == ["apps", "create"] for call in app_calls)
+    assert not any(call[:2] == ["api", "post"] for call in app_calls)
     start_index = app_calls.index(["apps", "start", "agent-bricks-demo", "--no-wait"])
     sync_index = next(index for index, call in enumerate(app_calls) if call[0] == "sync")
     assert start_index < sync_index
@@ -1148,7 +1159,7 @@ def test_real_cli_redeploy_of_an_active_app_adds_no_calls(
 
     assert result.exit_code == 0, result.output
     app_calls = [list(event[1]) for event in events if event[0] == "apps"]
-    assert not any(call[:2] in (["apps", "create"], ["apps", "start"]) for call in app_calls)
+    assert not any(call[:2] in (["api", "post"], ["apps", "start"]) for call in app_calls)
     # The JSON state read replaces the bare `apps get` existence check: one read before the sync,
     # and every state served was ACTIVE, so the wait returned on its first poll.
     sync_index = next(index for index, call in enumerate(app_calls) if call[0] == "sync")

@@ -965,7 +965,7 @@ def test_app_provisioner_reports_cli_output_on_stderr(state, instances):
     harness.reporter.echo.assert_not_called()
 
 
-def test_app_provisioner_new_auth_uses_scoped_sdk_create():
+def test_app_provisioner_new_auth_uses_agent_bricks_provisioning():
     harness = _app_provisioner_for_test()
     sdk_apps = Mock()
     sdk_apps.get.return_value = SimpleNamespace(
@@ -979,13 +979,16 @@ def test_app_provisioner_new_auth_uses_scoped_sdk_create():
         _app_context(deployment_exists=False), auth_plan=auth_plan, instance_count=2
     )
 
-    sdk_apps.create.assert_called_once()
-    created = sdk_apps.create.call_args.args[0]
-    assert created.name == "agent-bricks-demo"
-    assert created.user_api_scopes == ["ai-gateway"]
-    assert created.forward_user_access_token is True
-    assert created.compute_min_instances == 2
-    assert created.compute_max_instances == 2
+    sdk_apps.create.assert_not_called()
+    harness.apps.provision.assert_called_once_with(
+        {
+            "name": "agent-bricks-demo",
+            "user_api_scopes": ["ai-gateway"],
+            "forward_user_access_token": True,
+            "compute_min_instances": 2,
+            "compute_max_instances": 2,
+        }
+    )
     harness.apps.create.assert_not_called()
     harness.apps.create_update_instances.assert_not_called()
     harness.apps.wait_for_active.assert_called_once_with(DeploymentName("agent-bricks-demo"))

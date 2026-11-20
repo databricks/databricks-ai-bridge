@@ -85,3 +85,9 @@ Read the project's `AGENTKIT_CONTRACT.md` for invocation paths, request fields, 
 mapping, and routing requirements. Inspect `runtime/adapter.py` for application input translation.
 Custom or migrated servers may expose different contracts; use their documented API and adapter
 rather than imposing a generated template's payload.
+
+
+New App creation requires a workspace with Agent Bricks provisioning enabled. If provisioning is
+unavailable, report the workspace requirement; do not work around it with `databricks apps create`.
+Existing deployments keep their recorded classification when redeployed. A matching `agent-bricks-`
+name alone does not establish provenance or migrate an existing App into the Agent Bricks UI.
