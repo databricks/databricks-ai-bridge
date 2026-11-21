@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect a Claude session to Databricks</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0 auto; max-width: 640px; padding: 1.5rem; color: #1d1d1f; }
+  h1 { font-size: 1.3rem; margin: 0.5rem 0 1rem; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 1rem 0; }
+  dt { color: #6b6b6b; }
+  dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+  .warn { background: #fff7e6; border: 1px solid #f5c26b; border-radius: 6px; padding: 0.6rem 0.8rem; }
+  button { font: inherit; padding: 0.45rem 1rem; cursor: pointer; margin-top: 1rem; }
+  #status { margin-top: 1rem; min-height: 1.2em; }
+  .error { color: #b42318; }
+  .ok { color: #1b7f3b; }
+</style>
+<h1>Connect a Claude session to Databricks</h1>
+<p id="intro">Checking the link...</p>
+<div id="details" hidden>
+  <dl>
+    <dt>Session</dt><dd id="session"></dd>
+    <dt>Agent</dt><dd id="agent"></dd>
+    <dt>Signed in as</dt><dd id="user"></dd>
+  </dl>
+  <p class="warn">The agent's tools will run with <b>your</b> Databricks access. Continue only if you started this
+    session yourself; don't open sign-in links someone else sent you.</p>
+  <button id="confirm" type="button">Connect this session</button>
+</div>
+<div id="status" role="status"></div>
+<script src="/connect.js" defer></script>

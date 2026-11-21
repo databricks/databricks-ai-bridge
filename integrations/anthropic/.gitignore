@@ -1,0 +1,3 @@
+# Local credentials for the examples and live tests; only the template is committed.
+.env*
+!.env.anthropic.template
