@@ -40,6 +40,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.memory import InMemorySaver
 
+from databricks_agentkit._actors import check_actor
 from databricks_agentkit.runtime.session_store_client import Session, SessionStoreClient
 
 # Discriminators stored inside each session item's `data` JSON.
@@ -96,9 +97,10 @@ def thread_config(session_id: str, actor: str | None = None) -> RunnableConfig:
     Includes ``actor_id`` because the durable saver maps it onto the Session's actor; it's ignored by
     the in-memory default. ``actor`` partitions the durable store — the caller supplies it (typically
     the signed-in user), so each user's threads stay separate; it defaults to ``session_id`` (one
-    actor per conversation).
+    actor per conversation). An actor ending with ``:langgraph`` is refused: the LangGraph memory
+    store keeps each user's entries under that id.
     """
-    return {"configurable": {"thread_id": session_id, "actor_id": actor or session_id}}
+    return {"configurable": {"thread_id": session_id, "actor_id": check_actor(actor or session_id)}}
 
 
 async def history_checkpoint(config: RunnableConfig) -> CheckpointTuple | None:
@@ -487,7 +489,7 @@ def _parse_config(config: RunnableConfig | dict[str, Any] | None) -> tuple[str, 
         raise ValueError("config must contain configurable.thread_id")
     if not actor_id:
         raise ValueError("config must contain configurable.actor_id")
-    return thread_id, actor_id, configurable.get("checkpoint_ns", "") or ""
+    return thread_id, check_actor(actor_id), configurable.get("checkpoint_ns", "") or ""
 
 
 def _session_id(thread_id: str, checkpoint_ns: str) -> str:

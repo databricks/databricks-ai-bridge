@@ -123,6 +123,16 @@ def test_add_get_and_list_sessions() -> None:
     api.get_session.assert_called_once_with(SESSION_ID, SESSION_STORE)
 
 
+def test_add_refuses_reserved_langgraph_storage_actor() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    store = client.session_stores.get(SESSION_STORE)
+
+    with pytest.raises(ValueError, match=":langgraph"):
+        store.add(actor_id="customer-123:langgraph")
+    api.create_session.assert_not_called()
+
+
 def test_update_and_delete_session() -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
@@ -173,6 +183,17 @@ def test_fork_unwraps_session_field() -> None:
         session_id="fork-1",
         metadata=None,
     )
+
+
+def test_fork_refuses_reserved_langgraph_storage_actor() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
+
+    with pytest.raises(ValueError, match=":langgraph"):
+        session.fork(actor_id="agent:langgraph")
+    api.fork_session.assert_not_called()
 
 
 def test_item_operations_and_pagination() -> None:
