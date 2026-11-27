@@ -604,14 +604,16 @@ session.append_items(
     ]
 )
 
-# On a later turn, reload the session and read its full history in order.
+# On a later turn, reload the session and read its full history, oldest first.
 session = session_store.get("case-456")
-history = [item.data for item in session.list_items()]  # list_items auto-pages
+# list_items defaults to newest first and auto-pages; ask for chronological order.
+history = [item.data for item in session.list_items(order_by="create_time asc")]
 ```
 
-A session can be **forked** into an independent branch: a new session seeded with the original's
-history, linked back to its origin by `parent_session_id`. Fork the full history, or only up to a
-specific item, to explore an alternate continuation without disturbing the original thread:
+A session can be **forked** into an independent copy: a new top-level session seeded with the
+original's history. A fork has no parent session, and deleting the original doesn't delete it.
+Fork the full history, or only up to a specific item, to explore an alternate continuation without
+disturbing the original thread:
 
 ```python
 branch = session.fork(actor_id="customer-123")  # add up_to_item_id=... to branch up to one item
@@ -641,8 +643,9 @@ an entry came from, for provenance). An entry is uniquely identified by its `act
 optional `session_id`.
 
 Write an entry when the agent learns something durable, then recall it in a later, separate
-conversation with a natural-language search — results are ranked by full-text (BM25) relevance, up to
-100 entries, with no pagination or vector similarity:
+conversation with a natural-language search. Results are ranked by relevance, combining full-text
+(BM25) and semantic matching over each entry's content and description, and search returns up to
+100 entries with no pagination:
 
 ```python
 from databricks.sdk import WorkspaceClient
