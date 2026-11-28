@@ -258,7 +258,9 @@ about two minutes before failing.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
-`<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
+`<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`. To keep both valid store
+names, `<name>` gets an `agent-` prefix if it doesn't start with a letter or starts with `databricks`,
+and a long name is shortened.
 `agentbricks deploy` creates them if they don't exist yet. Point the agent at stores you already have with
 `agentbricks memory bind <name>` / `agentbricks sessions bind <name>`, or scaffold without stores using
 `agentbricks init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
@@ -393,8 +395,8 @@ memories at one exact path.
 All `list()` methods return iterators that automatically consume server pages. Store and content list
 `page_size` and search `limit` values must be between 1 and 100; permission lists accept 1–1000.
 `session.list_items()` also auto-pages. `session.fork(...)` creates an independent copy, optionally through
-a specific item. Deleting a session with descendants requires
-`session.delete(force=True)` to cascade the deletion.
+a specific item. `session.delete()` always deletes the session's items and its child sessions; the
+`force` argument is deprecated and has no effect.
 
 The resource layer intentionally does not mirror every API method. Its private
 transport will be replaced by the generated `WorkspaceClient.mason` service when that
@@ -617,7 +619,8 @@ specific item, to explore an alternate continuation without disturbing the origi
 branch = session.fork(actor_id="customer-123")  # add up_to_item_id=... to branch up to one item
 ```
 
-Deleting a session that has such descendants requires `session.delete(force=True)` to cascade.
+Deleting a session always deletes its items and its child sessions (sessions created with it as
+their `parent_session_id`). Forks have no parent, so deleting the original leaves them in place.
 
 In an agent configured with `server = "agentbricks"`, you don't call these directly — the framework adapter reads and appends
 session state for you. With LangGraph, pass `checkpointer()` when you build the agent and scope each

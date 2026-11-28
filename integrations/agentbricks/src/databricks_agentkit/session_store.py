@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -53,8 +54,19 @@ class Session:
     def update(self, *, metadata: dict[str, str]) -> Session:
         return self._client._update_session(self, metadata=metadata)
 
-    def delete(self, *, force: bool = False) -> None:
-        self._client._delete_session(self, force=force)
+    def delete(self, *, force: Optional[bool] = None) -> None:
+        """Delete this session, its items, and all of its child sessions.
+
+        ``force`` is deprecated and ignored: the API always deletes child sessions.
+        """
+        if force is not None:
+            warnings.warn(
+                "Session.delete(force=...) is deprecated and has no effect: deleting a session "
+                "always deletes its child sessions.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self._client._delete_session(self)
 
     def fork(
         self,
@@ -357,8 +369,8 @@ class SessionStores:
         )
         return self._session_from_response(response, session.store_name)
 
-    def _delete_session(self, session: Session, *, force: bool = False) -> None:
-        self._api.delete_session(session.store_name, session.session_id, force=force)
+    def _delete_session(self, session: Session) -> None:
+        self._api.delete_session(session.store_name, session.session_id)
 
     def _fork_session(
         self,

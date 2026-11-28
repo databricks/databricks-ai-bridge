@@ -101,8 +101,8 @@ class _FakeClient:
         self.calls.append(("update_session", store, session_id, metadata))
         return _session(metadata=metadata)
 
-    def delete_session(self, store, session_id, force=False):
-        self.calls.append(("delete_session", store, session_id, force))
+    def delete_session(self, store, session_id):
+        self.calls.append(("delete_session", store, session_id))
 
     def fork_session(self, store, source, actor_id, up_to=None, session_id=None, metadata=None):
         self.calls.append(("fork", store, source, actor_id))
@@ -187,11 +187,36 @@ def test_session_get_without_store_errors():
     assert "store" in r.output.lower()
 
 
-def test_session_delete_and_force():
-    r, c = _run(sessions, ["delete", SID, "--store", STORE, "--yes"])
-    assert r.exit_code == 0 and ("delete_session", STORE, SID, False) in c.calls
-    r2, c2 = _run(sessions, ["delete", SID, "--store", STORE, "--force", "--yes"])
-    assert r2.exit_code == 0 and ("delete_session", STORE, SID, True) in c2.calls
+def test_session_delete_warns_that_child_sessions_go_too():
+    # Without --yes the prompt names the cascade; declining deletes nothing.
+    r, c = _run(sessions, ["delete", SID, "--store", STORE])
+    assert r.exit_code != 0
+    assert f"Delete session '{SID}' and all of its child sessions?" in r.output
+    assert not any(call[0] == "delete_session" for call in c.calls)
+    r2, c2 = _run(sessions, ["delete", SID, "--store", STORE, "--yes"])
+    assert r2.exit_code == 0 and ("delete_session", STORE, SID) in c2.calls
+
+
+def test_session_delete_force_is_a_no_op_with_a_note():
+    r, c = _run(sessions, ["delete", SID, "--store", STORE, "--force", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "--force is no longer needed" in r.output
+    assert ("delete_session", STORE, SID) in c.calls
+    # JSON output stays a single parseable document.
+    r2, _ = _run(sessions, ["delete", SID, "--store", STORE, "--force", "--yes"], output="json")
+    assert r2.exit_code == 0 and json.loads(r2.output) == {"deleted": SID}
+
+
+def test_session_store_create_and_bind_reject_names_the_service_rejects(tmp_path):
+    for bad in ["ab", "Support", "-x-store", "x-store-", "databricks-sessions", "s" * 56]:
+        r, c = _run(stores, ["create", "--name", bad])
+        assert r.exit_code == 2, (bad, r.output)
+        assert not any(call[0] == "create_store" for call in c.calls)
+    # A leading digit is fine for session stores.
+    r, _ = _run(stores, ["create", "--name", "2024-sessions"])
+    assert r.exit_code == 0, r.output
+    r, _ = _run(sessions, ["bind", "databricks-sessions", "--source", str(tmp_path)])
+    assert r.exit_code == 2 and "reserved" in r.output
 
 
 def test_session_fork():

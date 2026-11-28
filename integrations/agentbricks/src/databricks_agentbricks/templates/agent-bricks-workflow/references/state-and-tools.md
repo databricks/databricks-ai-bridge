@@ -12,6 +12,14 @@ commands that take `--store` take the Store ID or resource name the CLI returns.
 their store name. Workspace-wide lists include other projects' stores, so use the store declared in
 `agent.toml` rather than one whose name merely resembles this project.
 
+Store names use lowercase letters, digits, and hyphens. A new memory store name is 3-56 characters
+and starts with a letter; a session store name is 3-55 characters, starts with a letter or digit,
+and can't start with `databricks`. Both end with a letter or digit. The CLI rejects other names
+before calling the API.
+
+Deleting a session also deletes its child sessions (those created with it as their
+`parent_session_id`), but not its forks. Confirm before deleting a session that may have children.
+
 ## Seeding memory and local dev
 
 Memory and session stores are off by default in `agentbricks dev`, even when a store is bound. The

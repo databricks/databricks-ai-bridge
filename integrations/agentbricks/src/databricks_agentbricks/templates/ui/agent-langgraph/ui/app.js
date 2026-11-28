@@ -749,6 +749,13 @@ function memoryEntries(payload) {
   return payload?.managed_memory_entries || [];
 }
 
+// Search ranks its hits in `results` ({managed_memory_entry, score}). The top-level
+// `managed_memory_entries` copy is deprecated, so it's read only from servers without `results`.
+function memorySearchEntries(payload) {
+  if (!Array.isArray(payload?.results)) return memoryEntries(payload);
+  return payload.results.map((result) => result?.managed_memory_entry).filter(Boolean);
+}
+
 function sessionItems(payload) {
   return payload?.session_items || [];
 }
@@ -937,7 +944,7 @@ async function loadMemory() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query, limit: 50, actor: actor || undefined }),
       });
-      entries = memoryEntries(await jsonResponse(response));
+      entries = memorySearchEntries(await jsonResponse(response));
     } else {
       const url = demoUrl("/api/demo/memory/entries") + (actor ? `&actor=${encodeURIComponent(actor)}` : "");
       const response = await fetch(url, { cache: "no-store" });
@@ -957,7 +964,7 @@ async function loadMemory() {
 
 // ---- Memory pipeline (inside the Memory pane) -------------------------------
 
-const PIPELINE_TRIGGERS = { MANUAL_ONLY: "Manual only", SCHEDULED: "Every ~24h" };
+const PIPELINE_TRIGGERS = { MANUAL_ONLY: "Manual only", SCHEDULED: "Every ~24h", ALWAYS_ON: "Always on" };
 const PIPELINE_RUN_STATES = {
   RUNNING: ["Running", "degraded"],
   SUCCEEDED: ["Succeeded", "enabled"],

@@ -139,18 +139,21 @@ def test_update_and_delete_session() -> None:
         SESSION_ID,
         {"status": "resolved"},
     )
-    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID, force=False)
+    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID)
 
 
-def test_delete_session_with_force() -> None:
+@pytest.mark.parametrize("force", [True, False])
+def test_delete_session_force_is_deprecated_and_ignored(force: bool) -> None:
+    # The API always deletes child sessions, so `force` only warns; the request is the same.
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
     api.get_session.return_value = session_payload()
     session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
-    session.delete(force=True)
+    with pytest.warns(DeprecationWarning, match="always deletes its child sessions"):
+        session.delete(force=force)
 
-    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID, force=True)
+    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID)
 
 
 def test_fork_unwraps_session_field() -> None:

@@ -228,8 +228,8 @@ def _command_paths(group, prefix=()):
 @pytest.mark.parametrize(
     "args",
     [
-        ["sessions", "stores", "create", "--name", "s"],
-        ["memory", "stores", "create", "--name", "m"],
+        ["sessions", "stores", "create", "--name", "sess"],
+        ["memory", "stores", "create", "--name", "mem"],
     ],
 )
 def test_output_after_command_matches_root_placement(root, args):
@@ -243,17 +243,17 @@ def test_output_after_command_matches_root_placement(root, args):
 @pytest.mark.parametrize("flag", [["--output", "json"], ["--output=json"], ["-ojson"]])
 @pytest.mark.parametrize("first", [True, False])
 def test_output_spellings_anywhere_among_options(root, flag, first):
-    rest = ["--name", "s", "--description", "d"]
+    rest = ["--name", "sess", "--description", "d"]
     args = [*flag, *rest] if first else [*rest, *flag]
     result = CliRunner().invoke(root, ["sessions", "stores", "create", *args])
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["name"] == "session-stores/s"
+    assert json.loads(result.stdout)["name"] == "session-stores/sess"
 
 
 def test_output_after_command_wins_over_root(root):
-    cmd = ["sessions", "stores", "create", "--name", "s"]
+    cmd = ["sessions", "stores", "create", "--name", "sess"]
     as_json = CliRunner().invoke(root, ["-o", "text", *cmd, "-o", "json"])
-    assert json.loads(as_json.stdout)["name"] == "session-stores/s"
+    assert json.loads(as_json.stdout)["name"] == "session-stores/sess"
     as_text = CliRunner().invoke(root, ["-o", "json", *cmd, "-o", "text"])
     assert as_text.exit_code == 0
     assert not as_text.stdout.lstrip().startswith("{")
@@ -300,7 +300,9 @@ def test_telemetry_records_output_after_command_like_before_it(root, monkeypatch
         "emit_command",
         lambda ctx, **kwargs: records.append(telemetry._build_log(ctx, **kwargs).to_dict()),
     )
-    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    result = CliRunner().invoke(
+        root, ["sessions", "stores", "create", "--name", "sess", "-o", "json"]
+    )
     assert result.exit_code == 0, result.output
     parameters = {entry["name"]: entry for entry in records[0]["parameters"]}
     assert parameters["agentbricks.output"] == {
@@ -320,7 +322,7 @@ def test_every_command_accepts_output_and_lists_it_in_help(root):
 
 @pytest.mark.parametrize("at", [1, 2])
 def test_output_between_group_names_matches_root_placement(root, at):
-    cmd = ["sessions", "stores", "create", "--name", "s"]
+    cmd = ["sessions", "stores", "create", "--name", "sess"]
     before = CliRunner().invoke(root, ["-o", "json", *cmd])
     between = CliRunner().invoke(root, [*cmd[:at], "-o", "json", *cmd[at:]])
     assert between.exit_code == before.exit_code == 0, between.output
@@ -335,7 +337,7 @@ def test_output_between_group_names_matches_root_placement(root, at):
             "stores",
             "create",
             "--name",
-            "s",
+            "sess",
             "--description",
             "--output=text",
             "--bogus",
@@ -345,13 +347,13 @@ def test_output_between_group_names_matches_root_placement(root, at):
             "stores",
             "create",
             "--name",
-            "s",
+            "sess",
             "--description",
             "--output",
             "text",
             "--bogus",
         ],
-        ["sessions", "stores", "create", "--name", "s", "--description", "--output", "text"],
+        ["sessions", "stores", "create", "--name", "sess", "--description", "--output", "text"],
     ],
 )
 def test_option_value_that_looks_like_output_does_not_override_root(root, args):
@@ -366,7 +368,7 @@ def test_output_flag_consumed_as_option_value_stays_text(root):
     """Click reads `-o` as `--description`'s value, so no output option was parsed and the usage
     error renders as text - matching what Click itself decided."""
     result = CliRunner().invoke(
-        root, ["sessions", "stores", "create", "--name", "s", "--description", "-o", "json"]
+        root, ["sessions", "stores", "create", "--name", "sess", "--description", "-o", "json"]
     )
     assert result.exit_code == 2
     assert "{" not in result.stderr
@@ -385,7 +387,9 @@ def test_flag_named_like_a_value_option_elsewhere_keeps_trailing_output(root):
 
 
 def test_invalid_output_after_command_lists_choices(root):
-    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "yaml"])
+    result = CliRunner().invoke(
+        root, ["sessions", "stores", "create", "--name", "sess", "-o", "yaml"]
+    )
     assert result.exit_code == 2
     assert "'yaml' is not one of 'text', 'json'" in result.stderr
 
@@ -417,7 +421,7 @@ def test_output_inside_short_option_cluster_parses_as_json(root):
 def test_reset_clears_error_mode_left_by_an_output_line(root):
     """A CLI run leaves its `-o` choice behind; the reset must clear it too, or later error
     rendering in other tests would come out as JSON."""
-    CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "json"])
+    CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "sess", "-o", "json"])
     assert errors.error_output_mode() == "json"
     _reset_output_modes()
     assert errors.error_output_mode() == "text"

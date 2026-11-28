@@ -28,11 +28,16 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.conversation_store_client import (
     MemoryStoreClient,
     SessionStoreClient,
+    uncreatable_memory_store_error,
 )
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.tracing_client import TraceTable, TracingClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.store_names import (
+    memory_store_name_problem,
+    session_store_name_problem,
+)
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment.config import (
@@ -164,15 +169,27 @@ class MemoryStoreProvisioner:
         self._reporter = reporter
 
     def preflight(self, ctx: ResourceContext) -> None:
-        """Fail before deploy creates anything if the bound memory store's API is turned off."""
+        """Fail before deploy creates anything if the bound memory store can't be used.
+
+        That is: its name is invalid, the memory store API is turned off, or it's a legacy name that
+        names no existing store (the service won't create a store under it).
+        """
         if not ctx.memory_store:
             return
+        problem = memory_store_name_problem(ctx.memory_store, allow_legacy=True)
+        if problem:
+            raise AgentCliError(
+                problem, hint="Bind a valid store name with `agentbricks memory bind <name>`."
+            )
         try:
             self._memory_store_client.check_enabled()
         except AgentCliError as exc:
             raise _store_disabled_error(
                 "memory", ctx.memory_store, "agentbricks memory unbind", exc
             ) from exc
+        problem = memory_store_name_problem(ctx.memory_store)
+        if problem and self._memory_store_client.resolve(ctx.memory_store) is None:
+            raise uncreatable_memory_store_error(ctx.memory_store, problem)
 
     def reconcile(self, ctx: ResourceContext) -> MemoryStoreState:
         """Create the declared memory store if absent and wire ``AGENT_MEMORY_STORE``.
@@ -242,9 +259,15 @@ class SessionStoreProvisioner:
         self._reporter = reporter
 
     def preflight(self, ctx: ResourceContext) -> None:
-        """Fail before deploy creates anything if the bound session store's API is turned off."""
+        """Fail before deploy creates anything if the bound session store's name is invalid or its
+        API is turned off."""
         if not ctx.session_store:
             return
+        problem = session_store_name_problem(ctx.session_store)
+        if problem:
+            raise AgentCliError(
+                problem, hint="Bind a valid store name with `agentbricks sessions bind <name>`."
+            )
         try:
             self._session_store_client.check_enabled()
         except AgentCliError as exc:

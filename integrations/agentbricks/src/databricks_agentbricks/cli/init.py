@@ -25,14 +25,15 @@ from typing import Optional
 
 import click
 
+from databricks_agentbricks.cli.store_names import memory_store_name, session_store_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.projects.agent_project import (
     AgentProject,
     default_experiment_name,
-    default_store_name,
 )
 from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentbricks.projects.store_names import default_store_name
 from databricks_agentbricks.projects.types import (
     AgentFramework,
     AgentServer,
@@ -402,6 +403,7 @@ def _prepare_migration(
     "--memory-store",
     "memory_store",
     default=None,
+    callback=memory_store_name(allow_legacy=True),
     help="Name for the declared memory store (default: a unique name derived from --name or the "
     "directory, <name>-<token>-memory). Only --server agentbricks declares stores by default.",
 )
@@ -409,6 +411,7 @@ def _prepare_migration(
     "--session-store",
     "session_store",
     default=None,
+    callback=session_store_name,
     help="Name for the declared session store (default: a unique name derived from --name or the "
     "directory, <name>-<token>-sessions).",
 )

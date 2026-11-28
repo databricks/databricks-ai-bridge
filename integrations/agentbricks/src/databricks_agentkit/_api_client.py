@@ -949,12 +949,9 @@ class _AgentBricksApiClient:
             ),
         )
 
-    def delete_session(self, store: str, session_id: str, force: bool = False) -> dict:
-        return self._do(
-            "DELETE",
-            f"{_BASE}/session-stores/{store}/sessions/{session_id}",
-            query={"force": True} if force else None,
-        )
+    def delete_session(self, store: str, session_id: str) -> dict:
+        """Delete a session, its items, and its child sessions; the API always cascades."""
+        return self._do("DELETE", f"{_BASE}/session-stores/{store}/sessions/{session_id}")
 
     def fork_session(
         self,
