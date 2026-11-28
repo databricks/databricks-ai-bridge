@@ -247,7 +247,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--display-name <DISPLAY_NAME>` (`--name`) | string | - | yes | Workspace-unique display name (--name is accepted as an alias). |
+| `--display-name <DISPLAY_NAME>` (`--name`) | string | - | yes | Workspace-unique store name, also used as its store ID: 3-56 lowercase letters, digits, and hyphens, starting with a letter (--name is accepted as an alias). |
 | `--description <DESCRIPTION>` | string | - | no | Optional human-readable description. |
 
 ##### `agentbricks memory stores list`
@@ -954,7 +954,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--name <NAME>` (`--display-name`) | string | - | yes | Workspace-unique store name, 3-63 chars (--display-name is accepted as an alias). |
+| `--name <NAME>` (`--display-name`) | string | - | yes | Workspace-unique store name: 3-55 lowercase letters, digits, and hyphens, starting and ending with a letter or digit (--display-name is accepted as an alias). |
 | `--description <DESCRIPTION>` | string | - | no | - |
 | `--metadata <METADATA>` | string | - | no | JSON object of string labels. |
 
@@ -1351,7 +1351,7 @@ _Options_
 
 #### `agentbricks sessions delete`
 
-Delete a session.
+Delete a session, its items, and all of its child sessions.
 
 ```
 agentbricks sessions delete SESSION_ID [options]
@@ -1369,8 +1369,11 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--store <STORE>` | string | - | yes | - |
-| `--force` | flag | - | no | Cascade-delete descendant sessions. |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
+
+Deleting a session always deletes its child sessions (sessions created with it as their
+`parent_session_id`); forks have no parent and are left in place. The former `--force` flag is
+hidden and has no effect.
 
 #### `agentbricks sessions fork`
 

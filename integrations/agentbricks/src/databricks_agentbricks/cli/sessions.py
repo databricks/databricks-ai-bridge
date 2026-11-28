@@ -11,6 +11,7 @@ from typing import Any, Optional
 import click
 
 from databricks_agentbricks.cli.permissions import store_permissions
+from databricks_agentbricks.cli.store_names import session_store_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.render import field
@@ -68,7 +69,7 @@ def _source_option(function):
 
 
 @sessions.command("bind")
-@click.argument("store")
+@click.argument("store", callback=session_store_name)
 @_source_option
 @click.pass_obj
 def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
@@ -155,7 +156,9 @@ def _render_store_detail(store: dict) -> None:
     "--display-name",
     "name",
     required=True,
-    help="Workspace-unique store name, 3-63 chars (--display-name is accepted as an alias).",
+    callback=session_store_name,
+    help="Workspace-unique store name: 3-55 lowercase letters, digits, and hyphens, starting and "
+    "ending with a letter or digit (--display-name is accepted as an alias).",
 )
 @click.option("--description", default=None)
 @click.option("--metadata", default=None, help="JSON object of string labels.")
@@ -480,13 +483,22 @@ def sessions_update(obj, session_id, store, metadata) -> None:
 @sessions.command("delete")
 @click.argument("session_id")
 @click.option("--store", required=True)
-@click.option("--force", is_flag=True, help="Cascade-delete descendant sessions.")
+@click.option(
+    "--force",
+    is_flag=True,
+    hidden=True,
+    help="Deprecated: deleting a session always deletes its child sessions; this flag is a no-op.",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def sessions_delete(obj, session_id, store, force, yes) -> None:
-    """Delete a session."""
-    render.confirm_destroy(f"session '{session_id}'", assume_yes=yes)
-    obj.client().delete_session(store, session_id, force)
+    """Delete a session, its items, and all of its child sessions."""
+    if force and obj.output != "json":
+        render.warning(
+            "--force is no longer needed: deleting a session always deletes its child sessions."
+        )
+    render.confirm_destroy(f"session '{session_id}' and all of its child sessions", assume_yes=yes)
+    obj.client().delete_session(store, session_id)
     if obj.output == "json":
         render.emit_json({"deleted": session_id})
         return

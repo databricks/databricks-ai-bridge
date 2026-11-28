@@ -16,8 +16,8 @@ from databricks_agentbricks.projects.agent_project import (
     ToolPolicy,
     ToolSource,
     ToolSpec,
-    default_store_name,
 )
+from databricks_agentbricks.projects.store_names import default_store_name
 from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
@@ -775,8 +775,11 @@ def test_required_project_selections_name_agent_manifest(
         ("My_Agent", "my-agent-memory"),
         ("a.b c", "a-b-c-memory"),
         ("___", "agent-memory"),  # only punctuation reduces to the fallback
-        ("2048-game", "2048-game-memory"),  # digits are kept: the backend prefixes memory-/session-
-        ("123", "123-memory"),  # an all-numeric directory is a valid store name
+        # A memory store ID must start with a letter, so a leading digit gets the agent- prefix.
+        ("2048-game", "agent-2048-game-memory"),
+        ("123", "agent-123-memory"),
+        # Session store names can't start with "databricks"; both stores share the prefix.
+        ("databricks-helper", "agent-databricks-helper-memory"),
     ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):

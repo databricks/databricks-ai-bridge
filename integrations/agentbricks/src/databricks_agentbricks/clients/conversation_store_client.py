@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.store_names import memory_store_name_problem
 
 _STORE_PAGE_SIZE = 100  # the memory- and session-stores list APIs cap page_size at 100
 
@@ -100,6 +101,14 @@ def _store_access_error(name: str, kind: str) -> AgentCliError:
     )
 
 
+def uncreatable_memory_store_error(name: str, problem: str) -> AgentCliError:
+    """The declared memory store doesn't exist, and the service won't create one under its name."""
+    return AgentCliError(
+        f"Memory store '{name}' doesn't exist, and deploy can't create it under that name. {problem}",
+        hint="Bind a different store name with `agentbricks memory bind <name>`.",
+    )
+
+
 class MemoryStoreClient:
     """Provisions and grants access to the memory store declared in agent.toml.
 
@@ -140,7 +149,17 @@ class MemoryStoreClient:
         _raise_if_feature_disabled(self._api_client_provider.get().list_memory_stores)
 
     def ensure(self, display_name: str) -> tuple[dict, bool]:
-        """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
+        """Create the memory store, or resolve it if it already exists. Returns (store, created).
+
+        A name the service won't create a store under, such as a legacy display name that starts
+        with a digit, is only resolved: an existing store is used, and a missing one is an error.
+        """
+        problem = memory_store_name_problem(display_name)
+        if problem:
+            existing = self.resolve(display_name)
+            if existing is None:
+                raise uncreatable_memory_store_error(display_name, problem)
+            return existing, False
         try:
             return self._api_client_provider.get().create_memory_store(
                 display_name, retry_transient=True

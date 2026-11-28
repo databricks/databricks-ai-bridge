@@ -12,6 +12,7 @@ import click
 from databricks_agentbricks.cli.memory_changes import changes
 from databricks_agentbricks.cli.permissions import store_permissions
 from databricks_agentbricks.cli.pipeline import pipeline
+from databricks_agentbricks.cli.store_names import memory_store_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.render import field
@@ -101,7 +102,7 @@ def _source_option(function):
 
 
 @memory.command("bind")
-@click.argument("store")
+@click.argument("store", callback=memory_store_name(allow_legacy=True))
 @_source_option
 @click.pass_obj
 def memory_bind(obj, store: str, source: pathlib.Path) -> None:
@@ -223,7 +224,9 @@ def _render_store_detail(obj, store: dict) -> None:
     "--name",
     "display_name",
     required=True,
-    help="Workspace-unique display name (--name is accepted as an alias).",
+    callback=memory_store_name(),
+    help="Workspace-unique store name, also used as its store ID: 3-56 lowercase letters, digits, "
+    "and hyphens, starting with a letter (--name is accepted as an alias).",
 )
 @click.option("--description", default=None, help="Optional human-readable description.")
 @click.pass_obj

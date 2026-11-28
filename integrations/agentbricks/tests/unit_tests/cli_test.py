@@ -263,10 +263,12 @@ def test_memory_search_uses_canonical_page_size_option():
     assert "limit" not in parameter_names
 
 
-def test_session_delete_has_force_option():
+def test_session_delete_keeps_force_only_as_a_hidden_no_op():
+    # Old scripts may still pass --force, so it parses, but help no longer offers it.
     delete = cli.sessions.commands["delete"]
+    force = next(parameter for parameter in delete.params if parameter.name == "force")
 
-    assert "force" in {parameter.name for parameter in delete.params}
+    assert isinstance(force, click.Option) and force.hidden
 
 
 # --- did-you-mean & grouped listing (facelift §1, §4) ------------------------
